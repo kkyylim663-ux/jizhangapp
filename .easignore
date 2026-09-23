@@ -1,0 +1,14 @@
+.agents
+.claude
+.zcode
+.mimosa
+Zcode
+prototype
+node_modules
+.expo
+dist
+build
+web-build
+backup
+test-audio
+*.log
