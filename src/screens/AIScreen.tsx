@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Modal,
   ScrollView,
+  Keyboard,
   StyleSheet,
   Text,
   TextInput,
@@ -21,16 +21,29 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 
 import { useApp } from '../context/AppContext';
+import { useDialog } from '../components/AppDialog';
+import PressableScale from '../components/PressableScale';
 import { useTheme } from '../theme/useTheme';
+import { useTabClearance } from '../hooks/useTabClearance';
+import { useTabBarScrollHandler } from '../context/TabBarAutoHideContext';
 import { ThemeColors } from '../theme/theme';
+import { ROUTES } from '../navigation/routes';
+import { findCategoryIdByChineseName } from '../i18n/categories';
+import { useT } from '../i18n/LanguageContext';
 import {
   voiceToAccounting,
+  transcribeAudioFile,
   VoiceAccountingResult,
 } from '../utils/voiceAccounting';
 
 export default function AIScreen({ navigation }: any) {
   const { colors } = useTheme();
+  const tabClearance = useTabClearance();
+  const onTabScroll = useTabBarScrollHandler();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+  const t = useT();
+  // 主题化弹窗（替代系统 Alert）
+  const dialog = useDialog();
 
   const {
     categories,
@@ -121,14 +134,18 @@ export default function AIScreen({ navigation }: any) {
   // ---------------------------------------------------------
 
   const goScan = () => {
-    navigation.navigate('首页', {
-      screen: '记一笔',
-      params: {
-        initialType: 'expense',
-        autoScan: true,
-      },
+    // 双注册后直接 push 当前栈的"记一笔"：从设置项进 AI专区时 push ProfileStack 的实例,
+    // 从首页侧进时 push HomeStack 的实例——记一笔的 goBack 天然回 AI专区,不再跨 Tab
+    navigation.navigate(ROUTES.ADD_TX, {
+      initialType: 'expense',
+      autoScan: true,
     });
   };
+
+  // ---------------------------------------------------------
+  // AICore 模型预取：挂载后台触发下载/检查（一次下载系统级持久化），
+  // 不阻塞录音流程；真正录音时用 checkStatus 快速判断
+  // ---------------------------------------------------------
 
   // ---------------------------------------------------------
   // Start recording
@@ -138,6 +155,7 @@ export default function AIScreen({ navigation }: any) {
     const startedAt = Date.now();
 
     const debug = (message: string) => {
+      if (!__DEV__) return; // 语音流程打点只在开发构建里输出
       const elapsed = ((Date.now() - startedAt) / 1000).toFixed(2);
       console.log(`[VOICE DEBUG][START ${elapsed}s] ${message}`);
     };
@@ -153,10 +171,10 @@ export default function AIScreen({ navigation }: any) {
       );
 
       if (!permission.granted) {
-        Alert.alert(
-          '需要麦克风权限',
-          '请在系统设置里允许本 APP 使用麦克风进行语音记账。',
-        );
+        dialog.alert({
+          title: t('ai.micPermissionTitle'),
+          message: t('ai.micPermissionMsg'),
+        });
         return;
       }
 
@@ -182,11 +200,12 @@ export default function AIScreen({ navigation }: any) {
         error
       );
 
-      Alert.alert(
-        '无法开始录音',
-        error?.message ??
-          '请检查麦克风权限后再试。',
-      );
+      dialog.alert({
+        title: t('ai.startRecordFailed'),
+        message:
+          error?.message ??
+          t('ai.startRecordMsg'),
+      });
     }
   };
 
@@ -198,6 +217,7 @@ export default function AIScreen({ navigation }: any) {
     const startedAt = Date.now();
 
     const debug = (message: string) => {
+      if (!__DEV__) return; // 语音流程计时只在开发构建里输出
       const elapsed = ((Date.now() - startedAt) / 1000).toFixed(2);
       console.log(`[VOICE DEBUG][TOTAL ${elapsed}s] ${message}`);
     };
@@ -216,31 +236,35 @@ export default function AIScreen({ navigation }: any) {
       debug(`录音 URI: ${uri ? uri : 'NULL'}`);
 
       if (!uri) {
-        Alert.alert(
-          '录音失败',
-          '没有取得录音文件，请再试一次。',
-        );
+        dialog.alert({
+          title: t('ai.recordFailedTitle'),
+          message: t('ai.recordFailedMsg'),
+        });
         return;
       }
 
       debug('录音文件已取得');
 
       setProcessing(true);
-      setProcessingStage('正在准备语音…');
+      setProcessingStage(t('ai.preparing'));
 
       debug('setProcessing(true)');
 
       // -----------------------------------------
       // 语音 → Transcript → AI Accounting
+      // 本地AI可用走设备端解析（不消耗云端配额），否则走原有云端逻辑；
+      // ensureReady 不阻塞主流程：返回 downloading 时本次直接走云端，下次可能已就绪。
       // -----------------------------------------
 
-      setProcessingStage('正在上传并识别语音…');
+      const today = (() => {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      })();
 
-      debug('调用 voiceToAccounting(uri)');
+      // 纯云端模式：一次上传完成 STT + 记账解析（内部顺序两步，各带 8s 超时熔断）
+      setProcessingStage(t('ai.recognizing'));
 
-      const parsed =
-        await voiceToAccounting(uri);
-
+      const parsed = await voiceToAccounting(uri);
       debug('voiceToAccounting() 已完成');
 
       console.log(
@@ -252,7 +276,7 @@ export default function AIScreen({ navigation }: any) {
       // Fill editable fields
       // -----------------------------------------
 
-      setProcessingStage('正在整理账单…');
+      setProcessingStage(t('ai.organizing'));
 
       debug('开始填充账单字段');
 
@@ -280,13 +304,18 @@ export default function AIScreen({ navigation }: any) {
       // AI category matching
       // -----------------------------------------
 
-      const matchedCategory =
-        categories.find(
-          (category: any) =>
-            category.type === parsed.type &&
-            category.name ===
-              parsed.suggestedCategory,
-        );
+      // AI 提示词固定中文，返回中文分类名 → 先映射成内置分类 id 再按 id 匹配，
+      // 与界面语言（中文/英文）无关
+      const suggestedId = parsed.suggestedCategory
+        ? findCategoryIdByChineseName(parsed.suggestedCategory)
+        : undefined;
+      const matchedCategory = suggestedId
+        ? categories.find(
+            (category: any) =>
+              category.type === parsed.type &&
+              category.id === suggestedId,
+          )
+        : undefined;
 
       setEditCategoryId(
         matchedCategory?.id ?? null,
@@ -311,18 +340,15 @@ export default function AIScreen({ navigation }: any) {
         error?.message ?? error,
       );
 
-      Alert.alert(
-        '语音识别失败',
-        error?.message ??
-          '没有识别成功，请说得更清楚一点后再试。',
-      );
+      dialog.alert({
+        title: t('ai.voiceFailedTitle'),
+        message:
+          error?.message ??
+          t('ai.voiceFailedMsg'),
+      });
     } finally {
       setProcessing(false);
       setProcessingStage('');
-
-      console.log(
-        '[VOICE DEBUG] processing 已结束，识别按钮恢复'
-      );
     }
   };
 
@@ -376,26 +402,26 @@ export default function AIScreen({ navigation }: any) {
       parseFloat(editAmount);
 
     if (!amount || amount <= 0) {
-      Alert.alert(
-        '金额有误',
-        '请确认金额后再保存。',
-      );
+      dialog.alert({
+        title: t('ai.amountWrong'),
+        message: t('ai.amountWrongMsg'),
+      });
       return;
     }
 
     if (!editCategoryId) {
-      Alert.alert(
-        '请选择分类',
-        'AI 没有找到合适的分类，请手动选择一个。',
-      );
+      dialog.alert({
+        title: t('ai.selectCategoryTitle'),
+        message: t('ai.selectCategoryMsg'),
+      });
       return;
     }
 
     if (!defaultAsset?.id) {
-      Alert.alert(
-        '没有资产账户',
-        '请先到资产页面设置一个资产账户，再进行语音记账。',
-      );
+      dialog.alert({
+        title: t('ai.noAssetTitle'),
+        message: t('ai.noAssetMsg'),
+      });
       return;
     }
 
@@ -432,29 +458,30 @@ export default function AIScreen({ navigation }: any) {
       // Success
       // -----------------------------------------------------
 
-      Alert.alert(
-        '记账成功',
-        '这笔语音账单已经加入账本。',
-        [
+      dialog.alert({
+        title: t('ai.saveOkTitle'),
+        message: t('ai.saveOkMsg'),
+        buttons: [
           {
-            text: '好的',
+            text: t('ai.saveOkBtn'),
             onPress: () => {
-              navigation?.navigate('首页');
+              navigation?.navigate(ROUTES.TAB_HOME);
             },
           },
         ],
-      );
+      });
     } catch (error: any) {
       console.error(
         '[VoiceAccounting] save error:',
         error,
       );
 
-      Alert.alert(
-        '保存失败',
-        error?.message ??
-          '账单保存失败，请重试。',
-      );
+      dialog.alert({
+        title: t('ai.saveFailedTitle'),
+        message:
+          error?.message ??
+          t('ai.saveFailedMsg'),
+      });
     }
   };
 
@@ -491,32 +518,37 @@ export default function AIScreen({ navigation }: any) {
       style={styles.container}
       edges={['top']}
     >
+      {/* 头部:与其他二级页同款——圆框返回键(40×40、1.5px link 描边) + 标题居中 */}
+      <View style={styles.headerRow}>
+        <PressableScale onPress={() => navigation.goBack()} style={styles.backBtn} activeScale={0.92}>
+          <Ionicons name="chevron-back" size={22} color={colors.textPrimary} />
+        </PressableScale>
+        <Text style={styles.headerTitle}>{t('ai.title')}</Text>
+        <View style={{ width: 40 }} />
+      </View>
       <ScrollView
-        contentContainerStyle={
-          styles.content
-        }
+        onScroll={onTabScroll ?? undefined}
+        scrollEventThrottle={16}
+        // 自适应滚动:内容一屏放得下时整页不滚动(无滚动条),内容超出屏高才可滚动
+        contentContainerStyle={[styles.content, { flexGrow: 1, paddingBottom: tabClearance }]}
         showsVerticalScrollIndicator={false}
       >
         {/* ===================================================
             Header
         =================================================== */}
 
-        <Text style={styles.pageTitle}>
-          AI 专区
-        </Text>
-
         <Text style={styles.pageSub}>
-          让 AI 帮你处理记账里麻烦的部分
+          {t('ai.pageSub')}
         </Text>
 
         {/* ===================================================
             Scanner
         =================================================== */}
 
-        <TouchableOpacity
+        <PressableScale
           style={styles.primaryCard}
+          activeScale={0.97}
           onPress={goScan}
-          activeOpacity={0.85}
         >
           <View
             style={
@@ -538,7 +570,7 @@ export default function AIScreen({ navigation }: any) {
                 styles.primaryCardTitle
               }
             >
-              扫描小票自动记账
+              {t('ai.scanCardTitle')}
             </Text>
 
             <Text
@@ -546,14 +578,14 @@ export default function AIScreen({ navigation }: any) {
                 styles.primaryCardDesc
               }
             >
-              拍一张小票，AI 帮你识别金额、商家、日期
+              {t('ai.scanCardDesc')}
             </Text>
           </View>
 
           <Text style={styles.chevron}>
             ›
           </Text>
-        </TouchableOpacity>
+        </PressableScale>
 
         {/* ===================================================
             Voice Accounting
@@ -564,7 +596,7 @@ export default function AIScreen({ navigation }: any) {
             styles.sectionTitle
           }
         >
-          AI 记账
+          {t('ai.sectionTitle')}
         </Text>
 
         <View
@@ -594,10 +626,10 @@ export default function AIScreen({ navigation }: any) {
             }
           >
             {processing
-              ? processingStage || 'AI 正在识别…'
+              ? processingStage || t('ai.aiWorking')
               : recorderState.isRecording
-                ? '正在听…'
-                : '语音记账'}
+                ? t('ai.listening')
+                : t('ai.voiceTitle')}
           </Text>
 
           <Text
@@ -606,15 +638,15 @@ export default function AIScreen({ navigation }: any) {
             }
           >
             {processing
-              ? '请保持页面打开，正在处理语音与 AI 账单解析'
+              ? t('ai.processingHint')
               : recorderState.isRecording
-                ? '说完后再次点击停止'
-                : '说一句话，就能自动生成一笔账'}
+                ? t('ai.tapToStop')
+                : t('ai.tapToStart')}
           </Text>
 
           {/* Record Button */}
 
-          <TouchableOpacity
+          <PressableScale
             style={[
               styles.recordButton,
 
@@ -624,11 +656,11 @@ export default function AIScreen({ navigation }: any) {
               processing &&
                 styles.recordButtonDisabled,
             ]}
+            activeScale={0.94}
             onPress={
               handleRecordPress
             }
             disabled={processing}
-            activeOpacity={0.8}
           >
             {processing ? (
               <ActivityIndicator
@@ -652,12 +684,12 @@ export default function AIScreen({ navigation }: any) {
               }
             >
               {processing
-                ? '识别中'
+                ? t('ai.statusRecognizing')
                 : recorderState.isRecording
-                  ? '停止录音'
-                  : '开始录音'}
+                  ? t('ai.stopRecording')
+                  : t('ai.startRecording')}
             </Text>
-          </TouchableOpacity>
+          </PressableScale>
 
           {/* Examples */}
 
@@ -671,7 +703,7 @@ export default function AIScreen({ navigation }: any) {
                 styles.exampleTitle
               }
             >
-              你可以这样说
+              {t('ai.youCanSay')}
             </Text>
 
             <Text
@@ -679,7 +711,7 @@ export default function AIScreen({ navigation }: any) {
                 styles.exampleText
               }
             >
-              “今天午饭花了 35 块，在麦当劳”
+              {t('ai.example1')}
             </Text>
 
             <Text
@@ -687,7 +719,7 @@ export default function AIScreen({ navigation }: any) {
                 styles.exampleText
               }
             >
-              “昨天收到工资 5000”
+              {t('ai.example2')}
             </Text>
 
             <Text
@@ -695,7 +727,7 @@ export default function AIScreen({ navigation }: any) {
                 styles.exampleText
               }
             >
-              “8月30号买衣服花了 199 块”
+              {t('ai.example3')}
             </Text>
           </View>
         </View>
@@ -703,88 +735,7 @@ export default function AIScreen({ navigation }: any) {
         {/* ===================================================
             Other AI
         =================================================== */}
-
-        <Text
-          style={
-            styles.sectionTitle
-          }
-        >
-          其他 AI 功能
-        </Text>
-
-        <View style={styles.grid}>
-          <TouchableOpacity
-            style={
-              styles.comingCard
-            }
-            onPress={() =>
-              Alert.alert(
-                '消费习惯分析',
-                '这个功能还在开发中',
-              )
-            }
-          >
-            <Text
-              style={{
-                fontSize: 22,
-              }}
-            >
-              📊
-            </Text>
-
-            <Text
-              style={
-                styles.comingTitle
-              }
-            >
-              消费习惯分析
-            </Text>
-
-            <Text
-              style={
-                styles.comingDesc
-              }
-            >
-              AI 帮你看出花钱的规律和异常
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={
-              styles.comingCard
-            }
-            onPress={() =>
-              Alert.alert(
-                'AI记账助手',
-                '这个功能还在开发中',
-              )
-            }
-          >
-            <Text
-              style={{
-                fontSize: 22,
-              }}
-            >
-              💬
-            </Text>
-
-            <Text
-              style={
-                styles.comingTitle
-              }
-            >
-              对话式记账
-            </Text>
-
-            <Text
-              style={
-                styles.comingDesc
-              }
-            >
-              直接跟 AI 说“午饭花了35”
-            </Text>
-          </TouchableOpacity>
-        </View>
+        {/* 两个占位功能（消费习惯分析/对话式记账）未开发，入口已移除 */}
       </ScrollView>
 
       {/* =====================================================
@@ -824,7 +775,8 @@ export default function AIScreen({ navigation }: any) {
                 确认语音账单
               </Text>
 
-              <TouchableOpacity
+              <PressableScale
+                activeScale={0.90}
                 onPress={
                   cancelResult
                 }
@@ -842,7 +794,7 @@ export default function AIScreen({ navigation }: any) {
                     colors.textSecondary
                   }
                 />
-              </TouchableOpacity>
+              </PressableScale>
             </View>
 
             {result && (
@@ -880,7 +832,7 @@ export default function AIScreen({ navigation }: any) {
                     styles.typeSwitch
                   }
                 >
-                  <TouchableOpacity
+                  <PressableScale
                     style={[
                       styles.typeBtn,
 
@@ -888,6 +840,7 @@ export default function AIScreen({ navigation }: any) {
                         'expense' &&
                         styles.typeBtnActive,
                     ]}
+                    activeScale={0.95}
                     onPress={() =>
                       changeType(
                         'expense',
@@ -905,9 +858,9 @@ export default function AIScreen({ navigation }: any) {
                     >
                       支出
                     </Text>
-                  </TouchableOpacity>
+                  </PressableScale>
 
-                  <TouchableOpacity
+                  <PressableScale
                     style={[
                       styles.typeBtn,
 
@@ -915,6 +868,7 @@ export default function AIScreen({ navigation }: any) {
                         'income' &&
                         styles.typeBtnActive,
                     ]}
+                    activeScale={0.95}
                     onPress={() =>
                       changeType(
                         'income',
@@ -932,7 +886,7 @@ export default function AIScreen({ navigation }: any) {
                     >
                       收入
                     </Text>
-                  </TouchableOpacity>
+                  </PressableScale>
                 </View>
 
                 {/* Amount */}
@@ -1025,7 +979,7 @@ export default function AIScreen({ navigation }: any) {
                   >
                     {visibleCategories.map(
                       (category: any) => (
-                        <TouchableOpacity
+                        <PressableScale
                           key={
                             category.id
                           }
@@ -1036,6 +990,7 @@ export default function AIScreen({ navigation }: any) {
                               category.id &&
                               styles.categoryChipActive,
                           ]}
+                          activeScale={0.94}
                           onPress={() =>
                             setEditCategoryId(
                               category.id,
@@ -1055,7 +1010,7 @@ export default function AIScreen({ navigation }: any) {
                               category.name
                             }
                           </Text>
-                        </TouchableOpacity>
+                        </PressableScale>
                       ),
                     )}
                   </ScrollView>
@@ -1068,8 +1023,8 @@ export default function AIScreen({ navigation }: any) {
                     没有可用的
                     {editType ===
                     'expense'
-                      ? '支出'
-                      : '收入'}
+                      ? t('ai.expenseLabel')
+                      : t('ai.incomeLabel')}
                     分类
                   </Text>
                 )}
@@ -1095,7 +1050,7 @@ export default function AIScreen({ navigation }: any) {
                   onChangeText={
                     setEditNote
                   }
-                  placeholder="备注"
+                  placeholder={t('ai.notePlaceholder')}
                   placeholderTextColor={
                     colors.textTertiary
                   }
@@ -1124,7 +1079,7 @@ export default function AIScreen({ navigation }: any) {
                   >
                     入账资产：
                     {defaultAsset?.name ??
-                      '未设置默认资产'}
+                      t('ai.noDefaultAsset')}
                   </Text>
                 </View>
 
@@ -1135,14 +1090,14 @@ export default function AIScreen({ navigation }: any) {
                     styles.modalActions
                   }
                 >
-                  <TouchableOpacity
+                  <PressableScale
                     style={
                       styles.cancelButton
                     }
+                    activeScale={0.95}
                     onPress={
                       cancelResult
                     }
-                    activeOpacity={0.8}
                   >
                     <Text
                       style={
@@ -1151,16 +1106,16 @@ export default function AIScreen({ navigation }: any) {
                     >
                       取消
                     </Text>
-                  </TouchableOpacity>
+                  </PressableScale>
 
-                  <TouchableOpacity
+                  <PressableScale
                     style={
                       styles.confirmButton
                     }
+                    activeScale={0.95}
                     onPress={
                       saveVoiceTransaction
                     }
-                    activeOpacity={0.8}
                   >
                     <Text
                       style={
@@ -1169,7 +1124,7 @@ export default function AIScreen({ navigation }: any) {
                     >
                       确认记账
                     </Text>
-                  </TouchableOpacity>
+                  </PressableScale>
                 </View>
               </>
             )}
@@ -1204,20 +1159,37 @@ function makeStyles(
   return StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor:
-        colors.bg,
+    },
+
+    // 头部:与其他二级页同款(圆框返回键 + 标题居中)
+    headerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 12,
+      paddingTop: 6,
+      paddingBottom: 10,
+    },
+    backBtn: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      borderWidth: 1.5,
+      borderColor: colors.link,
+      backgroundColor: colors.card,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 8,
+    },
+    headerTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: colors.textPrimary,
     },
 
     content: {
       padding: 20,
       paddingBottom: 40,
-    },
-
-    pageTitle: {
-      fontSize: 22,
-      fontWeight: '700',
-      color: colors.textPrimary,
-      marginBottom: 4,
     },
 
     pageSub: {

@@ -6,6 +6,17 @@ export interface Category {
   icon: string;
   color: string;
   type: 'expense' | 'income';
+  /** 所属大类名（仅支出分类用，如"餐饮购物"）；没有该字段的分类在选择页归入"其他"节 */
+  group?: string;
+}
+
+/** 用户自定义的支出大类（在选择类别页底部"新增大分类"创建） */
+export interface CategoryGroup {
+  name: string;
+  /** 主题色：组标题文字用这个颜色 */
+  color?: string;
+  icon?: string;
+  type: 'expense' | 'income';
 }
 
 export interface Transaction {
@@ -32,6 +43,8 @@ export interface Transaction {
 export interface Budget {
   categoryId: string;
   amount: number;
+  /** 预算所属币种（'total' 总预算按币种各存一条）；老数据没有该字段 = 跟随全局设置货币 */
+  currency?: string;
 }
 
 export interface Ledger {
@@ -40,6 +53,8 @@ export interface Ledger {
   icon: string;
   color?: string;
   createdAt: number;
+  /** 最近一次切换使用的时间戳(ms)；账本弹层按它降序排（MRU），未用过的保持原顺序 */
+  lastUsedAt?: number;
 }
 
 export type PeriodType = 'day' | 'week' | 'month' | 'year' | 'custom';
@@ -58,6 +73,43 @@ export type WeekStartsOn = 0 | 1;
 
 // 记账设定：金额小数位数
 export type DecimalPlaces = 0 | 1 | 2;
+
+/** 扣账周期：每周 / 每月 / 每年 */
+export type PaymentCycle = 'weekly' | 'monthly' | 'yearly';
+
+/** 财务规划-计划付款：固定支出/收入按周期自动入账 */
+export interface PaymentPlan {
+  id: string;
+  ledgerId: string;
+  /** 计划名称，如"房租"；自动入账时写入交易的 displayName */
+  name: string;
+  amount: number;
+  /** 支出 = 固定扣账；收入 = 固定入账 */
+  type: 'expense' | 'income';
+  cycle: PaymentCycle;
+  /** monthly: 每月几号(1-31，超出当月天数时兜底为当月最后一天) */
+  dayOfMonth?: number;
+  /** weekly: 周几(1=周一 … 5=周五；0=周日) */
+  dayOfWeek?: number;
+  /** yearly: 月 + 日 */
+  month?: number;
+  day?: number;
+  /** 首次扣账日 YYYY-MM-DD */
+  startDate: string;
+  /** 可选结束日，之后不再生成 */
+  endDate?: string;
+  /** 到点自动入账；关闭时只发提醒不扣账 */
+  autoDeduct: boolean;
+  /** 关联分类；null = 归"其他" */
+  categoryId: string | null;
+  /** 关联资产账户(可选)；记录该笔从哪个账户出/入 */
+  assetId?: string;
+  /** 暂停/启用：暂停中不扣账不提醒 */
+  active: boolean;
+  /** 补账游标：已处理到的最后一期日期(YYYY-MM-DD)；启动时从它追赶，上限 24 期 */
+  lastProcessedDate?: string;
+  createdAt: number;
+}
 
 export type AssetType = 'cash' | 'bank' | 'credit' | 'ewallet' | 'investment' | 'other';
 
@@ -78,23 +130,4 @@ export interface Asset {
   interestRate?: number; // 年利率(%)，逾期未还时用于估算利息
   // 默认账户：记一笔时自动带出这个账户。同一时间最多一个资产是默认（由 setDefaultAsset 保证）
   isDefault?: boolean;
-}
-
-// 计划付款的周期性：一次性 / 每月 / 每年
-export type PlannedPaymentRecurrence = 'once' | 'monthly' | 'yearly';
-
-// 计划付款：即将到期、还没实际记账的账目（房租、车贷、订阅等固定支出）
-export interface PlannedPayment {
-  id: string;
-  name: string;
-  categoryId?: string; // 类型，复用支出分类
-  amount: number;
-  assetId?: string; // 从哪个资产账户出账（选填）
-  dueDate: string; // YYYY-MM-DD
-  recurrence: PlannedPaymentRecurrence;
-  autoDeduct: boolean; // 是否到期自动扣账
-  note?: string;
-  ledgerId: string;
-  createdAt: number;
-  isPaid: boolean;
 }

@@ -1,0 +1,4 @@
+# ⚠️ .env 里有 Supabase service_role 管理员密钥，绝对不能提交
+.env
+node_modules/
+logs/

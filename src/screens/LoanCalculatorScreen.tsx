@@ -1,9 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView } from 'react-native';
+import {View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, Keyboard } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/useTheme';
+import { useTabClearance } from '../hooks/useTabClearance';
+import { useTabBarScrollHandler } from '../context/TabBarAutoHideContext';
 import { ThemeColors } from '../theme/theme';
+import PressableScale from '../components/PressableScale';
 
 type Method = 'reducing' | 'straight' | 'flat';
 
@@ -72,6 +75,8 @@ function buildFlatSchedule(principal: number, monthlyRate: number, months: numbe
 
 export default function LoanCalculatorScreen({ navigation }: any) {
   const { colors } = useTheme();
+  const tabClearance = useTabClearance();
+  const onTabScroll = useTabBarScrollHandler();
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const [principalStr, setPrincipalStr] = useState('');
@@ -122,16 +127,18 @@ export default function LoanCalculatorScreen({ navigation }: any) {
   }, [principal, monthlyRate, months, method]);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['top']}
+      onTouchStart={() => { Keyboard.dismiss(); }}
+    >
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
+        <PressableScale onPress={() => navigation.goBack()} activeScale={0.92}>
           <Ionicons name="chevron-back" size={26} color={colors.textPrimary} />
-        </TouchableOpacity>
+        </PressableScale>
         <Text style={styles.title}>贷款计算器</Text>
         <View style={{ width: 26 }} />
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 40 }}>
+      <ScrollView onScroll={onTabScroll ?? undefined} scrollEventThrottle={16} contentContainerStyle={{ padding: 20, paddingBottom: tabClearance }}>
         <Text style={styles.label}>贷款本金</Text>
         <TextInput
           style={styles.input}
@@ -169,33 +176,36 @@ export default function LoanCalculatorScreen({ navigation }: any) {
 
         <Text style={styles.label}>还款方式</Text>
         <View style={styles.methodRow}>
-          <TouchableOpacity
+          <PressableScale
             style={[styles.methodBtn, method === 'reducing' && styles.methodBtnActive]}
+            activeScale={0.95}
             onPress={() => setMethod('reducing')}
           >
             <Text style={[styles.methodText, method === 'reducing' && styles.methodTextActive]}>
               余额递减法{'\n'}
               <Text style={styles.methodSub}>月供固定</Text>
             </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
+          </PressableScale>
+          <PressableScale
             style={[styles.methodBtn, method === 'straight' && styles.methodBtnActive]}
+            activeScale={0.95}
             onPress={() => setMethod('straight')}
           >
             <Text style={[styles.methodText, method === 'straight' && styles.methodTextActive]}>
               直线法{'\n'}
               <Text style={styles.methodSub}>月供递减</Text>
             </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
+          </PressableScale>
+          <PressableScale
             style={[styles.methodBtn, method === 'flat' && styles.methodBtnActive]}
+            activeScale={0.95}
             onPress={() => setMethod('flat')}
           >
             <Text style={[styles.methodText, method === 'flat' && styles.methodTextActive]}>
               平息法{'\n'}
               <Text style={styles.methodSub}>本息都固定</Text>
             </Text>
-          </TouchableOpacity>
+          </PressableScale>
         </View>
 
         {result ? (
@@ -229,10 +239,10 @@ export default function LoanCalculatorScreen({ navigation }: any) {
               </View>
             </View>
 
-            <TouchableOpacity style={styles.toggleBtn} onPress={() => setShowSchedule((v) => !v)}>
+            <PressableScale style={styles.toggleBtn} activeScale={0.94} onPress={() => setShowSchedule((v) => !v)}>
               <Text style={styles.toggleBtnText}>{showSchedule ? '收起每月明细' : `查看每月明细（共 ${months} 期）`}</Text>
               <Ionicons name={showSchedule ? 'chevron-up' : 'chevron-down'} size={16} color={colors.link} />
-            </TouchableOpacity>
+            </PressableScale>
 
             {showSchedule && (
               <View style={styles.scheduleCard}>
@@ -265,7 +275,7 @@ export default function LoanCalculatorScreen({ navigation }: any) {
 
 function makeStyles(colors: ThemeColors) {
   return StyleSheet.create({
-    container: { flex: 1, backgroundColor: colors.bg },
+    container: { flex: 1 },
     header: { height: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20 },
     title: { fontSize: 17, fontWeight: '700', color: colors.textPrimary },
     label: { fontSize: 12, color: colors.textTertiary, marginTop: 16, marginBottom: 8 },
@@ -282,7 +292,7 @@ function makeStyles(colors: ThemeColors) {
     methodBtn: {
       flex: 1,
       borderRadius: 12,
-      borderWidth: 1.5,
+      borderWidth: 1,
       borderColor: colors.dividerHair,
       backgroundColor: colors.card,
       paddingVertical: 10,

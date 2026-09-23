@@ -15,7 +15,7 @@ export function useTheme(override?: 'light' | 'dark'): {
   const { themeMode } = useThemeMode();
 
   const resolvedMode: 'light' | 'dark' =
-    override ?? (themeMode === 'system' ? (systemScheme ?? 'light') : themeMode);
+    override ?? (themeMode === 'system' ? (systemScheme === 'dark' ? 'dark' : 'light') : themeMode);
   const isDark = resolvedMode === 'dark';
 
   return {

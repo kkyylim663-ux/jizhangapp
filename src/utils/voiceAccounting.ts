@@ -13,6 +13,23 @@ export interface VoiceAccountingResult {
 
 const STT_MODEL = 'qwen/qwen3-asr-flash-2026-02-10';
 
+// 请求超时熔断：8 秒没响应就中断，不让请求无限挂起
+const REQUEST_TIMEOUT_MS = 8000;
+
+function withTimeout(): { signal: AbortSignal; clear: () => void } {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  return { signal: controller.signal, clear: () => clearTimeout(timer) };
+}
+
+// 把 AbortError 转成给用户看的明确文案
+function toUserError(err: unknown): unknown {
+  if (err instanceof DOMException && err.name === 'AbortError') {
+    return new Error('请求超时，请重试');
+  }
+  return err;
+}
+
 const PROMPT = `你是一个中文个人记账助手。
 用户会说一句或几句自然语言，例如：
 “今天午饭花了35块，在麦当劳”
@@ -48,78 +65,100 @@ async function fileToBase64(uri: string): Promise<string> {
   });
 }
 
-async function transcribeAudio(base64Audio: string, format: string): Promise<string> {
-  const response = await fetch('https://openrouter.ai/api/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: STT_MODEL,
-      input_audio: {
-        data: base64Audio,
-        format,
+// 注意：OpenRouter 官方文档明确 STT 端点不支持 provider 路由偏好
+// （order/only/ignore/sort 均对 transcription 请求无效；provider 对象只收 provider.options 透传参数），
+// 所以这里不能加 sort: "latency"——选供应商只能靠 model slug 本身。
+// 文档：openrouter.ai/docs/guides/overview/multimodal/stt.md
+async function transcribeAudio(base64Audio: string, format: string, model: string = STT_MODEL): Promise<string> {
+  const { signal, clear } = withTimeout();
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
       },
-      language: 'zh',
-      temperature: 0,
-    }),
-  });
+      signal,
+      body: JSON.stringify({
+        model,
+        input_audio: {
+          data: base64Audio,
+          format,
+        },
+        language: 'zh',
+        temperature: 0,
+      }),
+    });
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`语音识别失败（状态码${response.status}）：${errText}`);
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`语音识别失败（状态码${response.status}）：${errText}`);
+    }
+
+    const data = await response.json();
+    const text = String(data?.text ?? '').trim();
+    if (!text) throw new Error('没有识别到语音内容，请再说一次');
+    return text;
+  } catch (err) {
+    throw toUserError(err);
+  } finally {
+    clear();
   }
-
-  const data = await response.json();
-  const text = String(data?.text ?? '').trim();
-  if (!text) throw new Error('没有识别到语音内容，请再说一次');
-  return text;
 }
 
 async function parseAccountingText(transcript: string): Promise<Omit<VoiceAccountingResult, 'transcript'>> {
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: AI_MODEL,
-      temperature: 0,
-      messages: [
-        {
-          role: 'user',
-          content: `${PROMPT}\n\n今天的日期是：${getToday()}\n\n用户语音转写内容：\n${transcript}`,
-        },
-      ],
-    }),
-  });
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`AI记账解析失败（状态码${response.status}）：${errText}`);
-  }
-
-  const data = await response.json();
-  const rawText = String(data?.choices?.[0]?.message?.content ?? '');
-  const cleaned = cleanJson(rawText);
-
-  let parsed: any;
+  const { signal, clear } = withTimeout();
   try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    throw new Error('AI返回的记账结果无法解析，请再说一次');
-  }
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+      },
+      signal,
+      body: JSON.stringify({
+        model: AI_MODEL,
+        temperature: 0,
+        // OpenRouter provider routing（chat 端点支持）：优先延迟低的供应商
+        provider: { sort: 'latency' },
+        messages: [
+          {
+            role: 'user',
+            content: `${PROMPT}\n\n今天的日期是：${getToday()}\n\n用户语音转写内容：\n${transcript}`,
+          },
+        ],
+      }),
+    });
 
-  return {
-    amount: typeof parsed.amount === 'number' ? parsed.amount : null,
-    merchant: parsed.merchant ?? null,
-    date: parsed.date ?? null,
-    type: parsed.type === 'income' ? 'income' : 'expense',
-    suggestedCategory: parsed.suggestedCategory ?? null,
-    note: parsed.note ?? parsed.merchant ?? null,
-  };
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`AI记账解析失败（状态码${response.status}）：${errText}`);
+    }
+
+    const data = await response.json();
+    const rawText = String(data?.choices?.[0]?.message?.content ?? '');
+    const cleaned = cleanJson(rawText);
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      throw new Error('AI返回的记账结果无法解析，请再说一次');
+    }
+
+    return {
+      amount: typeof parsed.amount === 'number' ? parsed.amount : null,
+      merchant: parsed.merchant ?? null,
+      date: parsed.date ?? null,
+      type: parsed.type === 'income' ? 'income' : 'expense',
+      suggestedCategory: parsed.suggestedCategory ?? null,
+      note: parsed.note ?? parsed.merchant ?? null,
+    };
+  } catch (err) {
+    throw toUserError(err);
+  } finally {
+    clear();
+  }
 }
 
 export async function voiceToAccounting(uri: string): Promise<VoiceAccountingResult> {
@@ -136,4 +175,18 @@ export async function voiceToAccounting(uri: string): Promise<VoiceAccountingRes
     ...parsed,
     transcript,
   };
+}
+
+/**
+ * 只做语音转写（云端ASR），不做记账解析。
+ * 给本地AI路径用：端侧模型只负责"文字→结构化"，语音→文字这步目前只有云端能做。
+ * 转写失败由调用方捕获后整体降级 voiceToAccounting()。
+ */
+export async function transcribeAudioFile(uri: string): Promise<string> {
+  if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY.includes('在这里')) {
+    throw new Error('还没有配置API Key，请打开 src/config/aiConfig.ts 填入你的OpenRouter API Key');
+  }
+  const base64Audio = await fileToBase64(uri);
+  const format = uri.toLowerCase().endsWith('.wav') ? 'wav' : 'm4a';
+  return transcribeAudio(base64Audio, format);
 }

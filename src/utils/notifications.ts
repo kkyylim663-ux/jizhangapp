@@ -1,21 +1,36 @@
-import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { Platform } from 'react-native';
+import { BACKEND_URL } from '../config/supabaseConfig';
+import { supabase } from '../services/supabaseClient';
 
 // 是否在 Expo Go 里跑（不是 development build / 正式安装包）。
-// SDK 53 起，Expo Go(Android) 只要调用推送token相关功能就会直接抛出致命错误，
-// 这个错误绕开了外面的 try/catch，所以必须在调用前就判断好，完全跳过，不能等出错再catch。
+// 注意：Expo Go（Android, SDK 53+）在 import expo-notifications 的模块加载阶段
+// 就会直接抛 "Android Push notifications (remote) ... removed from Expo Go"，
+// 这个错误发生在 require 期，try/catch 拦不住。所以整个模块延迟加载：
+// Expo Go 里永远不执行 require，所有通知函数安静跳过；development build 正常。
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
-// 前台收到通知时的展示方式
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+type NotificationsModule = typeof import('expo-notifications');
+
+function loadNotifications(): NotificationsModule | null {
+  if (isExpoGo) return null;
+  return require('expo-notifications') as NotificationsModule;
+}
+
+const NotificationsModule = loadNotifications();
+
+if (NotificationsModule) {
+  // 前台收到通知时的展示方式
+  NotificationsModule.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+}
 
 /**
  * 请求权限并拿到 Expo Push Token。
@@ -27,17 +42,21 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
     console.warn('当前是Expo Go环境，推送token功能不可用，需要development build才能测试');
     return null;
   }
+  if (!NotificationsModule) {
+    console.warn('通知模块未加载');
+    return null;
+  }
 
   if (!Device.isDevice) {
     console.warn('推送通知必须在真机上测试');
     return null;
   }
 
-  const { status: existingStatus } = await Notifications.getPermissionsAsync();
+  const { status: existingStatus } = await NotificationsModule.getPermissionsAsync();
   let finalStatus = existingStatus;
 
   if (existingStatus !== 'granted') {
-    const { status } = await Notifications.requestPermissionsAsync();
+    const { status } = await NotificationsModule.requestPermissionsAsync();
     finalStatus = status;
   }
 
@@ -53,13 +72,13 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
     return null;
   }
 
-  const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
+  const tokenData = await NotificationsModule.getExpoPushTokenAsync({ projectId });
   const token = tokenData.data;
 
   if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('default', {
+    await NotificationsModule.setNotificationChannelAsync('default', {
       name: 'default',
-      importance: Notifications.AndroidImportance.MAX,
+      importance: NotificationsModule.AndroidImportance.MAX,
       vibrationPattern: [0, 250, 250, 250],
       lightColor: '#FF231F7C',
     });
@@ -70,14 +89,29 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
 
 /**
  * 把拿到的 token 发给后端保存起来,后端之后就能用这个 token 推消息给这个用户/设备。
- * 把 URL 换成你部署到 Hostinger 之后的实际地址。
+ * 身份用当前登录会话的 access_token 证明：后端验签后按 auth.uid() 归档，
+ * 不信任客户端自报的 userId。BACKEND_URL 未配置（还没部署后端）时整体跳过。
  */
-export async function sendTokenToBackend(token: string, userId: string) {
+export async function sendTokenToBackend(token: string) {
+  if (!BACKEND_URL) {
+    console.warn('后端地址未配置(BACKEND_URL)，跳过推送token注册');
+    return;
+  }
   try {
-    const res = await fetch('https://your-hostinger-domain.com/api/register-push-token', {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session) {
+      console.warn('未登录，跳过推送token注册');
+      return;
+    }
+    const res = await fetch(`${BACKEND_URL.replace(/\/+$/, '')}/api/register-push-token`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, token }),
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ token, platform: Platform.OS }),
     });
     if (!res.ok) {
       console.warn('推送token注册失败', await res.text());
@@ -91,12 +125,20 @@ export async function sendTokenToBackend(token: string, userId: string) {
  * 监听收到的通知(前台)和用户点击通知(不管前台/后台)。
  * 返回一个清理函数,记得在组件卸载时调用。
  */
+type ExpoNotification = import('expo-notifications').Notification;
+type ExpoNotificationResponse = import('expo-notifications').NotificationResponse;
+
 export function addNotificationListeners(
-  onReceive: (notification: Notifications.Notification) => void,
-  onTap: (response: Notifications.NotificationResponse) => void
+  onReceive: (notification: ExpoNotification) => void,
+  onTap: (response: ExpoNotificationResponse) => void
 ) {
-  const receivedSub = Notifications.addNotificationReceivedListener(onReceive);
-  const responseSub = Notifications.addNotificationResponseReceivedListener(onTap);
+  // Expo Go 里通知模块未加载，直接返回空清理函数
+  if (!NotificationsModule) {
+    console.warn('Expo Go 环境跳过通知监听');
+    return () => {};
+  }
+  const receivedSub = NotificationsModule.addNotificationReceivedListener(onReceive);
+  const responseSub = NotificationsModule.addNotificationResponseReceivedListener(onTap);
 
   return () => {
     receivedSub.remove();
@@ -123,3 +165,27 @@ export function addNotificationListeners(
  *   return cleanup;
  * }, []);
  */
+
+/**
+ * 本地通知调度(不依赖推送 token):财务规划的付款提醒等本地提醒用这个。
+ * Expo Go 里安静跳过;development build 正常。
+ */
+export async function scheduleLocalNotification(
+  title: string,
+  body: string,
+  triggerDate: Date
+): Promise<void> {
+  if (!NotificationsModule) return;
+  try {
+    await NotificationsModule.scheduleNotificationAsync({
+      content: { title, body },
+      // DateTriggerInput 的 type 是数字枚举,直接用模块内引用保证类型一致
+      trigger: {
+        type: (require('expo-notifications') as NotificationsModule).SchedulableTriggerInputTypes.DATE,
+        date: triggerDate,
+      } as Parameters<NotificationsModule['scheduleNotificationAsync']>[0]['trigger'],
+    });
+  } catch (e) {
+    console.warn('本地通知调度失败', e);
+  }
+}

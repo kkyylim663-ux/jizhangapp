@@ -11,10 +11,13 @@ export default function DonutChart({
   data,
   size = 160,
   strokeWidth = 24,
+  rotation = 0,
 }: {
   data: Slice[];
   size?: number;
   strokeWidth?: number;
+  /** 整环的起始角度微调（度，负=逆时针），默认从12点方向开始 */
+  rotation?: number;
 }) {
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
@@ -25,7 +28,7 @@ export default function DonutChart({
   return (
     <View style={{ width: size, height: size }}>
       <Svg width={size} height={size}>
-        <G transform={`rotate(-90 ${size / 2} ${size / 2})`}>
+        <G transform={`rotate(${-90 + rotation} ${size / 2} ${size / 2})`}>
           {data.map((slice, i) => {
             const fraction = slice.value / total;
             const dashLength = fraction * circumference;

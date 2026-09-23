@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   Transaction,
@@ -8,36 +8,31 @@ import {
   PeriodPreference,
   Asset,
   AssetType,
-  PlannedPayment,
-  PlannedPaymentRecurrence,
+  CategoryGroup,
   DateFormat,
   WeekStartsOn,
   DecimalPlaces,
+  PaymentPlan,
 } from '../types';
 import { DEFAULT_CATEGORIES } from '../utils/defaultCategories';
 import { getCurrencySymbol } from '../utils/currencies';
-import {
-  registerForPushNotificationsAsync,
-  sendTokenToBackend,
-  addNotificationListeners,
-} from '../utils/notifications';
+import { computePlanOccurrences } from '../utils/paymentPlans';
+import { onLocalDataReplaced, schedulePush } from '../services/syncService';
 
 const STORAGE_KEYS = {
   transactions: '@jizhang/transactions',
   categories: '@jizhang/categories',
+  categoryGroups: '@jizhang/categoryGroups',
   budgets: '@jizhang/budgets',
   ledgers: '@jizhang/ledgers',
   activeLedgerId: '@jizhang/activeLedgerId',
   currency: '@jizhang/currency',
   periodPreference: '@jizhang/periodPreference',
   assets: '@jizhang/assets',
-  plannedPayments: '@jizhang/plannedPayments',
   dateFormat: '@jizhang/dateFormat',
   weekStartsOn: '@jizhang/weekStartsOn',
   decimalPlaces: '@jizhang/decimalPlaces',
-  // 现在还没有账号系统，先用一个本地生成、持久化保存的设备ID代替userId来注册推送。
-  // 以后做了真实账号系统，把用这个ID的地方换成真实用户ID即可，接口不用改。
-  deviceId: '@jizhang/deviceId',
+  paymentPlans: '@jizhang/paymentPlans',
 };
 
 const DEFAULT_LEDGER: Ledger = { id: 'default', name: '默认账本', icon: 'book-outline', color: '#4C9AFF', createdAt: Date.now() };
@@ -49,7 +44,9 @@ const FEE_CATEGORY_ID = 'transfer_fee';
 
 function isLegacyIconValue(icon: string | undefined | null): boolean {
   if (!icon) return true;
-  return !/^[a-z0-9-]+$/.test(icon);
+  if (!/^[a-z0-9-]+$/.test(icon)) return true;
+  // 历史上写进本地数据的非法 Ionicons 图标名（渲染时会刷 Console Warning），按 id 映射回默认表
+  return icon === 'pills-outline' || icon === 'gas-pump-outline';
 }
 
 function migrateCategoryIcons(stored: Category[]): { result: Category[]; changed: boolean } {
@@ -63,6 +60,42 @@ function migrateCategoryIcons(stored: Category[]): { result: Category[]; changed
     return c;
   });
   return { result, changed };
+}
+
+// 大类分组迁移：老数据里的默认分类没有 group 字段，按 id 从默认表补上，
+// 用户自建/未知分类不补（在选择类别页自然落"其他"节）
+// 大组改名映射：老数据里的旧组名自动改成新组名（含用户自建的分类）
+const GROUP_RENAMES: Record<string, string> = { '人情其他': '节日送礼' };
+
+function migrateCategoryGroups(stored: Category[]): { result: Category[]; changed: boolean } {
+  let changed = false;
+  const result = stored.map((c) => {
+    if (c.group) {
+      const renamed = GROUP_RENAMES[c.group];
+      if (renamed && renamed !== c.group) {
+        changed = true;
+        return { ...c, group: renamed };
+      }
+      return c;
+    }
+    const fresh = DEFAULT_CATEGORIES.find((d) => d.id === c.id);
+    if (fresh?.group) {
+      changed = true;
+      return { ...c, group: fresh.group };
+    }
+    return c;
+  });
+  return { result, changed };
+}
+
+// 增量补齐新增的默认分类：老用户本地存的是旧版分类列表，App 升级后在
+// defaultCategories.ts 里新加的默认分类不会自动出现——这里按 id 把本地缺的
+// 默认分类补进列表尾部。用户删过的默认分类也会被补回来（作为"恢复默认"行为，
+// 与手续费分类 FEE_CATEGORY_ID 已有的补齐逻辑一致）；用户自建分类不受影响。
+function mergeNewDefaultCategories(stored: Category[]): { result: Category[]; changed: boolean } {
+  const missing = DEFAULT_CATEGORIES.filter((d) => !stored.some((c) => c.id === d.id));
+  if (missing.length === 0) return { result: stored, changed: false };
+  return { result: [...stored, ...missing], changed: true };
 }
 
 const ASSET_TYPE_FALLBACK_ICON: Record<AssetType, string> = {
@@ -99,13 +132,9 @@ function migrateLedgerIcons(stored: Ledger[]): { result: Ledger[]; changed: bool
   return { result, changed };
 }
 
-// 老数据里 recurrence/autoDeduct 字段可能不存在（这次改动之前存的），读取时给一个安全默认值
-function migratePlannedPayments(stored: PlannedPayment[]): PlannedPayment[] {
-  return stored.map((p) => ({
-    ...p,
-    recurrence: p.recurrence ?? 'once',
-    autoDeduct: p.autoDeduct ?? false,
-  }));
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 interface AppContextValue {
@@ -118,7 +147,6 @@ interface AppContextValue {
   currencySymbol: string;
   periodPreference: PeriodPreference;
   assets: Asset[];
-  plannedPayments: PlannedPayment[];
   dateFormat: DateFormat;
   weekStartsOn: WeekStartsOn;
   decimalPlaces: DecimalPlaces;
@@ -137,11 +165,16 @@ interface AppContextValue {
     updates: Partial<Omit<Transaction, 'id' | 'createdAt' | 'ledgerId'>>
   ) => Promise<void>;
   deleteTransaction: (id: string) => Promise<void>;
-  addCategory: (c: Omit<Category, 'id'>) => Promise<void>;
+  addCategory: (c: Omit<Category, 'id'>) => Promise<Category>;
+  addCategoryGroup: (g: CategoryGroup) => Promise<void>;
+  deleteCategoryGroup: (name: string) => Promise<void>;
+  categoryGroups: CategoryGroup[];
+  updateCategory: (id: string, updates: Partial<Omit<Category, 'id'>>) => Promise<void>;
   deleteCategory: (id: string) => Promise<void>;
-  setBudget: (categoryId: string, amount: number) => Promise<void>;
+  setBudget: (categoryId: string, amount: number, currency?: string) => Promise<void>;
   getCategoryById: (id: string) => Category | undefined;
   addLedger: (name: string, icon: string, color?: string) => Promise<void>;
+  renameLedger: (id: string, name: string) => Promise<void>;
   deleteLedger: (id: string) => Promise<void>;
   setActiveLedgerId: (id: string) => Promise<void>;
   setCurrency: (code: string) => Promise<void>;
@@ -149,6 +182,11 @@ interface AppContextValue {
   setDateFormat: (f: DateFormat) => Promise<void>;
   setWeekStartsOn: (d: WeekStartsOn) => Promise<void>;
   setDecimalPlaces: (n: DecimalPlaces) => Promise<void>;
+  /** 财务规划:计划付款 CRUD(存储/云同步/自动扣账游标都由 AppContext 管理) */
+  paymentPlans: PaymentPlan[];
+  addPaymentPlan: (p: Omit<PaymentPlan, 'id' | 'createdAt' | 'lastProcessedDate'>) => Promise<void>;
+  updatePaymentPlan: (id: string, updates: Partial<Omit<PaymentPlan, 'id' | 'ledgerId' | 'createdAt'>>) => Promise<void>;
+  deletePaymentPlan: (id: string) => Promise<void>;
   addAsset: (a: {
     name: string;
     icon: string;
@@ -176,23 +214,10 @@ interface AppContextValue {
     fee: number;
     date: string;
     note: string;
+    receiptUri?: string;
   }) => Promise<void>;
-  addPlannedPayment: (p: {
-    name: string;
-    categoryId?: string;
-    amount: number;
-    assetId?: string;
-    dueDate: string;
-    recurrence: PlannedPaymentRecurrence;
-    autoDeduct: boolean;
-    note?: string;
-  }) => Promise<void>;
-  updatePlannedPayment: (
-    id: string,
-    updates: Partial<Omit<PlannedPayment, 'id' | 'createdAt' | 'ledgerId'>>
-  ) => Promise<void>;
-  deletePlannedPayment: (id: string) => Promise<void>;
-  markPlannedPaymentPaid: (id: string) => Promise<void>;
+  /** 重新从 AsyncStorage 读取全部本地数据（云同步写回后自动调用；也可手动刷新） */
+  reloadFromStorage: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
@@ -206,45 +231,55 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [categories, setCategories] = useState<Category[]>(DEFAULT_CATEGORIES);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [ledgers, setLedgers] = useState<Ledger[]>([DEFAULT_LEDGER]);
+  // 同步 ledgers 最新值的 ref：deleteLedger 在同一帧内做「删除+回落」时读最新列表
+  const ledgersRef = useRef<Ledger[]>([DEFAULT_LEDGER]);
+  useEffect(() => {
+    ledgersRef.current = ledgers;
+  }, [ledgers]);
   const [activeLedgerId, setActiveLedgerIdState] = useState<string>(DEFAULT_LEDGER.id);
-  const [currency, setCurrencyState] = useState<string>('CNY');
+  const [currency, setCurrencyState] = useState<string>('MYR'); // 默认货币：RM（马来西亚林吉特）
   const [periodPreference, setPeriodPreferenceState] = useState<PeriodPreference>(DEFAULT_PERIOD);
   const [assets, setAssets] = useState<Asset[]>([]);
-  const [plannedPayments, setPlannedPayments] = useState<PlannedPayment[]>([]);
+  const [categoryGroups, setCategoryGroups] = useState<CategoryGroup[]>([]);
   const [dateFormat, setDateFormatState] = useState<DateFormat>(DEFAULT_DATE_FORMAT);
   const [weekStartsOn, setWeekStartsOnState] = useState<WeekStartsOn>(DEFAULT_WEEK_STARTS_ON);
   const [decimalPlaces, setDecimalPlacesState] = useState<DecimalPlaces>(DEFAULT_DECIMAL_PLACES);
+  const [paymentPlans, setPaymentPlans] = useState<PaymentPlan[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    (async () => {
+  // 启动时读取本地数据；抽成函数是因为云同步把"云端合并结果"写回 AsyncStorage 后
+  // 会回调 onLocalDataReplaced → loadFromStorage，把恢复/换机登录拉回来的数据刷进内存 state
+  const loadFromStorage = useCallback(async () => {
+    await (async () => {
       try {
         const [
           txRaw,
           catRaw,
+          catGroupRaw,
           budRaw,
           ledRaw,
           activeLedRaw,
           currRaw,
           periodRaw,
           assetRaw,
-          planRaw,
           dateFormatRaw,
           weekStartsOnRaw,
           decimalPlacesRaw,
+          planRaw,
         ] = await Promise.all([
           AsyncStorage.getItem(STORAGE_KEYS.transactions),
           AsyncStorage.getItem(STORAGE_KEYS.categories),
+          AsyncStorage.getItem(STORAGE_KEYS.categoryGroups),
           AsyncStorage.getItem(STORAGE_KEYS.budgets),
           AsyncStorage.getItem(STORAGE_KEYS.ledgers),
           AsyncStorage.getItem(STORAGE_KEYS.activeLedgerId),
           AsyncStorage.getItem(STORAGE_KEYS.currency),
           AsyncStorage.getItem(STORAGE_KEYS.periodPreference),
           AsyncStorage.getItem(STORAGE_KEYS.assets),
-          AsyncStorage.getItem(STORAGE_KEYS.plannedPayments),
           AsyncStorage.getItem(STORAGE_KEYS.dateFormat),
           AsyncStorage.getItem(STORAGE_KEYS.weekStartsOn),
           AsyncStorage.getItem(STORAGE_KEYS.decimalPlaces),
+          AsyncStorage.getItem(STORAGE_KEYS.paymentPlans),
         ]);
         if (txRaw) {
           const parsedTx: Transaction[] = JSON.parse(txRaw);
@@ -254,11 +289,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const parsedCat: Category[] = JSON.parse(catRaw);
           const hasFee = parsedCat.some((c) => c.id === FEE_CATEGORY_ID);
           const withFee = hasFee ? parsedCat : [...parsedCat, DEFAULT_CATEGORIES.find((c) => c.id === FEE_CATEGORY_ID)!];
-          const { result: migratedCat, changed: catChanged } = migrateCategoryIcons(withFee);
+          const { result: iconMigrated, changed: iconChanged } = migrateCategoryIcons(withFee);
+          const { result: groupMigrated, changed: groupChanged } = migrateCategoryGroups(iconMigrated);
+          const { result: migratedCat, changed: mergedNew } = mergeNewDefaultCategories(groupMigrated);
           setCategories(migratedCat);
-          if (catChanged) {
+          if (iconChanged || groupChanged || mergedNew) {
             AsyncStorage.setItem(STORAGE_KEYS.categories, JSON.stringify(migratedCat));
           }
+        }
+        if (catGroupRaw) {
+          const parsedGroups: CategoryGroup[] = JSON.parse(catGroupRaw);
+          if (Array.isArray(parsedGroups)) setCategoryGroups(parsedGroups);
         }
         if (budRaw) setBudgets(JSON.parse(budRaw));
         if (ledRaw) {
@@ -280,47 +321,49 @@ export function AppProvider({ children }: { children: ReactNode }) {
             AsyncStorage.setItem(STORAGE_KEYS.assets, JSON.stringify(migratedAsset));
           }
         }
-        if (planRaw) {
-          const parsedPlan: PlannedPayment[] = JSON.parse(planRaw);
-          setPlannedPayments(migratePlannedPayments(parsedPlan));
-        }
         if (dateFormatRaw) setDateFormatState(dateFormatRaw as DateFormat);
         if (weekStartsOnRaw) setWeekStartsOnState(Number(weekStartsOnRaw) as WeekStartsOn);
         if (decimalPlacesRaw) setDecimalPlacesState(Number(decimalPlacesRaw) as DecimalPlaces);
+        if (planRaw) setPaymentPlans(JSON.parse(planRaw));
       } catch (e) {
         console.warn('读取本地数据失败', e);
-      } finally {
-        setLoading(false);
       }
     })();
   }, []);
 
-  // 注册推送通知：现在没有账号系统，先用本地持久化的设备ID当userId用。
-  // registerForPushNotificationsAsync 在 Expo Go 里跑不了（拿不到有效token），
-  // 要等打了 development build 之后才会真正生效，在 Expo Go 里只会安静地跳过。
+  // 首次加载完成前 loading=true，压住所有"state 一变就写 AsyncStorage"的副作用
   useEffect(() => {
-    (async () => {
-      try {
-        let deviceId = await AsyncStorage.getItem(STORAGE_KEYS.deviceId);
-        if (!deviceId) {
-          deviceId = genId();
-          await AsyncStorage.setItem(STORAGE_KEYS.deviceId, deviceId);
-        }
-        const token = await registerForPushNotificationsAsync();
-        if (token) {
-          await sendTokenToBackend(token, deviceId);
-        }
-      } catch (e) {
-        console.warn('推送通知注册失败', e);
-      }
-    })();
+    void loadFromStorage().finally(() => setLoading(false));
+  }, [loadFromStorage]);
 
-    const cleanup = addNotificationListeners(
-      (notification) => console.log('收到通知', notification),
-      (response) => console.log('用户点击了通知', response)
-    );
-    return cleanup;
-  }, []);
+  // ── 云同步挂钩 ──────────────────────────────────────────────
+  // 1) 本地任一数据变化 → 防抖推送到云端（未登录时 syncService 内部直接跳过，行为同纯本地）
+  useEffect(() => {
+    if (loading) return;
+    schedulePush();
+  }, [
+    transactions,
+    categories,
+    categoryGroups,
+    budgets,
+    ledgers,
+    activeLedgerId,
+    currency,
+    periodPreference,
+    assets,
+    dateFormat,
+    weekStartsOn,
+    decimalPlaces,
+    paymentPlans,
+    loading,
+  ]);
+
+  // 2) 云同步合并结果写回本地后 → 重新加载进内存（登录恢复 / 换新手机登录恢复资料）
+  useEffect(() => {
+    return onLocalDataReplaced(() => {
+      void loadFromStorage();
+    });
+  }, [loadFromStorage]);
 
   useEffect(() => {
     if (!loading) AsyncStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(transactions));
@@ -328,6 +371,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!loading) AsyncStorage.setItem(STORAGE_KEYS.categories, JSON.stringify(categories));
   }, [categories, loading]);
+  useEffect(() => {
+    if (!loading) AsyncStorage.setItem(STORAGE_KEYS.categoryGroups, JSON.stringify(categoryGroups));
+  }, [categoryGroups, loading]);
   useEffect(() => {
     if (!loading) AsyncStorage.setItem(STORAGE_KEYS.budgets, JSON.stringify(budgets));
   }, [budgets, loading]);
@@ -347,9 +393,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!loading) AsyncStorage.setItem(STORAGE_KEYS.assets, JSON.stringify(assets));
   }, [assets, loading]);
   useEffect(() => {
-    if (!loading) AsyncStorage.setItem(STORAGE_KEYS.plannedPayments, JSON.stringify(plannedPayments));
-  }, [plannedPayments, loading]);
-  useEffect(() => {
     if (!loading) AsyncStorage.setItem(STORAGE_KEYS.dateFormat, dateFormat);
   }, [dateFormat, loading]);
   useEffect(() => {
@@ -358,6 +401,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!loading) AsyncStorage.setItem(STORAGE_KEYS.decimalPlaces, String(decimalPlaces));
   }, [decimalPlaces, loading]);
+  useEffect(() => {
+    if (!loading) AsyncStorage.setItem(STORAGE_KEYS.paymentPlans, JSON.stringify(paymentPlans));
+  }, [paymentPlans, loading]);
 
   const addTransaction: AppContextValue['addTransaction'] = async (t) => {
     const newTx: Transaction = {
@@ -374,22 +420,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteTransaction: AppContextValue['deleteTransaction'] = async (id) => {
-    setTransactions((prev) => prev.filter((item) => item.id !== id));
+    setTransactions((prev) => prev.filter((item) => (item.id !== id)));
   };
 
   const addCategory: AppContextValue['addCategory'] = async (c) => {
-    setCategories((prev) => [...prev, { ...c, id: genId() }]);
+    const created: Category = { ...c, id: genId() };
+    setCategories((prev) => [...prev, created]);
+    return created;
+  };
+
+  // 更新分类（当前只用于编辑模式里拖拽换大类）：按 id 合并更新，其余字段不动
+  const updateCategory: AppContextValue['updateCategory'] = async (id, updates) => {
+    setCategories((prev) => prev.map((c) => (c.id === id ? { ...c, ...updates } : c)));
+  };
+
+  const addCategoryGroup: AppContextValue['addCategoryGroup'] = async (g) => {
+    setCategoryGroups((prev) => (prev.some((x) => x.name === g.name) ? prev : [...prev, g]));
+  };
+
+  // 删除自定义大类：组内分类的 group 字段保留不动（它们会自动归入选择页的"其他"节）
+  const deleteCategoryGroup: AppContextValue['deleteCategoryGroup'] = async (name) => {
+    setCategoryGroups((prev) => prev.filter((g) => g.name !== name));
   };
 
   const deleteCategory: AppContextValue['deleteCategory'] = async (id) => {
     setCategories((prev) => prev.filter((item) => item.id !== id));
   };
 
-  const setBudget: AppContextValue['setBudget'] = async (categoryId, amount) => {
+  const setBudget: AppContextValue['setBudget'] = async (categoryId, amount, currency) => {
+    // amount <= 0 = 清除该条预算；同一 categoryId 可以按币种各存一条（总预算多币种各设各的）
     setBudgets((prev) => {
-      const exists = prev.find((b) => b.categoryId === categoryId);
-      if (exists) return prev.map((b) => (b.categoryId === categoryId ? { ...b, amount } : b));
-      return [...prev, { categoryId, amount }];
+      if (amount <= 0) return prev.filter((b) => !(b.categoryId === categoryId && b.currency === currency));
+      const exists = prev.find((b) => b.categoryId === categoryId && b.currency === currency);
+      if (exists) return prev.map((b) => (b === exists ? { ...b, amount } : b));
+      return [...prev, { categoryId, amount, currency }];
     });
   };
 
@@ -399,14 +463,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setLedgers((prev) => [...prev, { id: genId(), name, icon, color: color ?? '#4C9AFF', createdAt: Date.now() }]);
   };
 
+  const renameLedger: AppContextValue['renameLedger'] = async (id, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setLedgers((prev) => prev.map((l) => (l.id === id ? { ...l, name: trimmed } : l)));
+  };
+
   const deleteLedger: AppContextValue['deleteLedger'] = async (id) => {
-    if (id === DEFAULT_LEDGER.id) return;
+    // 用户定版：默认账本也可删除（其数据一并清除），但至少要留一个账本。
+    // 删的是当前账本时回落：优先回落到剩下的第一个账本，一个都没有则回落 'default'
+    // （'default' 是运行时兜底账本，不在 ledgers 数组里也会正常显示/工作）。
+    const remaining = ledgersRef.current.filter((l) => l.id !== id);
+    setActiveLedgerIdState((prevActive) =>
+      prevActive === id ? (remaining[0]?.id ?? DEFAULT_LEDGER.id) : prevActive
+    );
+    // 级联删除：账本名下的交易/资产/缴费计划一并清除（用户定版：删除即连同数据删除，
+    // 不留孤儿数据）。云同步按快照 diff 自动删除对应云端行。
+    setTransactions((prev) => prev.filter((t) => t.ledgerId !== id));
+    setAssets((prev) => prev.filter((a) => a.ledgerId !== id));
+    setPaymentPlans((prev) => prev.filter((p) => p.ledgerId !== id));
     setLedgers((prev) => prev.filter((l) => l.id !== id));
-    setActiveLedgerIdState((prevActive) => (prevActive === id ? DEFAULT_LEDGER.id : prevActive));
   };
 
   const setActiveLedgerId: AppContextValue['setActiveLedgerId'] = async (id) => {
     setActiveLedgerIdState(id);
+    // MRU：记录最近使用时间，账本弹层按它把最常用的排到最上面
+    setLedgers((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, lastUsedAt: Date.now() } : l))
+    );
   };
 
   const setCurrency: AppContextValue['setCurrency'] = async (code) => {
@@ -473,6 +557,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     fee,
     date,
     note,
+    receiptUri,
   }) => {
     const convertedAmount = amount * exchangeRate;
     const transferTx: Transaction = {
@@ -489,6 +574,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       exchangeRate,
       convertedAmount,
       fee,
+      receiptUri,
     };
     const newTxs = [transferTx];
 
@@ -509,44 +595,70 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTransactions((prev) => [...newTxs, ...prev]);
   };
 
-  const addPlannedPayment: AppContextValue['addPlannedPayment'] = async ({
-    name,
-    categoryId,
-    amount,
-    assetId,
-    dueDate,
-    recurrence,
-    autoDeduct,
-    note,
-  }) => {
-    const newPlan: PlannedPayment = {
-      id: genId(),
-      name,
-      categoryId,
-      amount,
-      assetId,
-      dueDate,
-      recurrence,
-      autoDeduct,
-      note,
-      ledgerId: activeLedgerId,
-      createdAt: Date.now(),
-      isPaid: false,
-    };
-    setPlannedPayments((prev) => [...prev, newPlan]);
+  // ── 财务规划:计划付款 CRUD ──
+  const addPaymentPlan: AppContextValue['addPaymentPlan'] = async (p) => {
+    const plan: PaymentPlan = { ...p, id: genId(), createdAt: Date.now() };
+    setPaymentPlans((prev) => [...prev, plan]);
   };
 
-  const updatePlannedPayment: AppContextValue['updatePlannedPayment'] = async (id, updates) => {
-    setPlannedPayments((prev) => prev.map((p) => (p.id === id ? { ...p, ...updates } : p)));
+  const updatePaymentPlan: AppContextValue['updatePaymentPlan'] = async (id, updates) => {
+    setPaymentPlans((prev) => prev.map((p) => (p.id === id ? { ...p, ...updates } : p)));
   };
 
-  const deletePlannedPayment: AppContextValue['deletePlannedPayment'] = async (id) => {
-    setPlannedPayments((prev) => prev.filter((p) => p.id !== id));
+  const deletePaymentPlan: AppContextValue['deletePaymentPlan'] = async (id) => {
+    setPaymentPlans((prev) => prev.filter((p) => p.id !== id));
   };
 
-  const markPlannedPaymentPaid: AppContextValue['markPlannedPaymentPaid'] = async (id) => {
-    setPlannedPayments((prev) => prev.map((p) => (p.id === id ? { ...p, isPaid: true } : p)));
-  };
+  // ── 自动扣账引擎(启动补账):对每个到期的计划逐期生成交易并推进游标 ──
+  // 数据加载完成后跑一次;云同步写回数据(loadFromStorage)后也会再跑一次,
+  // 保证换机恢复/多设备登录后同样把缺的期数补上。上限 24 期在引擎内控制。
+  const processedPlansRef = useRef<string>('');
+  useEffect(() => {
+    if (loading) return;
+    const fingerprint = JSON.stringify(paymentPlans) + activeLedgerId;
+    if (processedPlansRef.current === fingerprint) return;
+    processedPlansRef.current = fingerprint;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const plans = paymentPlans.filter((p) => p.ledgerId === activeLedgerId);
+    if (plans.length === 0) return;
+
+    const newTxs: Transaction[] = [];
+    const planUpdates: { id: string; lastProcessedDate: string }[] = [];
+    plans.forEach((plan) => {
+      const { dueDates, newCursor } = computePlanOccurrences(plan, today);
+      if (newCursor && newCursor !== plan.lastProcessedDate) {
+        planUpdates.push({ id: plan.id, lastProcessedDate: newCursor });
+      }
+      dueDates.forEach((d) => {
+        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        newTxs.push({
+          id: genId(),
+          amount: plan.amount,
+          categoryId: plan.categoryId ?? '',
+          type: plan.type,
+          date: dateStr,
+          // note 留空:计划名已在 displayName,首页显示"类别 · 计划名"不会重复
+          note: '',
+          displayName: plan.name,
+          createdAt: Date.now(),
+          ledgerId: plan.ledgerId,
+          assetId: plan.assetId,
+        });
+      });
+    });
+
+    if (newTxs.length > 0) setTransactions((prev) => [...newTxs, ...prev]);
+    if (planUpdates.length > 0) {
+      setPaymentPlans((prev) =>
+        prev.map((p) => {
+          const u = planUpdates.find((x) => x.id === p.id);
+          return u ? { ...p, lastProcessedDate: u.lastProcessedDate } : p;
+        })
+      );
+    }
+  }, [loading, paymentPlans, activeLedgerId]);
 
   return (
     <AppContext.Provider
@@ -560,19 +672,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
         currencySymbol: getCurrencySymbol(currency),
         periodPreference,
         assets,
-        plannedPayments,
         dateFormat,
         weekStartsOn,
         decimalPlaces,
         loading,
+        paymentPlans,
+        addPaymentPlan,
+        updatePaymentPlan,
+        deletePaymentPlan,
         addTransaction,
         updateTransaction,
         deleteTransaction,
         addCategory,
+        addCategoryGroup,
+        deleteCategoryGroup,
+        updateCategory,
+        categoryGroups,
         deleteCategory,
         setBudget,
         getCategoryById,
         addLedger,
+        renameLedger,
         deleteLedger,
         setActiveLedgerId,
         setCurrency,
@@ -587,10 +707,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         getAssetBalance,
         setDefaultAsset,
         addTransfer,
-        addPlannedPayment,
-        updatePlannedPayment,
-        deletePlannedPayment,
-        markPlannedPaymentPaid,
+        reloadFromStorage: loadFromStorage,
       }}
     >
       {children}

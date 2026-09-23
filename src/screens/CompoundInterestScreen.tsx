@@ -1,9 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView } from 'react-native';
+import {View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, Keyboard } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/useTheme';
+import { useTabClearance } from '../hooks/useTabClearance';
+import { useTabBarScrollHandler } from '../context/TabBarAutoHideContext';
 import { ThemeColors } from '../theme/theme';
+import PressableScale from '../components/PressableScale';
 
 const FREQUENCIES: { label: string; value: number }[] = [
   { label: '每年', value: 1 },
@@ -19,6 +22,8 @@ function fmt(n: number) {
 
 export default function CompoundInterestScreen({ navigation }: any) {
   const { colors } = useTheme();
+  const tabClearance = useTabClearance();
+  const onTabScroll = useTabBarScrollHandler();
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const [principalStr, setPrincipalStr] = useState('');
@@ -52,16 +57,18 @@ export default function CompoundInterestScreen({ navigation }: any) {
   }, [principal, annualRate, years, monthlyContribution, frequency]);
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['top']}
+      onTouchStart={() => { Keyboard.dismiss(); }}
+    >
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
+        <PressableScale onPress={() => navigation.goBack()} activeScale={0.92}>
           <Ionicons name="chevron-back" size={26} color={colors.textPrimary} />
-        </TouchableOpacity>
+        </PressableScale>
         <Text style={styles.title}>复利计算器</Text>
         <View style={{ width: 26 }} />
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 40 }}>
+      <ScrollView onScroll={onTabScroll ?? undefined} scrollEventThrottle={16} contentContainerStyle={{ padding: 20, paddingBottom: tabClearance }}>
         <Text style={styles.label}>本金</Text>
         <TextInput
           style={styles.input}
@@ -110,13 +117,14 @@ export default function CompoundInterestScreen({ navigation }: any) {
         <Text style={styles.label}>复利频率</Text>
         <View style={styles.freqRow}>
           {FREQUENCIES.map((f) => (
-            <TouchableOpacity
+            <PressableScale
               key={f.value}
               style={[styles.freqBtn, frequency === f.value && styles.freqBtnActive]}
+              activeScale={0.95}
               onPress={() => setFrequency(f.value)}
             >
               <Text style={[styles.freqText, frequency === f.value && styles.freqTextActive]}>{f.label}</Text>
-            </TouchableOpacity>
+            </PressableScale>
           ))}
         </View>
 
@@ -144,7 +152,7 @@ export default function CompoundInterestScreen({ navigation }: any) {
 
 function makeStyles(colors: ThemeColors) {
   return StyleSheet.create({
-    container: { flex: 1, backgroundColor: colors.bg },
+    container: { flex: 1 },
     header: { height: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20 },
     title: { fontSize: 17, fontWeight: '700', color: colors.textPrimary },
     label: { fontSize: 12, color: colors.textTertiary, marginTop: 16, marginBottom: 8 },
@@ -162,7 +170,7 @@ function makeStyles(colors: ThemeColors) {
       paddingHorizontal: 16,
       paddingVertical: 9,
       borderRadius: 20,
-      borderWidth: 1.5,
+      borderWidth: 1,
       borderColor: colors.dividerHair,
       backgroundColor: colors.card,
     },

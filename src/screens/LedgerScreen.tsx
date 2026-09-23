@@ -1,311 +1,198 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, Alert } from 'react-native';
+import {View, Text, StyleSheet, TouchableOpacity, TextInput, Keyboard } from 'react-native';
+import PressableScale from '../components/PressableScale';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import { useApp } from '../context/AppContext';
+import { useDialog } from '../components/AppDialog';
 import { useTheme } from '../theme/useTheme';
+import { useTabClearance } from '../hooks/useTabClearance';
 import { ThemeColors } from '../theme/theme';
+import { useT } from '../i18n/LanguageContext';
+import { getGroupLabel } from '../i18n/categories';
+import { hapticSuccess } from '../utils/haptics';
 
 type IconName = keyof typeof Ionicons.glyphMap;
 
-// 账本图标改用跟分类/资产一致的线框图标（Ionicons），不再用彩色 emoji
-const TEMPLATES: { name: string; icon: IconName; color: string }[] = [
-  { name: '生意账本', icon: 'storefront-outline', color: '#FF9F43' },
-  { name: '报销账本', icon: 'receipt-outline', color: '#26C6DA' },
-  { name: '公司账本', icon: 'business-outline', color: '#B983FF' },
-  { name: '团队账本', icon: 'people-outline', color: '#66BB6A' },
+// 图标选择行已移除：账本数据模型必须有 icon 字段，创建时统一用默认图标，
+// 顶部的大预览图标就是它的实时预览（以后若恢复选图标，换回这里的值即可）
+const DEFAULT_LEDGER_ICON: IconName = 'book-outline';
+// 预设 10 个账本颜色，固定 5 列 × 2 行
+// 预设 25 个账本颜色，固定 5 列 × 5 行：每行一个色系（蓝 / 橙红粉 / 紫 / 青绿 / 大地色）
+const COLOR_OPTIONS = [
+  '#4C9AFF', '#2F7BE0', '#1565C0', '#5C6BC0', '#7986CB',
+  '#FF7A5C', '#FF9F43', '#F4511E', '#EF5DA8', '#FF6F91',
+  '#B983FF', '#9575CD', '#6A1B9A', '#BA68C8', '#CE93D8',
+  '#26C6DA', '#66BB6A', '#4DB6AC', '#81C784', '#558B2F',
+  '#F9A825', '#8D6E63', '#A1887F', '#FFB300', '#795548',
 ];
-
-const ICON_OPTIONS: IconName[] = [
-  'book-outline',
-  'storefront-outline',
-  'receipt-outline',
-  'business-outline',
-  'people-outline',
-  'home-outline',
-  'airplane-outline',
-  'school-outline',
-  'briefcase-outline',
-  'paw-outline',
-];
-const COLOR_OPTIONS = ['#4C9AFF', '#FF7A5C', '#B983FF', '#FF9F43', '#26C6DA', '#66BB6A', '#F9A825'];
-
-function formatDate(ts: number) {
-  const d = new Date(ts);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 
 export default function LedgerScreen() {
-  const { ledgers, activeLedgerId, addLedger, deleteLedger, setActiveLedgerId, assets, getAssetBalance } = useApp();
+    const { ledgers, addLedger } = useApp();
   const { colors } = useTheme();
+  const navigation = useNavigation();
+  const tabClearance = useTabClearance();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+  const t = useT();
+  const dialog = useDialog(); // 主题化弹窗（替代系统 Alert）
   const [newName, setNewName] = useState('');
-  const [newIcon, setNewIcon] = useState<IconName>(ICON_OPTIONS[0]);
   const [newColor, setNewColor] = useState(COLOR_OPTIONS[0]);
-
-  // 每个账本按币种汇总名下资产余额，跟 HomeScreen 的资产总览用同一套分组逻辑，
-  // 不做任何货币换算——账本本身没有"主币种"这个概念，只是原样列出每种币种的合计。
-  const ledgerTotals = useMemo(() => {
-    const map: Record<string, [string, number][]> = {};
-    ledgers.forEach((l) => {
-      const totals: Record<string, number> = {};
-      assets
-        .filter((a) => a.ledgerId === l.id)
-        .forEach((a) => {
-          totals[a.currency] = (totals[a.currency] || 0) + getAssetBalance(a.id);
-        });
-      map[l.id] = Object.entries(totals);
-    });
-    return map;
-  }, [ledgers, assets, getAssetBalance]);
 
   const handleAdd = async (name: string, icon: IconName, color: string) => {
     if (!name.trim()) {
-      Alert.alert('请输入账本名称');
+      dialog.alert({ title: t('ledger.enterName') });
       return;
     }
     if (ledgers.some((l) => l.name === name.trim())) {
-      Alert.alert('已存在同名账本');
+      dialog.alert({ title: t('ledger.dupName') });
       return;
     }
     await addLedger(name.trim(), icon, color);
     setNewName('');
+    setNewColor(COLOR_OPTIONS[0]);
+    // 用户定版：创建成功后给明确的交互反馈——主题化成功弹窗，按钮直接回到
+    // 选择账本弹层（首页），否则用户不知道账本是否已加上
+    hapticSuccess();
+    dialog.alert({
+      title: t('ledger.createOkTitle'),
+      message: t('ledger.createOkMsg', { name: name.trim() }),
+      buttons: [
+        { text: t('common.confirm'), style: 'default', onPress: () => navigation.goBack() },
+      ],
+    });
   };
 
-  const handleDelete = (id: string, name: string) => {
-    if (id === 'default') {
-      Alert.alert('默认账本不能删除');
-      return;
-    }
-    Alert.alert(`删除账本"${name}"？`, '账本内的记账记录也会一并保留但无法再查看，请谨慎操作', [
-      { text: '取消', style: 'cancel' },
-      { text: '删除', style: 'destructive', onPress: () => deleteLedger(id) },
-    ]);
-  };
-
+  // 顶栏与"记一笔"同款：原生 header 已关闭（App.tsx），自绘圆环返回键 + 标题；
+  // edges 含 top：原生顶栏没了，需要自己垫状态栏高度
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 40 }}>
-        <Text style={styles.title}>我的账本</Text>
-        <View style={{ gap: 10 }}>
-          {ledgers.map((l) => {
-            const active = l.id === activeLedgerId;
-            const color = l.color ?? '#4C9AFF';
-            const totals = ledgerTotals[l.id] ?? [];
-            return (
-              <TouchableOpacity
-                key={l.id}
-                style={[styles.ledgerCard, active && { borderColor: colors.link }]}
-                onPress={() => setActiveLedgerId(l.id)}
-                activeOpacity={0.8}
-              >
-                <View style={styles.ledgerCardTop}>
-                  <View style={[styles.ledgerIconWrap, { backgroundColor: color + '22' }]}>
-                    <Ionicons name={l.icon as IconName} size={22} color={color} />
-                  </View>
-                  <View style={{ flex: 1, marginLeft: 12 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <Text style={styles.ledgerName}>{l.name}</Text>
-                      {l.id !== 'default' && (
-                        <TouchableOpacity onPress={() => handleDelete(l.id, l.name)} style={{ marginLeft: 8 }}>
-                          <Ionicons name="trash-outline" size={14} color={colors.expense} />
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                    <Text style={styles.ledgerSub}>
-                      {l.id === 'default' ? '预设账本' : `创建于 ${formatDate(l.createdAt)}`}
-                    </Text>
-                  </View>
-                  <Ionicons
-                    name={active ? 'checkmark-circle' : 'ellipse-outline'}
-                    size={22}
-                    color={active ? colors.link : colors.dividerHair}
-                  />
-                </View>
-                <View style={styles.ledgerBalanceRow}>
-                  <Text style={styles.ledgerBalanceLabel}>结余</Text>
-                  {totals.length === 0 ? (
-                    <Text style={styles.ledgerBalanceEmpty}>暂无资产</Text>
-                  ) : (
-                    <View style={{ alignItems: 'flex-end' }}>
-                      {totals.map(([code, amount]) => (
-                        <Text key={code} style={styles.ledgerBalanceValue}>
-                          {code} {amount.toFixed(2)}
-                        </Text>
-                      ))}
-                    </View>
-                  )}
-                </View>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        <Text style={[styles.title, { marginTop: 28 }]}>快捷创建</Text>
-        <View style={styles.templateRow}>
-          {TEMPLATES.map((t) => (
-            <TouchableOpacity
-              key={t.name}
-              style={styles.templateBtn}
-              onPress={() => handleAdd(t.name, t.icon, t.color)}
-            >
-              <View style={[styles.templateIconWrap, { backgroundColor: t.color + '22' }]}>
-                <Ionicons name={t.icon} size={20} color={t.color} />
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}
+      onTouchStart={() => { Keyboard.dismiss(); }}
+    >
+      <View style={styles.topBar}>
+        <PressableScale
+          style={styles.topBackBtn}
+          activeScale={0.92}
+          onPress={() => navigation.goBack()}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name="chevron-back" size={22} color={colors.icon} />
+        </PressableScale>
+        <Text style={styles.topBarTitle}>{t('ledger.pageTitle')}</Text>
+        <View style={styles.topBarSpacer} />
+      </View>
+      <View style={{ flex: 1, paddingHorizontal: 20 }}>
+        {/* 自定义账本表单：页面锁死不滚动（Scroll 会遮挡输入区），内容直接平铺 */}
+        <View style={{ flex: 1, paddingTop: 6, paddingHorizontal: 20 }}>
+          <Text style={styles.sectionTitle}>{t('ledger.customTitle')}</Text>
+          <View style={styles.addCard}>
+            <View style={styles.previewRow}>
+              <View style={[styles.previewIconWrap, { backgroundColor: newColor + '22' }]}>
+                <Ionicons name={DEFAULT_LEDGER_ICON} size={40} color={newColor} />
               </View>
-              <Text style={styles.templateName}>{t.name}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        <Text style={[styles.title, { marginTop: 28 }]}>自定义账本</Text>
-        <View style={styles.addCard}>
-          <View style={styles.previewRow}>
-            <View style={[styles.previewIconWrap, { backgroundColor: newColor + '22' }]}>
-              <Ionicons name={newIcon} size={28} color={newColor} />
             </View>
-          </View>
 
-          <TextInput
-            style={styles.input}
-            value={newName}
-            onChangeText={setNewName}
-            placeholder="账本名称，例如：装修账本"
-            placeholderTextColor={colors.textTertiary}
-          />
-          <Text style={styles.pickerLabel}>选图标</Text>
-          <View style={styles.pickerRow}>
-            {ICON_OPTIONS.map((icon) => (
-              <TouchableOpacity
-                key={icon}
-                style={[styles.iconOption, newIcon === icon && styles.iconOptionActive]}
-                onPress={() => setNewIcon(icon)}
-              >
-                <Ionicons name={icon} size={18} color={newIcon === icon ? newColor : colors.icon} />
-              </TouchableOpacity>
+            <TextInput
+              style={styles.input}
+              value={newName}
+              onChangeText={setNewName}
+              placeholder={t('ledger.namePlaceholder')}
+              placeholderTextColor={colors.textTertiary}
+            />
+            {/* 颜色固定 5×5 网格：25 色按色系分行渲染，每排 5 个 */}
+            <Text style={styles.pickerLabel}>{t('ledger.colorLabel')}</Text>
+            {[0, 1, 2, 3, 4].map((row) => (
+              <View key={row} style={styles.colorRow}>
+                {COLOR_OPTIONS.slice(row * 5, row * 5 + 5).map((color) => (
+                  <TouchableOpacity
+                    key={color}
+                    style={[
+                      styles.colorOption,
+                      { backgroundColor: color },
+                      newColor === color && styles.colorOptionActive,
+                    ]}
+                    onPress={() => setNewColor(color)}
+                  />
+                ))}
+              </View>
             ))}
           </View>
-          <Text style={styles.pickerLabel}>选颜色</Text>
-          <View style={styles.pickerRow}>
-            {COLOR_OPTIONS.map((color) => (
-              <TouchableOpacity
-                key={color}
-                style={[
-                  styles.colorOption,
-                  { backgroundColor: color },
-                  newColor === color && styles.colorOptionActive,
-                ]}
-                onPress={() => setNewColor(color)}
-              />
-            ))}
-          </View>
-          <TouchableOpacity style={styles.saveBtn} onPress={() => handleAdd(newName, newIcon, newColor)}>
-            <Ionicons name="add" size={18} color={colors.bg} />
-            <Text style={styles.saveBtnText}>创建账本</Text>
-          </TouchableOpacity>
         </View>
-      </ScrollView>
+
+        {/* 保存按钮钉在页面最底部（避开浮空Tab栏），不再随内容滚动 */}
+        <PressableScale
+          style={[styles.saveBtn, { marginTop: 1, marginBottom: Math.max(4, tabClearance - 20) }]}
+          onPress={() => handleAdd(newName, DEFAULT_LEDGER_ICON, newColor)}
+          activeScale={0.97}
+        >
+          <Ionicons name="add" size={20} color={colors.bg} />
+          <Text style={styles.saveBtnText}>{t('ledger.create')}</Text>
+        </PressableScale>
+      </View>
     </SafeAreaView>
   );
 }
 
 function makeStyles(colors: ThemeColors) {
   return StyleSheet.create({
-    container: { flex: 1, backgroundColor: colors.bg },
-    title: { fontSize: 17, fontWeight: '700', color: colors.textPrimary, marginBottom: 12 },
-    ledgerCard: {
+    container: { flex: 1 },
+    // 顶栏：与其他二级页同款——圆环返回键 + 居中标题
+    topBar: { height: 52, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16 },
+    topBackBtn: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      borderWidth: 1.5,
+      borderColor: colors.link,
       backgroundColor: colors.card,
-      borderRadius: 14,
-      padding: 14,
-      borderWidth: 2,
-      borderColor: 'transparent',
-    },
-    ledgerCardTop: { flexDirection: 'row', alignItems: 'center' },
-    ledgerIconWrap: {
-      width: 48,
-      height: 48,
-      borderRadius: 12,
       alignItems: 'center',
       justifyContent: 'center',
     },
-    ledgerName: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
-    ledgerSub: { fontSize: 12, color: colors.textTertiary, marginTop: 2 },
-    ledgerBalanceRow: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'flex-end',
-      marginTop: 12,
-      paddingTop: 12,
-      borderTopWidth: 1,
-      borderTopColor: colors.dividerHair,
-    },
-    ledgerBalanceLabel: { fontSize: 12, color: colors.textTertiary },
-    ledgerBalanceEmpty: { fontSize: 13, color: colors.textTertiary },
-    ledgerBalanceValue: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
-    templateRow: { flexDirection: 'row', flexWrap: 'wrap' },
-    templateBtn: {
-      width: '23.5%',
-      aspectRatio: 1,
-      marginRight: '2%',
-      marginBottom: 10,
-      backgroundColor: colors.card,
-      borderRadius: 12,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    templateIconWrap: {
-      width: 36,
-      height: 36,
-      borderRadius: 10,
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginBottom: 6,
-    },
-    templateName: { fontSize: 11, color: colors.textPrimary, textAlign: 'center' },
-    addCard: { backgroundColor: colors.card, borderRadius: 14, padding: 16 },
-    previewRow: { alignItems: 'center', marginBottom: 16 },
+    topBarTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '700', color: colors.textPrimary },
+    topBarSpacer: { width: 40 },
+    sectionTitle: { fontSize: 15, fontWeight: '700', color: colors.textPrimary, marginBottom: 8 },
+    addCard: { backgroundColor: colors.card, borderRadius: 16, padding: 16 },
+    previewRow: { alignItems: 'center', marginBottom: 12 },
+    // 中心预览图标：做大做明显，作为本页视觉主角
     previewIconWrap: {
-      width: 64,
-      height: 64,
-      borderRadius: 16,
+      width: 72,
+      height: 72,
+      borderRadius: 20,
       alignItems: 'center',
       justifyContent: 'center',
     },
     input: {
       backgroundColor: colors.bg,
-      borderRadius: 10,
+      borderRadius: 12,
       borderWidth: 1,
       borderColor: colors.dividerHair,
       padding: 10,
-      fontSize: 14,
+      minHeight: 48,
+      fontSize: 15,
       color: colors.textPrimary,
       marginBottom: 12,
     },
     pickerLabel: { fontSize: 12, color: colors.textTertiary, marginBottom: 8 },
-    pickerRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 12 },
-    iconOption: {
-      width: 36,
-      height: 36,
-      borderRadius: 8,
-      backgroundColor: colors.bg,
-      borderWidth: 1,
-      borderColor: colors.dividerHair,
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginRight: 8,
+    colorRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
       marginBottom: 8,
     },
-    iconOptionActive: { borderColor: colors.link, borderWidth: 2 },
-    colorOption: { width: 28, height: 28, borderRadius: 14, marginRight: 10, marginBottom: 8 },
+    // 5×5 色格：方框样式，放大到行宽 17% 的正方形，固定网格、整页不滚动
+    colorOption: { width: '17%', aspectRatio: 1, borderRadius: 10 },
     colorOptionActive: { borderWidth: 3, borderColor: colors.textPrimary },
+    // 创建账本按钮：缩短不再全宽，钉在页面底部并水平居中
     saveBtn: {
       flexDirection: 'row',
-      backgroundColor: colors.textPrimary,
-      borderRadius: 10,
-      paddingVertical: 12,
+      alignSelf: 'center',
+      backgroundColor: colors.fabBg,
+      borderRadius: 22,
+      paddingHorizontal: 44,
+      paddingVertical: 14,
       alignItems: 'center',
       justifyContent: 'center',
       gap: 6,
     },
-    saveBtnText: { color: colors.bg, fontWeight: '700', fontSize: 14 },
+    saveBtnText: { color: colors.bg, fontWeight: '700', fontSize: 16 },
   });
 }
