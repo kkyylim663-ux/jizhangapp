@@ -267,11 +267,13 @@ export default function AuthScreen({ navigation }: any) {
             </PressableScale>
           </View>
 
-          {/* 退出登录:红色整宽按钮,点击确认后登出(登出后自动切回登录表单视图) */}
-          <PressableScale style={styles.logoutBtn} activeScale={0.95} onPress={handleSignOut}>
-            <Ionicons name="log-out-outline" size={18} color={colors.expenseOver} />
-            <Text style={[styles.logoutBtnText, { color: colors.expenseOver }]}>{tr('auth.logout')}</Text>
-          </PressableScale>
+          {/* 退出登录:红色紧凑药丸按钮——全宽锚定容器内水平居中(不依赖外层 alignItems),图标+文字居中;点击确认后登出(登出后自动切回登录表单视图) */}
+          <View style={styles.logoutBtnWrap}>
+            <PressableScale style={styles.logoutBtn} activeScale={0.95} onPress={handleSignOut}>
+              <Ionicons name="log-out-outline" size={18} color={colors.expenseOver} />
+              <Text style={[styles.logoutBtnText, { color: colors.expenseOver }]}>{tr('auth.logout')}</Text>
+            </PressableScale>
+          </View>
         </ScrollView>
       ) : (
         // ============ 未登录:登录/注册表单 ============
@@ -422,7 +424,7 @@ function makeStyles(colors: ThemeColors) {
     info: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     infoLabel: { fontSize: 15, fontWeight: '500' },
     // 立即同步行:一行合并状态+动作——图标 + 标题/状态 + 箭头,点击即同步
-    // 外框与"退出登录"按钮同尺寸(minHeight 52、圆角 14、1px 描边、card 底)
+    // 外框自成一档(minHeight 52、圆角 14、1px 描边、card 底);退出登录为独立紧凑药丸(48高)
     syncCard: {
       width: '100%',
       minHeight: 52,
@@ -441,9 +443,12 @@ function makeStyles(colors: ThemeColors) {
     },
     syncNowTextWrap: { flex: 1 },
 
+    // 全宽锚定容器:无论外层对齐方式如何,药丸始终严格水平居中
+    logoutBtnWrap: { width: '100%', alignItems: 'center', marginTop: 20 },
+    // 紧凑药丸:宽度由内容决定(弃百分比——Yoga 在收窄父级里解析百分比有歧义),
+    // 左右 padding 对称=图标+文字视觉必然居中
     logoutBtn: {
-      width: '100%',
-      minHeight: 52,
+      minHeight: 48,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
@@ -452,9 +457,8 @@ function makeStyles(colors: ThemeColors) {
       borderWidth: 1,
       borderColor: colors.expenseOver + '55',
       borderRadius: 14,
-      paddingHorizontal: 14,
-      paddingVertical: 14,
-      marginTop: 20,
+      paddingHorizontal: 24,
+      paddingVertical: 10,
     },
     logoutBtnText: { fontSize: 15, fontWeight: '700' },
 

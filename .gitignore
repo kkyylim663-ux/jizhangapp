@@ -42,3 +42,9 @@ skills-lock.json
 .DS_Store
 Thumbs.db
 .idea/
+
+# ─── 本地备份快照（不入库） ───
+jizhang-app-backup-pre-*/
+
+# ─── ZCode 工具配置（非 App 本体） ───
+.zcodeignore

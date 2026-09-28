@@ -448,11 +448,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const setBudget: AppContextValue['setBudget'] = async (categoryId, amount, currency) => {
-    // amount <= 0 = 清除该条预算；同一 categoryId 可以按币种各存一条（总预算多币种各设各的）
+    // amount <= 0 = 清除该条预算；同一 categoryId 可以按币种各存一条（总预算多币种各设各的）。
+    // 查重/清除都带 (b.currency ?? currency) 兜底：老版本存的条目没有 currency 字段，
+    // 显示侧（HomeScreen totalBudget）靠兜底能读到，保存侧若严格相等会永远匹配不到 →
+    // 每次保存都新增一条、显示永远命中旧条目（用户感知为"改了数值不生效"）。
+    // 命中旧条目更新时顺带把 currency 归一化写入，之后走正常更新路径。
     setBudgets((prev) => {
-      if (amount <= 0) return prev.filter((b) => !(b.categoryId === categoryId && b.currency === currency));
-      const exists = prev.find((b) => b.categoryId === categoryId && b.currency === currency);
-      if (exists) return prev.map((b) => (b === exists ? { ...b, amount } : b));
+      if (amount <= 0) return prev.filter((b) => !(b.categoryId === categoryId && (b.currency ?? currency) === currency));
+      const exists = prev.find((b) => b.categoryId === categoryId && (b.currency ?? currency) === currency);
+      if (exists) return prev.map((b) => (b === exists ? { ...b, amount, currency } : b));
       return [...prev, { categoryId, amount, currency }];
     });
   };

@@ -3,5 +3,5 @@
   "compilerOptions": {
     "strict": true
   },
-  "exclude": ["scripts", ".tmp-bundle-check", "backup", "prototype"]
+  "exclude": ["scripts", ".tmp-bundle-check", "backup", "prototype", "jizhang-app-backup-*"]
 }

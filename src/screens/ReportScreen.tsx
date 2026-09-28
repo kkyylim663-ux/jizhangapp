@@ -276,17 +276,11 @@ export default function ReportScreen() {
     return totals;
   }, [rangeTransactions, currency]);
 
-  // 账本默认货币排最前，其余按活跃程度从高到低
+  // 币种 Chip 按 ABC 字母序排列（2026-09-24 用户定版，不再默认货币置顶/按活跃度排序）
   const availableCurrencies = useMemo(() => {
     const codes = Object.keys(currencyBreakdown);
-    return codes.sort((a, b) => {
-      if (a === currency) return -1;
-      if (b === currency) return 1;
-      const totalA = currencyBreakdown[a].income + currencyBreakdown[a].expense;
-      const totalB = currencyBreakdown[b].income + currencyBreakdown[b].expense;
-      return totalB - totalA;
-    });
-  }, [currencyBreakdown, currency]);
+    return codes.sort((c1, c2) => c1.localeCompare(c2));
+  }, [currencyBreakdown]);
 
   const [selectedReportCurrency, setSelectedReportCurrency] = useState(currency);
 

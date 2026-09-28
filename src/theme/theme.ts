@@ -35,6 +35,29 @@ export type ThemeColors = {
   netWorthValue: string;
   netWorthHint: string;
 
+  // 首页净资产 Hero 卡专用渐变（2026-09-25 参考银行卡配色定版，只给 Home 用；
+  // 资产页/记一笔/财务规划的账户分组大卡继续走上面的 netWorthGradient*，互不影响）：
+  // 日间 = 左上薰衣草 → 右下长春花紫的对角渐变（From/To 两端）；
+  // 夜间 = 右上紫色光晕 → 左下近黑深蓝（径向光晕用 4 段 stops 线性渐变近似：
+  // 光晕起点 Glow、中段过渡 GlowMid、深底 Deep）
+  homeHeroGradientFrom: string;
+  homeHeroGradientTo: string;
+  homeHeroGlow: string;
+  homeHeroGlowMid: string;
+  homeHeroDeep: string;
+
+  // Hero 卡极光 shader（AuroraFlowShader）的三段色：暗部 → 中间雾 → 高亮丝。
+  // 夜间=参考视频同款深紫极光（整层不透明全接管）；日间=浅底低饱和版（整层 ~0.55 叠在渐变上）
+  homeHeroAuroraDark: string;
+  homeHeroAuroraMid: string;
+  homeHeroAuroraGlow: string;
+
+  // Hero 卡曲面玻璃静态层（GlassRibbons）：玻璃亮面 / 深面 / 上缘高光。
+  // 日间=白玻璃+品牌深紫；夜间=浅紫玻璃+更深的暗紫（同族不冲撞）
+  homeHeroGlassLight: string;
+  homeHeroGlassDeep: string;
+  homeHeroGlassSheen: string;
+
   summaryCard: string;
   divider: string;
   dividerHair: string;
@@ -103,9 +126,28 @@ export const lightColors: ThemeColors = {
   netWorthGradientFrom: '#7C5CFA',
   netWorthGradientTo: '#c5bbf2',
   netWorthAccent: '#FFFFFF',
-  netWorthLabel: 'rgba(255,255,255,0.78)',
+  // 日间底色变浅（薰衣草），白字透明度提到 0.88/0.75 保住可读性（参考图同款软白）
+  netWorthLabel: 'rgba(255,255,255,0.88)',
   netWorthValue: '#FFFFFF',
-  netWorthHint: 'rgba(255,255,255,0.62)',
+  netWorthHint: 'rgba(255,255,255,0.75)',
+
+  // Hero 卡日间渐变：取样自参考图左卡（左上 #A383F1 → 右下 #8181FB）。
+  // 夜间三个值仅类型占位，夜间走 darkColors 里的 Glow/GlowMid/Deep
+  homeHeroGradientFrom: '#A383F1',
+  homeHeroGradientTo: '#8181FB',
+  homeHeroGlow: '#7D54CE',
+  homeHeroGlowMid: '#3A2F62',
+  homeHeroDeep: '#0A0D26',
+
+  // 极光 shader 日间：浅薰衣草底上的柔和白紫流光（低饱和、靠 opacity 0.55 压淡）
+  homeHeroAuroraDark: '#E7DEFC',
+  homeHeroAuroraMid: '#BFB0F6',
+  homeHeroAuroraGlow: '#FFFFFF',
+
+  // 曲面玻璃日间：白玻璃亮面 + 品牌深紫背面 + 白高光（叠在浅紫渐变上）
+  homeHeroGlassLight: '#FFFFFF',
+  homeHeroGlassDeep: '#6C4DF6',
+  homeHeroGlassSheen: '#FFFFFF',
 
   summaryCard: '#F1F1F4',
   divider: '#DEDEE4',
@@ -173,6 +215,25 @@ export const darkColors: ThemeColors = {
   netWorthLabel: 'rgba(255,255,255,0.72)',
   netWorthValue: '#FFFFFF',
   netWorthHint: 'rgba(255,255,255,0.55)',
+
+  // Hero 卡夜间渐变：取样自参考图右卡——右上角紫色光晕（#7750CF 系）沉入近黑深蓝
+  // （#0A0D26 系）。日间两个 Gradient 值仅类型占位，日间走 lightColors 的 From/To
+  homeHeroGradientFrom: '#A383F1',
+  homeHeroGradientTo: '#8181FB',
+  homeHeroGlow: '#7D54CE',
+  homeHeroGlowMid: '#3A2F62',
+  homeHeroDeep: '#0A0D26',
+
+  // 极光 shader 夜间：深紫底上柔和的同族紫（三段色收拢降低对比，亮丝不再近白——
+  // 2026-09-25 用户定版方向：安静的纹理，不喧宾夺主）
+  homeHeroAuroraDark: '#221B54',
+  homeHeroAuroraMid: '#5B4FC0',
+  homeHeroAuroraGlow: '#BBA9F2',
+
+  // 曲面玻璃夜间：浅紫玻璃 + 深暗紫背面 + 薰衣草高光（叠在深紫渐变上，同族不冲撞）
+  homeHeroGlassLight: '#A78BFA',
+  homeHeroGlassDeep: '#2E1F7A',
+  homeHeroGlassSheen: '#D9CFFF',
 
   summaryCard: '#17171E',
   divider: '#2A2A33',

@@ -22,6 +22,10 @@ import { useTabBarScrollHandler, useTabBarForceHide } from '../context/TabBarAut
 import { ThemeColors } from '../theme/theme';
 import { UNCATEGORIZED_ICON, UNCATEGORIZED_NAME, UNCATEGORIZED_COLOR } from '../constants/uncategorized';
 import PressableScale from '../components/PressableScale';
+import AuroraFlowShader from '../components/AuroraFlowShader';
+import GlassRibbons from '../components/GlassRibbons';
+import { AmountCalculatorKeypad } from '../components/AmountCalculatorKeypad';
+import { useAmountExpression } from '../hooks/useAmountExpression';
 import PinSheet from '../components/PinSheet';
 import MonthCalendarCard, { CalendarDayTotals } from '../components/MonthCalendarCard';
 import { useAppLock } from '../context/AppLockContext';
@@ -101,12 +105,37 @@ export default function HomeScreen({ navigation }: any) {
   // 内容不满一屏时也要能上滑收起 Tab 栏：量出滚动容器高度，
   // 把内容 minHeight 撑到"容器高 + 130"，保证任何情况下都有 130px 可滚距离
   const [viewportH, setViewportH] = useState(0);
-  const styles = useMemo(() => makeStyles(colors), [colors]);
-  // 净资产卡片的渐变色：直接读主题里为这张卡专门定义的两个端点色
-  // 日间/夜间各自的配色在 theme.ts 里维护，这里只负责组装成 LinearGradient 需要的数组
-  const assetGradientColors = useMemo<[string, string]>(
-    () => [colors.netWorthGradientFrom, colors.netWorthGradientTo],
-    [colors.netWorthGradientFrom, colors.netWorthGradientTo]
+  const styles = useMemo(() => makeStyles(colors, isDark), [colors, isDark]);
+  // 极光层总开关（2026-09-25 用户要求：先断开保留，说到要恢复时改 true）
+  // 组件/色 token/依赖全部原样保留，详见 AURORA_FLOW_GUIDE.md
+  const AURORA_ENABLED = false;
+  // Hero 卡与货币下拉面板共用的渐变规格：色值在 theme.ts homeHero* token 里维护。
+  // 日间 = 左上→右下对角渐变（薰衣草→长春花紫，参考图左卡）；
+  // 夜间 = 右上→左下（紫色光晕→近黑深蓝，参考图右卡），4 段 stops 线性近似径向光晕——
+  // 反对角线（左上/中心/右下）在线性投影下同处 t=0.5，正好落在中段过渡色上，与参考图一致
+  const heroGradient = useMemo<
+    {
+      colors: [string, string, ...string[]];
+      locations: [number, number, ...number[]];
+      start: { x: number; y: number };
+      end: { x: number; y: number };
+    }
+  >(
+    () =>
+      isDark
+        ? {
+            colors: [colors.homeHeroGlow, colors.homeHeroGlowMid, colors.homeHeroDeep, colors.homeHeroDeep],
+            locations: [0, 0.35, 0.7, 1],
+            start: { x: 1, y: 0 },
+            end: { x: 0, y: 1 },
+          }
+        : {
+            colors: [colors.homeHeroGradientFrom, colors.homeHeroGradientTo],
+            locations: [0, 1],
+            start: { x: 0, y: 0 },
+            end: { x: 1, y: 1 },
+          },
+    [isDark, colors]
   );
   const [balanceHidden, setBalanceHidden] = useState(false);
   // 隐藏净资产持久化：退出 App 下次进来仍保留隐藏，点眼睛才恢复
@@ -260,6 +289,7 @@ export default function HomeScreen({ navigation }: any) {
 
 
   // 净资产只算当前账本名下的资产——账本之间互不连通，切到"公司账本"就只看公司账本自己的钱
+  // 币种列表按 ABC 字母序排列（2026-09-24 用户定版）
   const totalsByCurrency = useMemo(() => {
     const totals: Record<string, number> = {};
     assets
@@ -267,14 +297,19 @@ export default function HomeScreen({ navigation }: any) {
       .forEach((a) => {
         totals[a.currency] = (totals[a.currency] || 0) + getAssetBalance(a.id);
       });
-    return Object.entries(totals);
+    return Object.entries(totals).sort(([c1], [c2]) => c1.localeCompare(c2));
   }, [assets, activeLedgerId, getAssetBalance]);
 
-  // 净资产卡显示的币种：多币种时用右上角的小按钮循环切换；默认第一种
-  const [netWorthCurrencyIdx, setNetWorthCurrencyIdx] = useState(0);
+  // 净资产卡显示的币种：多币种时点行调出货币下拉菜单；默认=资产数组第一个账户的币种（兜底全局货币）
+  const defaultNetWorthCurrency = useMemo(() => {
+    const first = assets.find((a) => a.ledgerId === activeLedgerId);
+    return first?.currency ?? currency;
+  }, [assets, activeLedgerId, currency]);
+  // 用户手选的币种代码（null=未手选过，跟随默认）——列表已按 ABC 排序，不能再用下标，否则默认币种会跟着排序漂移
+  const [netWorthCurrency, setNetWorthCurrency] = useState<string | null>(null);
   const [currencyMenuOpen, setCurrencyMenuOpen] = useState(false);
-  // 货币下拉菜单：从「金额/切换货币」那一行的底缘下拉出来（浮层，不改变卡本身布局）；
-  // 面板宽度与净资产卡对齐，直接盖住卡内下方的预算区
+  // 货币下拉菜单：⇄（顶行右）与金额行都可触发；面板顶到「金额行」底缘下拉出来（浮层，不改变卡本身布局）；
+  // 面板宽度与净资产卡对齐，盖住卡内下方内容
   const valueRowRef = useRef<View>(null);
   const [currencyMenuRect, setCurrencyMenuRect] = useState<{ top: number; left: number; width: number } | null>(null);
   const openCurrencyMenu = () => {
@@ -286,9 +321,8 @@ export default function HomeScreen({ navigation }: any) {
       setCurrencyMenuOpen(true);
     });
   };
-  const displayTotal = totalsByCurrency.length
-    ? totalsByCurrency[Math.min(netWorthCurrencyIdx, totalsByCurrency.length - 1)]
-    : undefined;
+  const displayTotal =
+    totalsByCurrency.find(([c]) => c === (netWorthCurrency ?? defaultNetWorthCurrency)) ?? totalsByCurrency[0];
   // 净资产卡当前选中的币种：本月支出合计、预算都跟随它（每个币种各设各的预算）
   const activeCurrency = displayTotal?.[0] ?? currency;
   const txCurrencyOf = (t: { assetId?: string }) =>
@@ -495,17 +529,18 @@ export default function HomeScreen({ navigation }: any) {
     }
   };
 
-  // ---------- 预算：常驻细长条，点击弹窗直接改，不需要跳转设置页 ----------
+  // ---------- 预算：常驻细长条，整块可点，弹窗用自绘计算器键盘（与资产页编辑同款）----------
   const [budgetModalOpen, setBudgetModalOpen] = useState(false);
-  const [budgetInput, setBudgetInput] = useState(totalBudget ? String(totalBudget) : '');
+  // 算式状态：预填当前预算值（退格逐位改 / C 归零重输 / 可直接按算式），「完成」求值落库
+  const budgetExpr = useAmountExpression();
 
   const openBudgetModal = () => {
-    setBudgetInput(totalBudget ? String(totalBudget) : '');
+    budgetExpr.reset(totalBudget || 0);
     setBudgetModalOpen(true);
   };
-  // 保存当前选中币种的预算；0/留空 = 清掉这个币种的限制
-  const saveBudget = () => {
-    const value = parseFloat(budgetInput);
+  // 计算器「完成」= 求值保存：0/空 = 清掉这个币种的预算（与旧弹窗语义一致）
+  const handleBudgetConfirm = () => {
+    const value = budgetExpr.confirm();
     setBudget('total', !isNaN(value) && value > 0 ? value : 0, activeCurrency);
     setBudgetModalOpen(false);
     hapticSuccess();
@@ -615,21 +650,44 @@ export default function HomeScreen({ navigation }: any) {
         <Reanimated.View entering={CARD_ENTER[0]}>
           <View style={styles.assetCardShadow}>
             <LinearGradient
-              colors={assetGradientColors}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
+              colors={heroGradient.colors}
+              locations={heroGradient.locations}
+              start={heroGradient.start}
+              end={heroGradient.end}
               style={styles.assetCard}
             >
+              {/* 极光层：真·GPU shader（Skia 域扭曲噪声，无限流动不重复）——
+                  【总开关 AURORA_ENABLED】2026-09-25 用户要求先断开保留：
+                  组件(AuroraFlowShader.tsx)/色 token(homeHeroAurora*)/依赖(react-native-skia)
+                  全部原样保留，改 AURORA_ENABLED = true 即恢复；shader 编译失败时本层返回 null，
+                  底下 heroGradient 原样兜底。放在内容之前=盖渐变不盖文字，pointerEvents none */}
+              {AURORA_ENABLED && (
+                <AuroraFlowShader
+                  dark={colors.homeHeroAuroraDark}
+                  mid={colors.homeHeroAuroraMid}
+                  glow={colors.homeHeroAuroraGlow}
+                  opacity={0.35}
+                />
+              )}
+              {/* 曲面玻璃静态层（2026-09-25 用户参考图）：3 条 SVG 玻璃薄带+上缘高光，
+                  静态零动画；日夜各一套 homeHeroGlass* token，叠渐变上、内容之下 */}
+              <GlassRibbons
+                light={colors.homeHeroGlassLight}
+                deep={colors.homeHeroGlassDeep}
+                sheen={colors.homeHeroGlassSheen}
+              />
+              {/* 行1:净资产 + ⇄ 切换键(多币种时显示;与金额行都触发下拉) */}
               <View style={styles.assetCardTopRow}>
                 <Text style={styles.assetCardLabel}>{t('home.netWorth')}</Text>
-                <PressableScale
-                  onPress={toggleBalanceHidden}
-                  style={styles.eyeBtn}
-                  activeScale={0.88}
-                  hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-                >
-                  <Ionicons name={balanceHidden ? 'eye-off-outline' : 'eye-outline'} size={22} color={colors.netWorthAccent} />
-                </PressableScale>
+                {totalsByCurrency.length > 1 && (
+                  <PressableScale
+                    onPress={openCurrencyMenu}
+                    activeScale={0.88}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="swap-horizontal" size={22} color={colors.netWorthAccent} />
+                  </PressableScale>
+                )}
               </View>
               {totalsByCurrency.length === 0 ? (
                 <View style={styles.assetCardEmptyWrap}>
@@ -637,17 +695,29 @@ export default function HomeScreen({ navigation }: any) {
                   <Text style={styles.assetCardEmptyHint}>{t('home.noAssetsHint')}</Text>
                 </View>
               ) : (
-                /* 多币种时：金额到切换图标整行都是点击区，调出货币下拉菜单；单币种不可点。
-                   图标仍保留在行右端原位（space-between 布局） */
-<TouchableOpacity
-    ref={valueRowRef}
-    disabled={totalsByCurrency.length <= 1}
-    onPress={openCurrencyMenu}
-    style={styles.assetCardValueRow}
-  >
-                  {displayTotal && (
-                    <View style={styles.assetValueCol}>
+                /* 行2:币种+眼睛(眼睛=隐藏/显示金额);行3:金额行(点击=调出货币下拉,面板从行底缘下拉) */
+                displayTotal && (
+                  <View style={styles.assetValueCol}>
+                    <View style={styles.assetCardCurrencyRow}>
                       <Text style={styles.assetCardCode}>{displayTotal[0]}</Text>
+                      <PressableScale
+                        onPress={toggleBalanceHidden}
+                        activeScale={0.88}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      >
+                        <Ionicons
+                          name={balanceHidden ? 'eye-off-outline' : 'eye-outline'}
+                          size={22}
+                          color={colors.netWorthLabel}
+                        />
+                      </PressableScale>
+                    </View>
+                    <TouchableOpacity
+                      ref={valueRowRef}
+                      disabled={totalsByCurrency.length <= 1}
+                      onPress={openCurrencyMenu}
+                      style={styles.assetCardValueRow}
+                    >
                       <Text
                         style={styles.assetCardValue}
                         numberOfLines={1}
@@ -658,33 +728,27 @@ export default function HomeScreen({ navigation }: any) {
                       >
                         {balanceHidden ? '***' : formatMoney(displayTotal[1])}
                       </Text>
-                    </View>
-                  )}
-                  {totalsByCurrency.length > 1 && (
-                    /* 切换图标保留眼睛按钮的实体感：半透明圆底 + 同尺寸，多币种时点击弹菜单 */
-                    <View style={styles.eyeBtn}>
-                      <Ionicons name="swap-vertical" size={20} color={colors.netWorthAccent} />
-                    </View>
-                  )}
-                </TouchableOpacity>
+                    </TouchableOpacity>
+                  </View>
+                )
               )}
-              {/* 本月预算进度条：放进净资产卡底部；可点区域从进度条(Track Bar)开始，
-                  上面的标签行不可点——避免点切换货币时误触弹窗 */}
-              {totalBudget > 0 && (
-                <View style={styles.assetCardBudgetTop}>
-                  <Text style={styles.assetCardBudgetLabel}>{t('home.budgetLabel')}</Text>
-                  <Text style={styles.assetCardBudgetValue}>
-                    {balanceHidden ? '***' : formatMoney(thisExpense)}
-                    <Text style={styles.assetCardBudgetDim}>
-                      {' / '}
-                      {balanceHidden ? '***' : formatMoney(totalBudget)}
-                    </Text>
-                  </Text>
-                </View>
-              )}
+              {/* 行4:细分隔线,金额区与预算区之间(参考图) */}
+              <View style={styles.assetCardDivider} />
+              {/* 本月预算：整块（标签行+进度条+状态行）都调起预算弹窗——
+                  旧版标签行不可点是防⇄误触，⇄ 移到卡顶后误触不可能，点击区放大 */}
               <PressableScale onPress={openBudgetModal} activeScale={0.97}>
                 {totalBudget > 0 ? (
                   <>
+                    <View style={styles.assetCardBudgetTop}>
+                      <Text style={styles.assetCardBudgetLabel}>{t('home.budgetLabel')}</Text>
+                      <Text style={styles.assetCardBudgetValue}>
+                        {balanceHidden ? '***' : formatMoney(thisExpense)}
+                        <Text style={styles.assetCardBudgetDim}>
+                          {' / '}
+                          {balanceHidden ? '***' : formatMoney(totalBudget)}
+                        </Text>
+                      </Text>
+                    </View>
                     <View style={styles.assetCardBudgetTrack}>
                       <Reanimated.View
                         style={[
@@ -694,7 +758,7 @@ export default function HomeScreen({ navigation }: any) {
                         ]}
                       />
                     </View>
-                    <Text style={[styles.assetCardBudgetDim, { marginTop: 4 }]}>
+                    <Text style={[styles.assetCardBudgetDim, { marginTop: 4, color: budgetOver ? colors.expenseOver : colors.netWorthLabel }]}>
                       {budgetOver
                         ? t('home.budgetOver', { amount: formatMoney(thisExpense - totalBudget) })
                         : t('home.budgetLeft', { amount: formatMoney(totalBudget - thisExpense) })}
@@ -934,7 +998,9 @@ export default function HomeScreen({ navigation }: any) {
         </View>
       )}
 
-      {/* 预算调整弹窗 */}
+      {/* 预算调整弹窗：自绘计算器键盘常驻（资产页编辑同款「我的计算机」）——
+          预填当前预算值，可直接按算式（如 500+300），「完成」求值保存，点遮罩取消不保存；
+          无系统键盘参与，也就没有键盘互斥/收起时序问题 */}
       <Modal
         visible={budgetModalOpen}
         transparent
@@ -948,18 +1014,21 @@ export default function HomeScreen({ navigation }: any) {
         >
           <View style={styles.ledgerModalCard} onStartShouldSetResponder={() => true}>
             <Text style={styles.ledgerModalTitle}>{t('home.budgetModalTitle', { cur: activeCurrency })}</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={budgetInput}
-              onChangeText={setBudgetInput}
-              keyboardType="decimal-pad"
-              placeholder={t('home.budgetPlaceholder')}
-              placeholderTextColor={colors.textTertiary}
-              autoFocus
-            />
-            <PressableScale style={styles.modalSaveBtn} onPress={saveBudget} activeScale={0.98}>
-              <Text style={styles.modalSaveBtnText}>{t('common.save')}</Text>
-            </PressableScale>
+            {/* 算式显示行：右对齐大字，键盘按键实时回显 */}
+            <Text style={styles.budgetExprText} numberOfLines={1}>
+              {budgetExpr.displayValue || '0'}
+            </Text>
+            {/* 键盘通铺到卡片边缘：卡片 padding 16 会把网格边线（末行底线/右列边线）
+                悬在离圆角边框 16px 的位置——负 margin 抵消内边距，边线正好落在卡片边框上
+                （与记一笔/资产页贴底键盘通铺同款）；配合卡片 overflow hidden 裁进圆角 */}
+            <View style={styles.budgetKeypadBleed}>
+              <AmountCalculatorKeypad
+                onPressKey={(key) => budgetExpr.pressKeyAt(key, 0)}
+                onPressToday={() => {}}
+                onClear={() => budgetExpr.reset(0)}
+                onConfirm={handleBudgetConfirm}
+              />
+            </View>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -972,9 +1041,10 @@ export default function HomeScreen({ navigation }: any) {
             <View />
           </TouchableOpacity>
           <LinearGradient
-            colors={assetGradientColors}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
+            colors={heroGradient.colors}
+            locations={heroGradient.locations}
+            start={heroGradient.start}
+            end={heroGradient.end}
             style={[
               styles.currencyMenuPanel,
               {
@@ -985,15 +1055,15 @@ export default function HomeScreen({ navigation }: any) {
             ]}
           >
             <Text style={styles.currencyMenuTitle}>{t('home.selectCurrency')}</Text>
-            {totalsByCurrency.map(([code], idx) => {
-              const active = idx === Math.min(netWorthCurrencyIdx, totalsByCurrency.length - 1);
+            {totalsByCurrency.map(([code]) => {
+              const active = code === displayTotal?.[0];
               return (
                 <PressableScale
                   key={code}
                   style={[styles.currencyMenuItem, active && { backgroundColor: 'rgba(255,255,255,0.14)' }]}
                   activeScale={0.95}
                   onPress={() => {
-                    setNetWorthCurrencyIdx(idx);
+                    setNetWorthCurrency(code);
                     setCurrencyMenuOpen(false);
                   }}
                 >
@@ -1166,7 +1236,21 @@ function LedgerCardInner({
   );
 }
 
-function makeStyles(colors: ThemeColors) {  return StyleSheet.create({
+function makeStyles(colors: ThemeColors, isDark: boolean) {
+  // 日间玻璃卡上的文字紫色投影（曲面玻璃质感配套；夜间底深白字，投影反而脏，不加）
+  const dayTextShadow: {
+    textShadowColor?: string;
+    textShadowOffset?: { width: number; height: number };
+    textShadowRadius?: number;
+  } = isDark
+    ? {}
+    : {
+        textShadowColor: 'rgba(75, 0, 173, 0.7)',
+        // 光由左上角往右下角照射：影子投向右下；模长 ≈1.5（与玻璃参考图的高光位同源）
+        textShadowOffset: { width: 1.1, height: 1.1 },
+        textShadowRadius: 4,
+      };
+  return StyleSheet.create({
     container: { flex: 1 },
     headerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 },
     headerSide: { flex: 1, flexDirection: 'row', alignItems: 'center' },
@@ -1230,13 +1314,15 @@ function makeStyles(colors: ThemeColors) {  return StyleSheet.create({
       elevation: 5,
     },
     // 主角卡：渐变面 + 半透明白描边（比 cardBorder 更像"受光边缘"）
+    // 上下留白压缩：paddingVertical 14→6（2026-09-24 用户两轮压缩定版）
     assetCard: {
       borderRadius: 20,
-      padding: 20,
+      paddingHorizontal: 20,
+      paddingVertical: 6,
       borderWidth: 1,
       borderColor: 'rgba(255,255,255,0.12)',
     },
-    assetCardLabel: { fontSize: 15, fontWeight: '600', letterSpacing: 0.5, color: colors.netWorthLabel, marginBottom: 4 },
+    assetCardLabel: { ...dayTextShadow, fontSize: 15, fontWeight: '700', letterSpacing: 0.5, color: colors.netWorthLabel, marginBottom: 4 },
     assetCardTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     // 眼睛按钮：小图标也要有 44pt 级的实体感——半透明圆底让它成为可按的"按钮"而不是裸图标
     dayGroup: { marginBottom: 4, borderBottomWidth: 1, borderBottomColor: colors.dividerHair, paddingBottom: 2 },
@@ -1263,22 +1349,28 @@ function makeStyles(colors: ThemeColors) {  return StyleSheet.create({
     assetCardValueRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     // 大数字用负字距（大字号时字母会显得松）+ 等宽数字（金额跳动时不抖动）
     // 金额不用 tabular-nums：等宽数字会让首位"1"在字格里居中，视觉上左边缘比 MYR 缩进一点
-    assetCardValue: { fontSize: 36, fontWeight: '700', letterSpacing: 0, color: colors.netWorthValue, textAlign: 'left' },
-    // 币种代码：独立一行放在金额上方（参考图 EXPENSES/USD 排列）
-    assetCardCode: { fontSize: 15, color: colors.netWorthLabel, fontWeight: '600', letterSpacing: 0, marginBottom: 2, textAlign: 'left' },
-    // 币种代码 + 金额纵向排列容器:可收缩(flexShrink),右侧的上下箭头按钮(40 固定)永不被挤压
-    assetValueCol: { flex: 1, flexShrink: 1, flexDirection: 'column', alignItems: 'flex-start', marginRight: 8 },
+    assetCardValue: { ...dayTextShadow, fontSize: 36, fontWeight: '700', letterSpacing: 0, color: colors.netWorthValue, textAlign: 'left' },
+    // 币种代码：与眼睛并排放金额上方（参考图 CNY 👁 排列）
+    assetCardCode: { ...dayTextShadow, fontSize: 18, color: colors.netWorthValue, fontWeight: '700', letterSpacing: 0.5, textAlign: 'left' },
+    // 币种代码 + 眼睛开关行：并排小间距（参考图 CNY 👁）
+    assetCardCurrencyRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2, marginBottom: -4 },
+    // 金额区与预算区之间的细分隔线（参考图）；日间底色浅，白线透明度提到 0.4 才看得见
+    assetCardDivider: { height: 1, backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.4)', marginTop: 14, marginBottom: 2 },
+    // 币种代码 + 金额纵向排列容器：子节点拉伸到整卡内容宽（默认 stretch——金额行实测宽=卡内宽，
+    // 下拉面板才能与卡片同宽；旧版 alignItems:'flex-start' 会让金额行收窄到文字宽，面板跟着变窄）
+    assetValueCol: { flex: 1, flexShrink: 1, flexDirection: 'column' },
     assetCardEmptyWrap: { paddingVertical: 6 },
-    assetCardEmptyTitle: { fontSize: 15, fontWeight: '600', color: colors.netWorthValue },
-    assetCardEmptyHint: { fontSize: 12, color: colors.netWorthHint, marginTop: 5 },
+    assetCardEmptyTitle: { ...dayTextShadow, fontSize: 15, fontWeight: '600', color: colors.netWorthValue },
+    assetCardEmptyHint: { ...dayTextShadow, fontSize: 12, color: colors.netWorthHint, marginTop: 5 },
     assetCardHint: { fontSize: 12, fontWeight: '500', color: colors.netWorthHint },
     // 净资产卡内嵌的本月预算进度条
     assetCardBudgetTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, marginBottom: 8 },
-    assetCardBudgetLabel: { flex: 1, flexShrink: 1, fontSize: 14, fontWeight: '600', color: colors.netWorthLabel },
-    assetCardBudgetValue: { flexShrink: 1, fontSize: 14, fontWeight: '500', color: colors.netWorthValue },
-    assetCardBudgetDim: { fontSize: 14, fontWeight: '500', color: colors.netWorthLabel },
-    assetCardBudgetTrack: { height: 5, backgroundColor: 'rgba(255,255,255,0.18)', borderRadius: 3, overflow: 'hidden' },
-    assetCardBudgetFill: { height: '100%', borderRadius: 3 },
+    assetCardBudgetLabel: { ...dayTextShadow, flex: 1, flexShrink: 1, fontSize: 14, fontWeight: '600', color: colors.netWorthLabel },
+    assetCardBudgetValue: { ...dayTextShadow, flexShrink: 1, fontSize: 14, fontWeight: '500', color: colors.netWorthValue },
+    assetCardBudgetDim: { ...dayTextShadow, fontSize: 14, fontWeight: '500', color: colors.netWorthLabel },
+    // 进度条轨道同理：日间浅底上 0.18 的白轨几乎隐形，提到 0.38（实心白 fill 仍清晰可辨）
+    assetCardBudgetTrack: { height: 7, backgroundColor: isDark ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.38)', borderRadius: 4, overflow: 'hidden' },
+    assetCardBudgetFill: { height: '100%', borderRadius: 4 },
     // 未设置预算的占位行：minHeight 校准到已设置状态预算区的内容高度（标签行20+下距8+进度条5+间距6+状态行20≈59），
     // 两种状态卡片总高一致，设置预算时不跳动
     assetCardBudgetEmptyRow: {
@@ -1300,7 +1392,7 @@ function makeStyles(colors: ThemeColors) {  return StyleSheet.create({
       marginRight: 6,
     },
     // 比总资产金额（assetCardValue 36px）小 2px
-    assetCardBudgetEmptyText: { fontSize: 18, fontWeight: '600', color: colors.netWorthLabel },
+    assetCardBudgetEmptyText: { ...dayTextShadow, fontSize: 18, fontWeight: '600', color: colors.netWorthLabel },
     // 货币直选下拉：从切换行底缘拉出、与净资产卡同渐变的面板（顶部无圆角=无缝衔接）
     currencyMenuOverlay: { flex: 1, backgroundColor: 'rgba(20,15,40,0.35)' },
     currencyMenuPanel: {
@@ -1387,6 +1479,8 @@ currencyMenuItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 
       backgroundColor: colors.card,
       borderRadius: 16,
       padding: 16,
+      // 键盘通铺到卡缘后其方角背景会顶到卡片下缘——裁进圆角内，避免圆角外露出方角
+      overflow: 'hidden',
     },
     planModalCard: {
       width: '100%',
@@ -1396,6 +1490,18 @@ currencyMenuItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 
       padding: 16,
     },
     ledgerModalTitle: { fontSize: 15, fontWeight: '700', color: colors.textPrimary, marginBottom: 8, textAlign: 'center' },
+    // 预算弹窗的算式显示行：右对齐大字、等宽数字；minHeight 防算式清空时高度塌陷
+    budgetExprText: {
+      fontSize: 28,
+      fontWeight: '700',
+      color: colors.textPrimary,
+      textAlign: 'right',
+      fontVariant: ['tabular-nums'],
+      minHeight: 40,
+      marginBottom: 10,
+    },
+    // 预算键盘通铺：负 margin 抵消卡片 padding 16，网格边线（末行底线/侧线端头）正好落在卡片圆角边框上
+    budgetKeypadBleed: { marginHorizontal: -16, marginBottom: -16 },
     modalFieldLabel: { fontSize: 12, color: colors.textSecondary, marginTop: 12, marginBottom: 6 },
     requiredMark: { color: colors.expense, fontWeight: '700' },
     // 全屏账本快速切换弹窗（参照 LedgerScreen 的卡片样式，保持视觉一致）
