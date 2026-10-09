@@ -35,7 +35,7 @@ import { useApp } from '../context/AppContext';
 import { ROUTES } from '../navigation/routes';
 import DateRangePickerSheet from '../components/DateRangePickerSheet';
 import { TransactionType, Transaction, Category } from '../types';
-import { useT } from '../i18n/LanguageContext';
+import { useT, useLanguage } from '../i18n/LanguageContext';
 import { getCategoryLabel, getGroupLabel, findCategoryIdByChineseName } from '../i18n/categories';
 import { EXPENSE_CATEGORY_GROUPS, INCOME_CATEGORY_GROUPS } from '../utils/defaultCategories';
 import { scanReceipt } from '../utils/scanReceipt';
@@ -99,6 +99,13 @@ function formatDate(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+// 英文短语在窄框里的按词换行：安卓端默认断行策略是 highQuality（均衡断行），为对齐两行
+// 长度允许从单词中间切开——"Not selected" 会被断成 "Not sel/ected"。容器放不下整句时在这里
+// 显式于空格处换行（"Not\nselected"），够宽则保持原样单行；中文标签无空格，原样返回不受影响
+function twoLineLabel(label: string, boxW: number, fullW: number) {
+  return boxW < fullW && label.indexOf(' ') > 0 ? label.replace(' ', '\n') : label;
+}
+
 type Step = 'category' | 'detail' | 'transferDetail';
 
 // 类别横排"最近用过"快捷选择：本地存一份最近选过的类别 id（新的插最前面，去重），
@@ -125,6 +132,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   const insets = useSafeAreaInsets();
   const { colors, isDark } = useTheme();
   const t = useT();
+  const { langMode } = useLanguage();
   // 主题化弹窗（替代系统 Alert）
   const dialog = useDialog();
   const tabClearance = useTabClearance();
@@ -623,6 +631,10 @@ export default function AddTransactionScreen({ navigation, route }: any) {
     // TASK-024：补齐目标跟随可见容量（键盘弹出/收起、Hero 压缩都会改变 gridMaxCount）
   }, [sessionPickedIds, recentCategoryIds, filteredCategories, categoryColumns, gridMaxCount]);
   const [currencyDropOpen, setCurrencyDropOpen] = useState(false);
+  // 转账/兑换弹层「币种下拉」的锚点：头部实测盒（相对弹层 y/h）+ 货币钮实测高。
+  // 面板停在「货币钮正下方」靠这两个实测值算——EN 标题折两行会把头部撑高，固定 top 会压住货币钮
+  const [acctHeaderBox, setAcctHeaderBox] = useState({ y: 0, h: 0 });
+  const [acctPillH, setAcctPillH] = useState(0);
   // 账户列表的币种筛选：下拉里点了某个币种（如 USD），列表就只显示该币种的账户；'all' 为不筛
   const [currencyFilter, setCurrencyFilter] = useState<string>('all');
   // 金额币种只认所选账户（2026-09-24 用户定版）：选什么账户显示什么货币，没选账户用全局设置货币；
@@ -976,6 +988,9 @@ export default function AddTransactionScreen({ navigation, route }: any) {
           cycle: 'monthly',
           dayOfMonth: Math.min(31, Math.max(1, Number(date.slice(8, 10)) || 1)),
           startDate: date,
+          // 这一期已由本轮手工账覆盖：游标钉到本期，补账引擎从「下个月同日」才开始自动入账。
+          // 不钉游标时首期=保存当天，引擎会当场再补一笔——同一天出两条记录（2026-10-04 修复）
+          lastProcessedDate: date,
           autoDeduct: true,
           categoryId: categoryId,
           assetId: assetId ?? undefined,
@@ -1334,7 +1349,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                   }}
                 >
                   <Text
-                    style={[styles.txHeaderTypeText, uiType === t.key && styles.txHeaderTypeTextActive]}
+                    style={[styles.txHeaderTypeText, langMode !== 'zh' && styles.txHeaderTypeTextEn, uiType === t.key && styles.txHeaderTypeTextActive]}
                     numberOfLines={1}
                     adjustsFontSizeToFit
                     minimumFontScale={0.8}
@@ -1402,7 +1417,14 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                     <Ionicons name={(fromAsset?.icon as IconName) ?? 'wallet-outline'} size={20} color={fromAsset?.color ?? colors.link} />
                   </View>
                   <View style={styles.transferAccountInfo}>
-                    <Text style={styles.transferAccountName} numberOfLines={1}>{fromAsset?.name ?? t('common.notSelected')}</Text>
+                    {/* 与 Hero 同策略：窄框英文按词两行（可用宽 = 块实测宽 - padding 16 - 图标 40 - 名字间距 10 - 描边 2） */}
+                    <Text
+                      style={styles.transferAccountName}
+                      numberOfLines={2}
+                      textBreakStrategy={Platform.OS === 'android' ? 'simple' : undefined}
+                    >
+                      {fromAsset?.name ?? twoLineLabel(t('common.notSelected'), transferBlockW - 68, 100)}
+                    </Text>
                   </View>
                 </View>
                 <Ionicons name="chevron-down" size={12} color={colors.textTertiary} style={styles.transferAccountChevron} />
@@ -1437,7 +1459,13 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                 <Text style={[styles.transferAccountCaption, styles.transferAccountCaptionRight]}>{t('addTx.inAccount')}</Text>
                 <View style={styles.transferAccountMain}>
                   <View style={styles.transferAccountInfoRight}>
-                    <Text style={styles.transferAccountName} numberOfLines={1}>{toAsset?.name ?? t('common.notSelected')}</Text>
+                    <Text
+                      style={styles.transferAccountName}
+                      numberOfLines={2}
+                      textBreakStrategy={Platform.OS === 'android' ? 'simple' : undefined}
+                    >
+                      {toAsset?.name ?? twoLineLabel(t('common.notSelected'), transferBlockW - 68, 100)}
+                    </Text>
                   </View>
                   <View style={[styles.transferAccountIcon, { backgroundColor: (toAsset?.color ?? colors.link) + '20' }]}>
                     <Ionicons name={(toAsset?.icon as IconName) ?? 'wallet-outline'} size={20} color={toAsset?.color ?? colors.link} />
@@ -1622,13 +1650,19 @@ export default function AddTransactionScreen({ navigation, route }: any) {
             <GestureDetector gesture={accountPickerGesture}>
               <Reanimated.View style={[styles.accountPickerSheet, accountPickerAnimStyle]}>
                 <View style={styles.accountPickerGrabber} />
-                <View style={styles.accountPickerHeader}>
+                <View
+                  style={styles.accountPickerHeader}
+                  onLayout={(e) => {
+                    // 头部盒实测（相对弹层）：币种下拉面板的锚点，头部被 EN 标题折行撑高时跟着下移
+                    const { y, height } = e.nativeEvent.layout;
+                    if (Math.abs(y - acctHeaderBox.y) > 0.5 || Math.abs(height - acctHeaderBox.h) > 0.5) {
+                      setAcctHeaderBox({ y, h: height });
+                    }
+                  }}
+                >
                   <View style={{ flexShrink: 1, marginRight: 8 }}>
                     <Text style={styles.accountPickerTitle}>
                       {accountPickerRole === 'from' ? t('addTx.selectOut') : t('addTx.selectIn')}
-                    </Text>
-                    <Text style={styles.accountPickerSubtitle}>
-                      {accountPickerRole === 'from' ? t('addTx.fromWhichAccount') : t('addTx.toWhichAccount')}
                     </Text>
                   </View>
                   <View style={styles.accountPickerHeaderRight}>
@@ -1638,6 +1672,10 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                       style={styles.accountPickerCurrencyBtn}
                       activeOpacity={0.75}
                       onPress={() => setCurrencyDropOpen((v) => !v)}
+                      onLayout={(e) => {
+                        const h = e.nativeEvent.layout.height;
+                        if (Math.abs(h - acctPillH) > 0.5) setAcctPillH(h);
+                      }}
                     >
                       <Text style={styles.accountPickerCurrencyBtnText}>
                         {currencyFilter === 'all' ? t('addTx.allCurrencies') : currencyFilter}
@@ -1659,7 +1697,15 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                   <Pressable style={styles.currencyDropCatch} onPress={() => setCurrencyDropOpen(false)} />
                 )}
                 {currencyDropOpen && (
-                  <View style={styles.currencyDropPanel}>
+                  <View
+                    style={[
+                      styles.currencyDropPanel,
+                      // 锚到货币钮实测底缘（+4 与支出/收入弹层同距）：EN 标题折行撑高头部时不再压住按钮
+                      acctHeaderBox.h > 0 && acctPillH > 0 && {
+                        top: acctHeaderBox.y + (acctHeaderBox.h + acctPillH) / 2 + 4,
+                      },
+                    ]}
+                  >
                     <Text style={styles.currencyDropTitle}>{t('addTx.selectCurrency')}</Text>
                     <TouchableOpacity
                       style={[styles.currencyDropItem, currencyFilter === 'all' && { backgroundColor: colors.link + '14' }]}
@@ -2321,7 +2367,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                     }}
                   >
                     <Text
-                      style={[styles.txHeaderTypeText, uiType === t.key && styles.txHeaderTypeTextActive]}
+                      style={[styles.txHeaderTypeText, langMode !== 'zh' && styles.txHeaderTypeTextEn, uiType === t.key && styles.txHeaderTypeTextActive]}
                       numberOfLines={1}
                       adjustsFontSizeToFit
                       minimumFontScale={0.8}
@@ -2440,8 +2486,16 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                     color={selectedAsset?.color ?? colors.link}
                   />
                 </View>
-                <Text style={styles.heroCurrencyAccName} numberOfLines={1}>
-                  {selectedAsset ? selectedAsset.name : t('common.notSelected')}
+                <Text
+                  style={styles.heroCurrencyAccName}
+                  numberOfLines={2}
+                  textBreakStrategy={Platform.OS === 'android' ? 'simple' : undefined}
+                >
+                  {/* 窄框里英文按词两行显示（"Not selected" 不缩字只能 Not/selected）；
+                      可用宽 = 账户行实测宽 - 固定占用（padding 8 + 图标 40 + 名字间距 4 + 箭头 2+12） */}
+                  {selectedAsset
+                    ? selectedAsset.name
+                    : twoLineLabel(t('common.notSelected'), heroWrapW - 66, 130)}
                 </Text>
                 <Ionicons name="chevron-down" size={12} color={colors.textTertiary} style={styles.heroCurrencyChevron} />
               </TouchableOpacity>
@@ -3357,6 +3411,8 @@ function makeStyles(colors: ThemeColors, isDark: boolean) {
   txHeaderTypeBtnSinkActive: { backgroundColor: colors.fabBg },
   txHeaderTypeBtnActive: { backgroundColor: colors.fabBg },
   txHeaderTypeText: { fontSize: 14, fontWeight: '700', color: colors.textSecondary, textAlign: 'center' },
+  // 英文界面 Exchange 在 60px 格内差 2px 会出省略号：收紧字距兜住（中文两字不受影响）
+  txHeaderTypeTextEn: { letterSpacing: -0.5 },
   txHeaderTypeTextActive: { color: colors.bg },
   // 选中项底线：2px 高、60% 宽，标记"目前在什么页面"
   txHeaderTypeUnderline: { height: 2, width: '60%', marginTop: 3, borderRadius: 1, backgroundColor: colors.bg },
@@ -3444,7 +3500,8 @@ function makeStyles(colors: ThemeColors, isDark: boolean) {
     height: 54,
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 6,
+    // 2026-10-04 第二轮：padding 6→4，再收 4px 给账户名（英文 "Not selected" 不缩字、两行兜底）
+    padding: 4,
   },
   heroCurrencyTabText: { fontWeight: '700', color: colors.link },
   // 账户触区内容：与转账块同规格（图标圆 40 + 账户名 13/700 + 内联箭头）；盒边框/底色归 SVG 路径
@@ -3460,7 +3517,8 @@ function makeStyles(colors: ThemeColors, isDark: boolean) {
     overflow: 'visible',
   },
   // 下拉箭头：TASK-019 改为内联跟在账户名后（图1 排列），不再钉右上角
-  heroCurrencyChevron: { marginLeft: 6 },
+  // 2026-10-04 第二轮：marginLeft 6→4→2，继续回收给账户名窄框两行兜底
+  heroCurrencyChevron: { marginLeft: 2 },
   // ---------- 月度结转开关（TASK-022 图示胶囊按钮式，用户反馈加大）：左状态圆 + 右文字，开时发光描边 ----------
   autoMonthlyRow: {
     flexDirection: 'row',
@@ -3471,7 +3529,8 @@ function makeStyles(colors: ThemeColors, isDark: boolean) {
     // D-3.2：与账户框右缘留 8px（marginRight 5 保留=金额右缘对齐锚点不动）
     marginLeft: 8,
     paddingLeft: 8,
-    paddingRight: 16,
+    // 2026-10-04 第二轮：paddingRight 16→12，胶囊收窄 4px 让给账户框（英文月度收入标签更宽）
+    paddingRight: 12,
     borderRadius: 20,
     borderWidth: 1.5,
     borderColor: colors.dividerHair,
@@ -3514,7 +3573,9 @@ function makeStyles(colors: ThemeColors, isDark: boolean) {
   // 主行：40×40 圆角图标 + 账户名，与 transferAccountMain/Icon/Name 同规格
   heroCurrencyIconCircle: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   // 账户名：两行内完整展示（numberOfLines=2）；flexShrink 让长名在框内折行而非溢出
-  heroCurrencyAccName: { fontSize: 17, fontWeight: '700', color: colors.textPrimary, marginLeft: 10, flexShrink: 1 },
+  // 2026-10-04 第二轮：marginLeft 10→6→4；断行策略改 simple（安卓默认 highQuality 均衡断行
+  // 会把 "Not selected" 切在词中间成 "Not sel/ected"，见 twoLineLabel）
+  heroCurrencyAccName: { fontSize: 17, fontWeight: '700', color: colors.textPrimary, marginLeft: 4, flexShrink: 1, lineHeight: 20 },
   // 金额:对齐资产页（800 右对齐、等宽数字）；字号由组件内 heroAmountFontSize 按位数微调;
   // 外层（TouchableOpacity 点按热区）：占金额行整行宽度
   heroAmountTextWrap: {
@@ -3568,7 +3629,9 @@ function makeStyles(colors: ThemeColors, isDark: boolean) {
   currencyDropCatch: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 18 },
   currencyDropPanel: {
     position: 'absolute',
-    top: 62, // 紧贴头部 MYR 按钮的正下方（加了把手条后头部整体下移过 15px，这里同步校准）
+    // top: 62 只服务支出/收入弹层（头部恒为单行标题，EN/ZH 实测都对齐）；
+    // 转账/兑换弹层头部会被 EN 标题折行撑高，走货币钮实测底缘动态锚定（见其 JSX 内联 top）
+    top: 62,
     right: 54,
     zIndex: 20,
     backgroundColor: colors.bg,
@@ -3792,7 +3855,6 @@ function makeStyles(colors: ThemeColors, isDark: boolean) {
   accountPickerHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, zIndex: 21 },
   accountPickerHeaderRight: { flexDirection: 'row', alignItems: 'center' },
   accountPickerTitle: { fontSize: 17, fontWeight: '800', color: colors.textPrimary },
-  accountPickerSubtitle: { fontSize: 10, color: colors.textTertiary, marginTop: 4 },
   accountPickerClose: { width: 30, height: 30, borderRadius: 15, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' },
   accountSearchBox: {
     height: 42,

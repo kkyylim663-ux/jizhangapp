@@ -17,8 +17,8 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useApp } from '../context/AppContext';
-import { CURRENCY_OPTIONS, WORLD_CURRENCY_OPTIONS, getCurrencyFlag } from '../utils/currencies';
-import { useT } from '../i18n/LanguageContext';
+import { CURRENCY_OPTIONS, WORLD_CURRENCY_OPTIONS, getCurrencyFlag, currencyDisplayName, getEnglishCurrencyName } from '../utils/currencies';
+import { useLanguage } from '../i18n/LanguageContext';
 import { AssetType } from '../types';
 import { useTheme } from '../theme/useTheme';
 import { ThemeColors } from '../theme/theme';
@@ -53,7 +53,7 @@ export default function AddAssetScreen({ route }: any) {
   const insets = useSafeAreaInsets();
   const setTabBarForceHidden = useTabBarForceHide();
   const styles = useMemo(() => makeStyles(colors), [colors]);
-  const t = useT();
+  const { t, langMode } = useLanguage();
 
   // 编辑模式：route.params.assetId 有值时预填原账户（与新增共用同一表单，保存走 updateAsset）
   const editAsset = route?.params?.assetId ? getAssetById(route.params.assetId) : undefined;
@@ -211,15 +211,19 @@ export default function AddAssetScreen({ route }: any) {
     return () => sub.remove();
   }, [sheetOpen]);
 
-  // 货币搜索：世界货币表 ~150 种，按代码/中文名过滤
+  // 货币搜索：世界货币表 ~150 种，按代码/中文名/界面语言显示名过滤
   const [currencySearch, setCurrencySearch] = useState('');
   const filteredCurrencies = useMemo(() => {
     const kw = currencySearch.trim().toLowerCase();
     if (!kw) return WORLD_CURRENCY_OPTIONS;
     return WORLD_CURRENCY_OPTIONS.filter(
-      (c) => c.code.toLowerCase().includes(kw) || c.name.toLowerCase().includes(kw)
+      (c) =>
+        c.code.toLowerCase().includes(kw) ||
+        c.name.toLowerCase().includes(kw) ||
+        currencyDisplayName(c).toLowerCase().includes(kw) ||
+        (getEnglishCurrencyName(c.code) ?? '').toLowerCase().includes(kw)
     );
-  }, [currencySearch]);
+  }, [currencySearch, langMode]);
 
   // ---------- 校验 + 提交（错误直接亮在对应字段上，不打断） ----------
   type ErrorField = 'name';
@@ -452,7 +456,11 @@ export default function AddAssetScreen({ route }: any) {
         >
           {getCurrencyFlag(selectedCurrency) && <Text style={styles.selectBoxFlag}>{getCurrencyFlag(selectedCurrency)}</Text>}
           <Text style={styles.selectBoxText}>
-            {selectedCurrencyInfo ? `${selectedCurrencyInfo.name}（${selectedCurrencyInfo.code}）` : selectedCurrency}
+            {selectedCurrencyInfo
+              ? langMode === 'zh'
+                ? `${currencyDisplayName(selectedCurrencyInfo)}（${selectedCurrencyInfo.code}）`
+                : `${currencyDisplayName(selectedCurrencyInfo)} (${selectedCurrencyInfo.code})`
+              : selectedCurrency}
           </Text>
           <Ionicons name="chevron-down" size={14} color={colors.textTertiary} />
         </PressableScale>
@@ -485,7 +493,7 @@ export default function AddAssetScreen({ route }: any) {
                   style={[styles.currencySearchInput, { color: colors.textPrimary }]}
                   value={currencySearch}
                   onChangeText={setCurrencySearch}
-                  placeholder="搜索货币 / Search currency"
+                  placeholder={t('addTx.searchCurrency')}
                   placeholderTextColor={colors.textTertiary}
                   autoCorrect={false}
                 />
@@ -516,7 +524,7 @@ export default function AddAssetScreen({ route }: any) {
                         }}
                       >
                         <Text style={styles.sheetRowName}>
-                          {flag ? `${flag} ${c.name}` : c.name}
+                          {flag ? `${flag} ${currencyDisplayName(c)}` : currencyDisplayName(c)}
                         </Text>
                         <Text style={[styles.sheetRowCode, active && { color: colors.link }]}>{c.code}</Text>
                         {active && <Ionicons name="checkmark" size={18} color={colors.link} />}
@@ -525,7 +533,7 @@ export default function AddAssetScreen({ route }: any) {
                   })}
                   {filteredCurrencies.length === 0 && (
                     <Text style={[styles.sheetRowName, { textAlign: 'center', paddingVertical: 24, color: colors.textTertiary }]}>
-                      {currencySearch ? '未找到匹配的货币' : ''}
+                      {currencySearch ? t('addTx.noMatchingCurrency') : ''}
                     </Text>
                   )}
                 </Reanimated.ScrollView>
@@ -675,9 +683,11 @@ function makeStyles(colors: ThemeColors) {
       fontWeight: '600',
     },
     // 币种选择框：比名称/类型行的 40 再矮一档。
-    // flex:0 + alignSelf:stretch —— 之前继承 selectBox 的 flex:1，在页面纵列里被
-    // 纵向拉伸成一个大空框（触发框显得超高）；这里显式关掉拉伸、横 向撑满。
-    currencySelectBox: { flex: 0, alignSelf: 'stretch', height: 40 },
+    // flexGrow:0 + flexShrink:0 + alignSelf:stretch —— 之前继承 selectBox 的 flex:1，在页面
+    // 纵列里被纵向拉伸成一个大空框（触发框显得超高）；这里显式关掉拉伸、横向撑满。
+    // 注意不能用 flex:0 简写：react-native-web 会原样透传成 CSS flex:0（= 0 1 0%），
+    // flex-basis:0% 覆盖 height:40 导致框塌陷成只剩边框（原生 Yoga 的 flex:0 无此问题）。
+    currencySelectBox: { flexGrow: 0, flexShrink: 0, alignSelf: 'stretch', height: 40 },
     // 账户类型:行下内联下拉（替代原底部上滑弹层）
     // 类型下拉:覆盖式浮层——绝对定位悬浮在选择框正下方,盖住下方的货币栏位,
     // 不把货币栏往下挤(展开时页面其他行纹丝不动);zIndex 高于相邻内容

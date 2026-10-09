@@ -12,7 +12,6 @@ import {
 } from 'react-native';
 import { BlinkingCursor } from '../components/BlinkingCursor';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Swipeable } from 'react-native-gesture-handler';
 import DraggableFlatList, { ScaleDecorator, RenderItemParams } from 'react-native-draggable-flatlist';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -209,7 +208,8 @@ export default function AssetScreen() {
       message: t('asset.deleteAssetMsg'),
       buttons: [
         { text: t('common.cancel'), style: 'cancel' },
-        { text: t('common.delete'), style: 'destructive', onPress: () => { hapticWarning(); deleteAsset(id); } },
+        // 删除后账户已不存在：连带关闭详情弹窗，避免留下空壳弹窗（删除入口在弹窗内）
+        { text: t('common.delete'), style: 'destructive', onPress: () => { setViewingAssetId(null); hapticWarning(); deleteAsset(id); } },
       ],
     });
   };
@@ -413,13 +413,6 @@ export default function AssetScreen() {
     return computeAssetFlowStats(viewingAsset.id, monthStart, transactions);
   }, [viewingAsset, transactions]);
 
-  const renderDeleteAction = (id: string, assetName: string) => (
-    <TouchableOpacity style={styles.swipeDeleteBtn} onPress={() => handleDelete(id, assetName)}>
-      <Ionicons name="trash-outline" size={18} color={colors.fabIcon} />
-      <Text style={styles.swipeDeleteText}>{t('common.delete')}</Text>
-    </TouchableOpacity>
-  );
-
   // ---------- 先按货币分大组，组内再按类型顺序（现金 / 银行卡 / 信用卡）排列 ----------
   const typeOrder = useMemo(() => {
     const order: Record<AssetType, number> = {} as Record<AssetType, number>;
@@ -573,41 +566,36 @@ export default function AssetScreen() {
                   <View style={styles.currencyGroupBody}>
                     {group.items.map((a) => {
                       return (
-                        <Swipeable
+                        <PressableScale
                           key={a.id}
-                          overshootRight={false}
-                          renderRightActions={() => renderDeleteAction(a.id, a.name)}
+                          style={styles.assetRowOnGradient}
+                          activeScale={0.97}
+                          onPress={() => setViewingAssetId(a.id)}
+                          onLongPress={() => setReorderMode(true)}
                         >
-                          <PressableScale
-                            style={styles.assetRowOnGradient}
-                            activeScale={0.97}
-                            onPress={() => setViewingAssetId(a.id)}
-                            onLongPress={() => setReorderMode(true)}
-                          >
-                            {/* 卡片只保留三样东西：图标、账户名、金额；点击进详情，长按进排序 */}
-                            <View style={styles.assetCardTopRow}>
-                              <View style={[styles.assetIconWrap, { backgroundColor: '#FFFFFF' }]}>
-                                <Ionicons name={a.icon as IconName} size={22} color={a.color} />
-                              </View>
-                              <View style={{ flex: 1, marginLeft: 12 }}>
-                                {/* 长英文账户名单行截断，不撑高卡片 */}
-                                <Text style={styles.assetNameOnGradient} numberOfLines={1}>{a.name}</Text>
-                              </View>
-                              {(() => {
-                                // 信用卡这里显示的是"还能刷多少"（可用额度），不是欠了多少钱——
-                                // 欠款已经在上面的"负债"卡片里单独汇总了，这里再显示一遍欠款反而容易看错方向
-                                const displayValue = getAssetDisplayBalance(a, getAssetBalance(a.id));
-                                return (
-                                  <Text style={[styles.assetNameOnGradient, { fontSize: 17 }, a.type === 'credit' && displayValue < 0 && { color: colors.expense }]}>
-                                    {a.type === 'credit' && displayValue < 0 ? '-' : ''}
-                                    {Math.abs(displayValue).toFixed(2)}
-                                  </Text>
-                                );
-                              })()}
-                              <Ionicons name="chevron-forward" size={16} color={colors.netWorthAccent} style={{ marginLeft: 4 }} />
+                          {/* 卡片只保留三样东西：图标、账户名、金额；点击进详情（删除入口也收在详情弹窗里），长按进排序 */}
+                          <View style={styles.assetCardTopRow}>
+                            <View style={[styles.assetIconWrap, { backgroundColor: '#FFFFFF' }]}>
+                              <Ionicons name={a.icon as IconName} size={22} color={a.color} />
                             </View>
-                          </PressableScale>
-                        </Swipeable>
+                            <View style={{ flex: 1, marginLeft: 12 }}>
+                              {/* 长英文账户名单行截断，不撑高卡片 */}
+                              <Text style={styles.assetNameOnGradient} numberOfLines={1}>{a.name}</Text>
+                            </View>
+                            {(() => {
+                              // 信用卡这里显示的是"还能刷多少"（可用额度），不是欠了多少钱——
+                              // 欠款已经在上面的"负债"卡片里单独汇总了，这里再显示一遍欠款反而容易看错方向
+                              const displayValue = getAssetDisplayBalance(a, getAssetBalance(a.id));
+                              return (
+                                <Text style={[styles.assetNameOnGradient, { fontSize: 17 }, a.type === 'credit' && displayValue < 0 && { color: colors.expense }]}>
+                                  {a.type === 'credit' && displayValue < 0 ? '-' : ''}
+                                  {Math.abs(displayValue).toFixed(2)}
+                                </Text>
+                              );
+                            })()}
+                            <Ionicons name="chevron-forward" size={16} color={colors.netWorthAccent} style={{ marginLeft: 4 }} />
+                          </View>
+                        </PressableScale>
                       );
                     })}
                   </View>
@@ -640,19 +628,31 @@ export default function AssetScreen() {
             >
             {viewingAsset && (
               <>
-                {/* 名称：可编辑框格 + 笔图标（为空标红、"保存"不可用） */}
-                <View style={[styles.editNameBox, !viewName.trim() && styles.editInputError]}>
-                  <TextInput
-                    ref={viewNameInputRef}
-                    style={styles.editNameInput}
-                    value={viewName}
-                    onChangeText={setViewName}
-                    placeholder={t('addTx.accountNamePlaceholder')}
-                    placeholderTextColor={colors.textTertiary}
-                    selectionColor={colors.link}
-                    returnKeyType="done"
-                  />
-                  <Ionicons name="pencil" size={15} color={colors.link} />
+                {/* 名称行：名称框（可编辑，为空标红、"保存"不可用）+ 右侧删除垃圾桶；
+                    删除入口从账户行的左滑收进这里（2026-10-04）：点垃圾桶走原确认对话框 */}
+                <View style={styles.editNameRow}>
+                  <View style={[styles.editNameBox, !viewName.trim() && styles.editInputError]}>
+                    <TextInput
+                      ref={viewNameInputRef}
+                      style={styles.editNameInput}
+                      value={viewName}
+                      onChangeText={setViewName}
+                      placeholder={t('addTx.accountNamePlaceholder')}
+                      placeholderTextColor={colors.textTertiary}
+                      selectionColor={colors.link}
+                      returnKeyType="done"
+                    />
+                    <Ionicons name="pencil" size={15} color={colors.link} />
+                  </View>
+                  <PressableScale
+                    style={styles.deleteAssetBtn}
+                    activeScale={0.9}
+                    onPress={() => viewingAsset && handleDelete(viewingAsset.id, viewingAsset.name)}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('common.delete')}
+                  >
+                    <Ionicons name="trash-outline" size={19} color={colors.expense} />
+                  </PressableScale>
                 </View>
 
                 {/* 信用卡：信用额度框格，点整格调起计算器键盘 */}
@@ -928,13 +928,6 @@ function makeStyles(colors: ThemeColors) {
     assetIconWrap: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
     assetName: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
     assetBalance: { fontSize: 17, fontWeight: '700', color: colors.textPrimary },
-    swipeDeleteBtn: {
-      backgroundColor: colors.expense,
-      justifyContent: 'center',
-      alignItems: 'center',
-      width: 64,
-    },
-    swipeDeleteText: { color: colors.fabIcon, fontSize: 11, marginTop: 2, fontWeight: '600' },
     modalOverlay: {
       flex: 1,
       backgroundColor: colors.overlay,
@@ -949,8 +942,11 @@ function makeStyles(colors: ThemeColors) {
     viewKeypadFooter: { width: '100%', paddingTop: 6, borderTopWidth: 1, marginTop: 'auto' },
     modalCard: { width: '100%', backgroundColor: colors.card, borderRadius: 18, padding: 20 },
     // ---------- 弹窗内行内编辑（与"添加账户"页同视觉：bg 底框格 + 笔图标表示可编辑） ----------
+    // 名称行：名称框（弹性占满剩余宽）+ 右侧删除垃圾桶同一行；行下间距 12（原框格 marginBottom 挪来）
+    editNameRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
     // 名称框格
     editNameBox: {
+      flex: 1,
       flexDirection: 'row',
       alignItems: 'center',
       gap: 8,
@@ -960,8 +956,9 @@ function makeStyles(colors: ThemeColors) {
       borderColor: colors.dividerHair,
       height: 48,
       paddingHorizontal: 12,
-      marginBottom: 12,
     },
+    // 删除账户垃圾桶：40×40 触区（与编辑页头部删除键同规格），纯图标无底色
+    deleteAssetBtn: { width: 40, height: 40, marginLeft: 10, alignItems: 'center', justifyContent: 'center' },
     editNameInput: {
       flex: 1,
       fontSize: 17,

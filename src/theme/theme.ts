@@ -45,6 +45,28 @@ export type ThemeColors = {
   homeHeroGlow: string;
   homeHeroGlowMid: string;
   homeHeroDeep: string;
+  homeHeroTopGlow: string;
+  homeHeroUnderGlow: string;
+  // 立体毛玻璃（2026-10-07 批次2 起共用；GlassLift 用）
+  // ⚠ 2026-10-07 晚：旧 homeGlassEdge（顶部 1px 实心亮线）已删——真机上是浮在边内侧的硬直线。
+  // 顶缘柔光改由 GlassLift 的 SVG 三层描边沿轮廓生成，透明度数值在 HomeScreen 的 glassPalette 内。
+  homeGlassFillTop: string;
+  // 2026-10-09 修正 25：填充改 3 段（亮→略暗→中间调=金属反光带）；日间=银紫拉丝金属（不透明），
+  // 夜间=原两段的白 0.20→0.16 线性中值（0.18），加停点后夜间渲染逐像素不变
+  homeGlassFillMid: string;
+  homeGlassFillBottom: string;
+  homeGlassBorder: string;
+  // 日间倒角的「底部 1px 深紫灰」（浅底上给厚度=暗面+亮棱）；夜间档不消费（夜间由 border 全圈白边承担）
+  glassEdgeShade: string;
+  homeGlassShadow: string;
+  // Hero 卡上玻璃件的内容色（2026-10-07 第 6 轮·修正 3）：日间玻璃件＝亮白玻璃 → 内容必须深色
+  // （白图标/白字在白玻璃上是白叠白＝发糊）；夜间取原 netWorth* 值保证零变化
+  homeGlassIcon: string;
+  homeGlassText: string;
+  homeGlassAccent: string;
+  // 顶部/Hero 卡全部图标统一色（2026-10-08 按用户要求）：铃铛/账本箭头/中EN/日月/日历/眼睛/上下箭头
+  // 共用此单值；日间=原太阳色，夜间=原上下箭头色。图标一律从这里取色，勿再各写各的。
+  homeIconColor: string;
 
   // Hero 卡极光 shader（AuroraFlowShader）的三段色：暗部 → 中间雾 → 高亮丝。
   // 夜间=参考视频同款深紫极光（整层不透明全接管）；日间=浅底低饱和版（整层 ~0.55 叠在渐变上）
@@ -80,9 +102,11 @@ export type ThemeColors = {
   expenseOver: string;
   track: string;
 
-  // 本月预算进度条的渐变端点色：正常 / 超支两种状态各一组
+  // 本月预算进度条的渐变端点色：正常（浅紫→青 + 亮青收尾高光，2026-10-06 按交互视频）/
+  // 超支一组两档，配合 home 页新的独立预算卡使用
   budgetFillFrom: string;
   budgetFillTo: string;
+  budgetFillMid: string;
   budgetFillOverFrom: string;
   budgetFillOverTo: string;
 
@@ -100,6 +124,68 @@ export type ThemeColors = {
   fabShine: string;
   fabShadow: string;
   fabRipple: string;
+  // 记一笔中央玻璃球（2026-10-06 照效果图逐像素取值：上玻璃/下紫填充硬分界 + 球外双色光晕）
+  fabOrbGlassTop: string;
+  fabOrbGlassFall: string;
+  fabOrbGlassMid: string;
+  fabOrbGlassLow: string;
+  fabOrbGlassEdge: string;
+  fabOrbWaterLine: string;
+  fabOrbFillTop: string;
+  fabOrbFillMid: string;
+  fabOrbFillLow: string;
+  fabOrbFillBottom: string;
+  fabOrbAura: string; // 外层薰衣草大晕（2026-10-09 修正 24：只留这一圈很淡的同色光晕）
+  fabOrbAuraBloom: string; // ⚠ 已停用（原「内层偏下品红光团」——用户「去掉粉色外晕」后 0 引用保留）
+  // ⚠ 已停用（2026-10-09 修正 24：用户「去掉所有粉红/粉紫描边 tabOutline*」——
+  //   原对角 X 型粉红描边已换成「白色细边 + 白 9 层顶缘柔光」，见 App.tsx 的 tabRim）
+  tabOutlineFrom: string;
+  tabOutlineMid: string;
+  tabOutlineTo: string;
+  // Tab 栏毛玻璃内容底（2026-10-09 修正 24：改**完全不透明**的竖向渐变、上浅下深——
+  // 用户「背后的内容完全不透出来，画面干净」；夜 #2A1D45→#1C1233 / 日 #F4F0FF→#E6DFFB）
+  tabGlassFrom: string;
+  tabGlassMid: string;
+  tabGlassTo: string;
+  // Tab 栏白色细边（2026-10-09 修正 24）：栏体的 1px 白压线 + 选中托的白边共用（夜 0.22 / 日 0.9）
+  tabEdge: string;
+  // Tab 栏外投影色（2026-10-09 修正 24）：深紫、向下柔和扩散（填充不透明 → 可以走 elevation）
+  tabShadow: string;
+  // 底部选中器的"毛玻璃"底色（2026-10-09 修正 24：改圆角方小托 = 白 夜0.10/日0.7 + 白细边）
+  tabBlobBg: string;
+  // 首页改版材质（2026-10-06 交互视频定版）：深紫玻璃卡面（半透明，隐约透出背景渐变）/
+  // 货币下拉悬浮面板玻璃 / 金属反光带 tint / 卡下外辉光色（配 SVG 径向渐变，透明度由组件控）
+  // / 预算条收尾高光（亮青头，正常与超支各一档）
+  homeGlassCard: string;
+  homePanelGlass: string;
+  homeMetalSheen: string;
+  // Hero 金额「笔画内流光」三色（2026-10-08 处方）：MaskedView 以金额文字作遮罩 + 陀螺仪/自动循环驱动；
+  // 亮芯≈纯白（2026-10-08 修正 19：白字叠浅光 = 看不见 → 改为「金属底色 + 近纯白亮芯」的亮度差方案）；
+  // 肩 A/B 色相不同 = 轻微彩虹偏色（渐变两端 = 同色 alpha 0，禁用 'transparent'）
+  homeAmountSheenCore: string;
+  homeAmountSheenShoulderA: string;
+  homeAmountSheenShoulderB: string;
+  // Hero 金额「金属底色」三段（2026-10-08 修正 19 处方 1）：数字本身 = 竖向金属渐变，
+  // 底色整体比纯白低一档 —— 给近纯白的流光亮芯留出亮度差
+  homeAmountMetalTop: string;
+  homeAmountMetalMid: string;
+  homeAmountMetalBottom: string;
+  // Hero 卡面扫光三色（2026-10-08 修正 20 处方 2）：宽光带（≈卡宽 70%、斜 20°）的亮芯 + 两肩；
+  // 亮芯 alpha 夜≈0.12（冷紫白）/ 日≈0.22（暖白），渐变两端 = 同色 alpha 0（禁 'transparent'）
+  homeCardSheenCore: string;
+  homeCardSheenShoulderA: string;
+  homeCardSheenShoulderB: string;
+  homeGlowUnder: string;
+  budgetFillHead: string;
+  budgetFillHeadOver: string;
+  // Hero 卡内预算面板（2026-10-06 按目标图回卡）：卡上内嵌玻璃底 + 白描边（日/夜成对）
+  homeHeroPanelText: string;
+  // 预算面板内文字/轨道（2026-10-07 第 5 轮新增；第 6 轮起日/夜同款）：
+  // 面板=深紫罗兰玻璃 → 白字 + 深轨道（与夜间一致）
+  homeBudgetLabel: string;
+  homeBudgetValue: string;
+  homeBudgetDim: string;
+  homeBudgetTrack: string;
   icon: string;
   avatarBg: string;
 
@@ -132,12 +218,37 @@ export const lightColors: ThemeColors = {
   netWorthHint: 'rgba(255,255,255,0.75)',
 
   // Hero 卡日间渐变：取样自参考图左卡（左上 #A383F1 → 右下 #8181FB）。
-  // 夜间三个值仅类型占位，夜间走 darkColors 里的 Glow/GlowMid/Deep
+  // 夜间三个值仅类型占位，夜间走 darkColors 里的 Glow/GlowMid/Deep；TopGlow 日间不渲染（占位）
   homeHeroGradientFrom: '#A383F1',
   homeHeroGradientTo: '#8181FB',
   homeHeroGlow: '#7D54CE',
   homeHeroGlowMid: '#3A2F62',
   homeHeroDeep: '#0A0D26',
+  homeHeroTopGlow: '#7856a2',
+  // Hero 卡下呼吸辉光（2026-10-07 批次6 按目标图卡下辉光带取样；日夜同值）
+  homeHeroUnderGlow: '#A855E8',
+  // 立体毛玻璃日间档（2026-10-07 第 6 轮定「亮白玻璃」；2026-10-09 修正 23 改「半透明」；
+  // 2026-10-09 修正 25 按用户处方改「银紫拉丝金属」）：
+  // 用户「日间的按钮和面板现在是玻璃，夜间是金属，日间要改成和夜间一样的金属质感」——
+  // 夜间读起来像金属的结构：表面不透明偏灰、边缘一条清晰锐利的细亮边（表面比亮边暗=暗面+亮棱的倒角）、
+  // 没有柔和光晕、投影干净利落。日间照此结构：
+  //   填充 **不透明** 3 段竖向渐变（亮 #ECE8F8 → 略暗 #D3CCEC → 中间调 #E0DAF3，降饱和、偏银灰，不透出 Hero 卡底），
+  //   描边 **白 0.95**（顶部/两侧锐利高光），底部 1px 深紫灰 glassEdgeShade，
+  //   柔光在 HomeScreen 的 glassPalette 里收窄到 ~1dp / 强度降档（glow 日 [0.10,0.05,0.02]）。
+  // ⚠ 铁律残留说明：半透明填充禁用 elevation/shadow*（Android 阴影会透过来在元件内侧烧出内框）——
+  // 日间填充改不透明后已可走 elevation（用户处方第 3 条明示），GlassLift 会自动切换；夜间档不动
+  homeGlassFillTop: '#ECE8F8',
+  homeGlassFillMid: '#D3CCEC',
+  homeGlassFillBottom: '#E0DAF3',
+  homeGlassBorder: 'rgba(255,255,255,0.95)',
+  glassEdgeShade: 'rgba(60,40,120,0.22)',
+  homeGlassShadow: '#3D2A7A',
+  // Hero 卡上玻璃件内容色日间档（第 6 轮·修正 3）：亮白玻璃上换深紫（= 预算面板文字同族）
+  homeGlassIcon: '#3B2A78',
+  homeGlassText: '#3B2A78',
+  homeGlassAccent: '#5B45E0',
+  // 图标统一色日间档 = 原太阳图标色（深紫，与面板文字同族）
+  homeIconColor: '#3B2A78',
 
   // 极光 shader 日间：浅薰衣草底上的柔和白紫流光（低饱和、靠 opacity 0.55 压淡）
   homeHeroAuroraDark: '#E7DEFC',
@@ -169,8 +280,10 @@ export const lightColors: ThemeColors = {
   expenseOver: '#E11D48',
   track: '#ECECF1',
 
-  budgetFillFrom: '#8B7CFF',
-  budgetFillTo: '#6C4DF6',
+  // 预算进度条 2026-10-07 批次5 按目标图取样改 3 停：浅蓝紫 → 亮紫（55%）→ 青
+  budgetFillFrom: '#A6B4FC',
+  budgetFillMid: '#D6B4FE',
+  budgetFillTo: '#42D0A1',
   budgetFillOverFrom: '#f1d6d6',
   budgetFillOverTo: '#E11D48',
 
@@ -186,6 +299,60 @@ export const lightColors: ThemeColors = {
   fabShine: 'rgba(255,255,255,0.25)',
   fabShadow: '#4B32D4',
   fabRipple: '#BFAEFF',
+  fabOrbGlassTop: '#D8CCFB',
+  fabOrbGlassFall: '#C3B0F9',
+  fabOrbGlassMid: '#A88CF1',
+  fabOrbGlassLow: '#8B6CFF',
+  fabOrbGlassEdge: '#7C5CFA',
+  fabOrbWaterLine: '#E6E6F8',
+  fabOrbFillTop: '#6F6BE3',
+  fabOrbFillMid: '#6360DA',
+  fabOrbFillLow: '#5854CF',
+  fabOrbFillBottom: '#4A45C0',
+  fabOrbAura: '#9C86E2',
+  fabOrbAuraBloom: '#A848E1',
+  tabOutlineFrom: '#5F4E8C',
+  tabOutlineMid: '#A64E7E',
+  tabOutlineTo: '#4C4A78',
+  // Tab 栏底（2026-10-09 修正 24：完全不透明竖向渐变；修正 25：日间改「银紫拉丝金属」，
+  // 与顶部按钮同一配方 —— 亮 #ECE8F8 → 略暗 #D3CCEC → 中间调 #E0DAF3，降饱和偏银灰，不再奶白）
+  tabGlassFrom: '#ECE8F8',
+  tabGlassMid: '#D3CCEC',
+  tabGlassTo: '#E0DAF3',
+  tabEdge: 'rgba(255,255,255,0.95)',
+  tabShadow: '#3D2A7A',
+  tabBlobBg: 'rgba(255,255,255,0.7)',
+  // 首页改版材质（2026-10-06 交互视频定版；日间同配方各自推导）：
+  // 深紫玻璃卡（半透明，隐约透出背景渐变）/ 下拉面板玻璃 / 金属反光带 tint（日间白度更高才看得见）
+  // / 卡下外辉光色 / 预算条收尾高光（亮青头）
+  // ⚠ 2026-10-07 第 6 轮（用户拍板）：「下面的日志也要用比较浅一点的，这个色调我 ok」→ 日间日卡回浅色档。
+  // 填充刻意 0.94 近不透明：Android elevation 阴影透不过去，才不会在卡内侧烧出一圈灰边
+  //（真机「日志框格没有渲染好」的根因：阴影透过 0.68 半透明卡面，web 渲染无此问题）
+  homeGlassCard: 'rgba(248,245,255,0.94)',
+  homePanelGlass: 'rgba(250,247,255,0.96)',
+  homeMetalSheen: 'rgba(255,255,255,0.55)',
+  // 日间笔画内流光（2026-10-08 修正 19）：暖白亮芯（≈纯白）+ 金/暖粉两肩
+  homeAmountSheenCore: 'rgba(255,250,235,1)',
+  homeAmountSheenShoulderA: 'rgba(255,236,200,0.34)',
+  homeAmountSheenShoulderB: 'rgba(255,214,226,0.34)',
+  // 日间金属底色（竖向）：白 → 淡紫白 → 白（比纯白低一档，给高光留空间）
+  homeAmountMetalTop: '#FFFFFF',
+  homeAmountMetalMid: '#E9E1FF',
+  homeAmountMetalBottom: '#FFFFFF',
+  // 日间卡面扫光：偏暖白亮芯 + 暖金/暖粉两肩（alpha 低，只在扫过时可见）
+  homeCardSheenCore: 'rgba(255,246,226,0.22)',
+  homeCardSheenShoulderA: 'rgba(255,238,205,0.09)',
+  homeCardSheenShoulderB: 'rgba(255,225,232,0.09)',
+  homeGlowUnder: '#8B6CFF',
+  budgetFillHead: '#A9FBE9',
+  budgetFillHeadOver: '#FFB3C1',
+  // Hero 卡内预算面板（2026-10-06 回卡）：日间 = 亮玻璃面板（明显浅过卡面）+ 深紫字一套
+  homeHeroPanelText: 'rgba(42,27,94,0.85)',
+  // 预算面板内文字/轨道日间档（2026-10-07 第 6 轮定版）：面板浅 → 字深紫
+  homeBudgetLabel: '#3B2A78',
+  homeBudgetValue: '#2A1B5E',
+  homeBudgetDim: 'rgba(42,27,94,0.62)',
+  homeBudgetTrack: '#DCD4F5',
   icon: '#1B1B22',
   avatarBg: '#EDEDF2',
 
@@ -216,13 +383,35 @@ export const darkColors: ThemeColors = {
   netWorthValue: '#FFFFFF',
   netWorthHint: 'rgba(255,255,255,0.55)',
 
-  // Hero 卡夜间渐变：取样自参考图右卡——右上角紫色光晕（#7750CF 系）沉入近黑深蓝
-  // （#0A0D26 系）。日间两个 Gradient 值仅类型占位，日间走 lightColors 的 From/To
+  // Hero 卡夜间渐变（2026-10-07 批次1：按新目标图逐像素取样拟合，RMSE≈5/255）：
+  // 底色 = 73° 陡对角 #1e0e40（左上）→ #22193d（中）→ #0d0921（右下）；
+  // 顶部光晕 = homeHeroTopGlow 径向层（圆心卡外上方 (0.70,-0.30)，r=0.83 卡宽，幂律 2.11）。
+  // 日间两个 Gradient 值仅类型占位，日间走 lightColors 的 From/To
   homeHeroGradientFrom: '#A383F1',
   homeHeroGradientTo: '#8181FB',
-  homeHeroGlow: '#7D54CE',
-  homeHeroGlowMid: '#3A2F62',
-  homeHeroDeep: '#0A0D26',
+  homeHeroGlow: '#1e0e40',
+  homeHeroGlowMid: '#22193d',
+  homeHeroDeep: '#0d0921',
+  homeHeroTopGlow: '#7856a2',
+  // Hero 卡下呼吸辉光（2026-10-07 批次6 按目标图卡下辉光带取样；日夜同值）
+  homeHeroUnderGlow: '#A855E8',
+  // 立体毛玻璃夜间档（GlassLift；2026-10-07 晚按目标图逐像素重取样：
+  // 目标图卡上件填充几近平坦 ≈白 18%（上 0.20/下 0.16，不再是 0.30→0.10 的奶白渐变）；
+  // 边缘线 0.28 与边缘柔光（GlassLift 内侧 9 层描边）叠加后 ≈白 0.42，与目标图顶缘实测 0.437 一致）
+  homeGlassFillTop: 'rgba(255,255,255,0.20)',
+  // 修正 25 加中停 = 原两段的线性中值（0.18）→ 夜间渲染与旧两段版本逐像素一致
+  homeGlassFillMid: 'rgba(255,255,255,0.18)',
+  homeGlassFillBottom: 'rgba(255,255,255,0.16)',
+  homeGlassBorder: 'rgba(255,255,255,0.28)',
+  // 夜间档不消费（夜间倒角由 homeGlassBorder 全圈白边承担；此值占位保证接口成对）
+  glassEdgeShade: 'rgba(12,6,30,0.4)',
+  homeGlassShadow: '#12082B',
+  // Hero 卡上玻璃件内容色夜间档（= 原 netWorthLabel/Value/Accent 夜间值，零变化）
+  homeGlassIcon: 'rgba(255,255,255,0.72)',
+  homeGlassText: '#FFFFFF',
+  homeGlassAccent: '#C3B5FF',
+  // 图标统一色夜间档 = 原上下箭头色（淡紫，深卡上清晰）
+  homeIconColor: '#C3B5FF',
 
   // 极光 shader 夜间：深紫底上柔和的同族紫（三段色收拢降低对比，亮丝不再近白——
   // 2026-09-25 用户定版方向：安静的纹理，不喧宾夺主）
@@ -255,8 +444,10 @@ export const darkColors: ThemeColors = {
   expenseOver: '#FB7185',
   track: '#26262E',
 
-  budgetFillFrom: '#8B7CFF',
-  budgetFillTo: '#6C4DF6',
+  // 预算进度条 2026-10-07 批次5 按目标图取样改 3 停：浅蓝紫 → 亮紫（55%）→ 青
+  budgetFillFrom: '#A6B4FC',
+  budgetFillMid: '#D6B4FE',
+  budgetFillTo: '#42D0A1',
   budgetFillOverFrom: '#fdb2bd',
   budgetFillOverTo: '#E11D48',
 
@@ -272,6 +463,59 @@ export const darkColors: ThemeColors = {
   fabShine: 'rgba(255,255,255,0.18)',
   fabShadow: '#3B28B8',
   fabRipple: '#BFAEFF',
+  // 夜间整体收暗一档（用户反馈「夜间偏亮」；日间保持亮版，两套球体不再同值）
+  fabOrbGlassTop: '#C3B7EA',
+  fabOrbGlassFall: '#AC9EE3',
+  fabOrbGlassMid: '#9184DC',
+  fabOrbGlassLow: '#7A6CD4',
+  fabOrbGlassEdge: '#6F61CF',
+  fabOrbWaterLine: '#CDC9E8',
+  fabOrbFillTop: '#625EC9',
+  fabOrbFillMid: '#5754C1',
+  fabOrbFillLow: '#4D49B4',
+  fabOrbFillBottom: '#403BA4',
+  fabOrbAura: '#8069C9',
+  fabOrbAuraBloom: '#8F37C4',
+  tabOutlineFrom: '#5F4E8C',
+  tabOutlineMid: '#A64E7E',
+  tabOutlineTo: '#4C4A78',
+  // ⚠ 已停用（原「深紫 → 近黑」近覆盖渐变 → 修正 24 改不透光「上浅下深」）
+  // Tab 栏底（2026-10-09 修正 24）：完全不透明竖向渐变（夜 #2A1D45 → #1C1233）
+  tabGlassFrom: '#2A1D45',
+  tabGlassMid: '#231941',
+  tabGlassTo: '#1C1233',
+  tabEdge: 'rgba(255,255,255,0.22)',
+  tabShadow: '#12082B',
+  tabBlobBg: 'rgba(255,255,255,0.10)',
+  // 首页改版材质（2026-10-06 交互视频定版）：深紫玻璃卡（半透明，隐约透出背景渐变）/
+  // 下拉面板玻璃（覆盖内容，透明度更高保可读）/ 金属反光带 tint / 卡下外辉光色 /
+  // 预算条收尾高光（亮青头）
+  homeGlassCard: 'rgba(26,16,46,0.94)',
+  homePanelGlass: 'rgba(24,14,42,0.96)',
+  homeMetalSheen: 'rgba(255,255,255,0.16)',
+  // 夜间笔画内流光（2026-10-08 修正 19）：纯白亮芯 + 冷蓝/粉紫两肩
+  homeAmountSheenCore: 'rgba(255,255,255,1)',
+  homeAmountSheenShoulderA: 'rgba(178,200,255,0.32)',
+  homeAmountSheenShoulderB: 'rgba(240,205,255,0.32)',
+  // 夜间金属底色（竖向）：拉丝银紫 —— 白 → 紫灰 → 淡紫白
+  homeAmountMetalTop: '#FFFFFF',
+  homeAmountMetalMid: '#CFC4F5',
+  homeAmountMetalBottom: '#F2EEFF',
+  // 夜间卡面扫光：偏冷紫白亮芯 + 冷蓝/粉紫两肩（alpha 低，只在扫过时可见）
+  homeCardSheenCore: 'rgba(224,216,255,0.12)',
+  homeCardSheenShoulderA: 'rgba(190,205,255,0.05)',
+  homeCardSheenShoulderB: 'rgba(235,215,255,0.05)',
+  homeGlowUnder: '#7C5CFA',
+  budgetFillHead: '#A9FBE9',
+  budgetFillHeadOver: '#FFB3C1',
+  // Hero 卡内预算面板（2026-10-06 回卡）：深紫底上白 12% 玻璃 + 白 10% 描边
+  // 面板「剩余预算」行文字（2026-10-07 批次5 按目标图取样 ≈0.88 白；夜间不改）
+  homeHeroPanelText: 'rgba(255,255,255,0.88)',
+  // 预算面板内文字/轨道夜间档（2026-10-07 第 5 轮新增 token；取原观感值，夜间零变化）
+  homeBudgetLabel: 'rgba(255,255,255,0.72)',
+  homeBudgetValue: '#FFFFFF',
+  homeBudgetDim: 'rgba(255,255,255,0.55)',
+  homeBudgetTrack: '#26262E',
   icon: '#F4F4F6',
   avatarBg: '#202028',
 

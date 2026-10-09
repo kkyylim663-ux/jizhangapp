@@ -321,13 +321,6 @@ export default function ProfileScreen({ navigation }: any) {
               onPress={() => navigation.navigate(ROUTES.FEEDBACK)}
               colors={colors}
             />
-            {/* 手势诊断入口（临时）：定位账本弹层上滑滚不动，诊断完删除 */}
-            <SettingsRow
-              icon="build-outline"
-              title="手势诊断（临时）"
-              onPress={() => navigation.navigate('手势诊断' as never)}
-              colors={colors}
-            />
             <SettingsRow
               icon="information-circle-outline"
               title={tr("profile.about")}

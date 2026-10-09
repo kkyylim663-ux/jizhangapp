@@ -1,3 +1,5 @@
+import { i18n } from '../i18n';
+
 export interface CurrencyOption {
   code: string;
   name: string;
@@ -237,3 +239,194 @@ export const CURRENCY_FLAG: Record<string, string> = {
   // —— 特殊/超国家币种覆盖 ——
   ANG: '🇨🇼', // 荷属安的列斯已解体，AN 区旗在多数字体不渲染，用库拉索旗（ANG 现流通地）
 };
+
+// ---------- 货币英文名（内置表）----------
+// Hermes 在部分安卓机型上没有 Intl.DisplayNames，所以英文名直接内置，不依赖系统 API。
+const CURRENCY_EN_NAMES: Record<string, string> = {
+  MYR: 'Malaysian Ringgit',
+  CNY: 'Chinese Yuan',
+  USD: 'US Dollar',
+  EUR: 'Euro',
+  GBP: 'British Pound',
+  JPY: 'Japanese Yen',
+  SGD: 'Singapore Dollar',
+  HKD: 'Hong Kong Dollar',
+  TWD: 'New Taiwan Dollar',
+  AUD: 'Australian Dollar',
+  CAD: 'Canadian Dollar',
+  THB: 'Thai Baht',
+  KRW: 'South Korean Won',
+  VND: 'Vietnamese Dong',
+  PHP: 'Philippine Peso',
+  IDR: 'Indonesian Rupiah',
+  INR: 'Indian Rupee',
+  CHF: 'Swiss Franc',
+  SEK: 'Swedish Krona',
+  NOK: 'Norwegian Krone',
+  DKK: 'Danish Krone',
+  RUB: 'Russian Ruble',
+  NZD: 'New Zealand Dollar',
+  BND: 'Brunei Dollar',
+  PKR: 'Pakistani Rupee',
+  BDT: 'Bangladeshi Taka',
+  LKR: 'Sri Lankan Rupee',
+  MMK: 'Myanmar Kyat',
+  KHR: 'Cambodian Riel',
+  LAK: 'Lao Kip',
+  AED: 'UAE Dirham',
+  SAR: 'Saudi Riyal',
+  QAR: 'Qatari Riyal',
+  TRY: 'Turkish Lira',
+  EGP: 'Egyptian Pound',
+  ZAR: 'South African Rand',
+  NGN: 'Nigerian Naira',
+  MXN: 'Mexican Peso',
+  BRL: 'Brazilian Real',
+  ARS: 'Argentine Peso',
+  CLP: 'Chilean Peso',
+  COP: 'Colombian Peso',
+  PLN: 'Polish Zloty',
+  CZK: 'Czech Koruna',
+  HUF: 'Hungarian Forint',
+  RON: 'Romanian Leu',
+  UAH: 'Ukrainian Hryvnia',
+  MOP: 'Macanese Pataca',
+  AFN: 'Afghan Afghani',
+  ALL: 'Albanian Lek',
+  AMD: 'Armenian Dram',
+  ANG: 'Netherlands Antillean Guilder',
+  AOA: 'Angolan Kwanza',
+  AWG: 'Aruban Florin',
+  AZN: 'Azerbaijani Manat',
+  BAM: 'Bosnia-Herzegovina Convertible Mark',
+  BBD: 'Barbadian Dollar',
+  BGN: 'Bulgarian Lev',
+  BHD: 'Bahraini Dinar',
+  BIF: 'Burundian Franc',
+  BMD: 'Bermudian Dollar',
+  BOB: 'Bolivian Boliviano',
+  BSD: 'Bahamian Dollar',
+  BTN: 'Bhutanese Ngultrum',
+  BWP: 'Botswana Pula',
+  BYN: 'Belarusian Ruble',
+  BZD: 'Belize Dollar',
+  CDF: 'Congolese Franc',
+  CRC: 'Costa Rican Colón',
+  CUP: 'Cuban Peso',
+  CVE: 'Cape Verdean Escudo',
+  DJF: 'Djiboutian Franc',
+  DOP: 'Dominican Peso',
+  DZD: 'Algerian Dinar',
+  ERN: 'Eritrean Nakfa',
+  ETB: 'Ethiopian Birr',
+  FJD: 'Fijian Dollar',
+  FKP: 'Falkland Islands Pound',
+  GEL: 'Georgian Lari',
+  GHS: 'Ghanaian Cedi',
+  GIP: 'Gibraltar Pound',
+  GMD: 'Gambian Dalasi',
+  GNF: 'Guinean Franc',
+  GTQ: 'Guatemalan Quetzal',
+  GYD: 'Guyanese Dollar',
+  HNL: 'Honduran Lempira',
+  HTG: 'Haitian Gourde',
+  IQD: 'Iraqi Dinar',
+  IRR: 'Iranian Rial',
+  ISK: 'Icelandic Króna',
+  JMD: 'Jamaican Dollar',
+  JOD: 'Jordanian Dinar',
+  KES: 'Kenyan Shilling',
+  KGS: 'Kyrgyzstani Som',
+  KMF: 'Comorian Franc',
+  KPW: 'North Korean Won',
+  KWD: 'Kuwaiti Dinar',
+  KYD: 'Cayman Islands Dollar',
+  KZT: 'Kazakhstani Tenge',
+  LBP: 'Lebanese Pound',
+  LRD: 'Liberian Dollar',
+  LSL: 'Lesotho Loti',
+  LYD: 'Libyan Dinar',
+  MAD: 'Moroccan Dirham',
+  MDL: 'Moldovan Leu',
+  MGA: 'Malagasy Ariary',
+  MKD: 'Macedonian Denar',
+  MNT: 'Mongolian Tögrög',
+  MRU: 'Mauritanian Ouguiya',
+  MUR: 'Mauritian Rupee',
+  MVR: 'Maldivian Rufiyaa',
+  MWK: 'Malawian Kwacha',
+  NIO: 'Nicaraguan Córdoba',
+  OMR: 'Omani Rial',
+  PAB: 'Panamanian Balboa',
+  PEN: 'Peruvian Sol',
+  PGK: 'Papua New Guinean Kina',
+  PYG: 'Paraguayan Guarani',
+  RSD: 'Serbian Dinar',
+  RWF: 'Rwandan Franc',
+  SBD: 'Solomon Islands Dollar',
+  SCR: 'Seychellois Rupee',
+  SDG: 'Sudanese Pound',
+  SHP: 'St. Helena Pound',
+  SLE: 'Sierra Leonean Leone',
+  SOS: 'Somali Shilling',
+  SRD: 'Surinamese Dollar',
+  SSP: 'South Sudanese Pound',
+  STN: 'São Tomé & Príncipe Dobra',
+  SVC: 'Salvadoran Colón',
+  SYP: 'Syrian Pound',
+  SZL: 'Swazi Lilangeni',
+  TJS: 'Tajikistani Somoni',
+  TMT: 'Turkmenistani Manat',
+  TND: 'Tunisian Dinar',
+  TOP: 'Tongan Paʻanga',
+  TTD: 'Trinidad & Tobago Dollar',
+  TZS: 'Tanzanian Shilling',
+  UGX: 'Ugandan Shilling',
+  UYU: 'Uruguayan Peso',
+  UZS: 'Uzbekistani Som',
+  VES: 'Venezuelan Bolívar',
+  VUV: 'Vanuatu Vatu',
+  WST: 'Samoan Tala',
+  YER: 'Yemeni Rial',
+  ZMW: 'Zambian Kwacha',
+  ZWL: 'Zimbabwean Dollar',
+};
+
+/** 币种的英文名（内置表优先，查不到再试 Intl.DisplayNames），都没有返回 null */
+export function getEnglishCurrencyName(code: string): string | null {
+  return CURRENCY_EN_NAMES[code] ?? englishCurrencyName(code);
+}
+
+// ---------- 货币显示名跟随界面语言 ----------
+// 英文界面:优先用上面的内置英文名表(如 MYR → Malaysian Ringgit),查不到再试 Intl.DisplayNames;
+// 都没有才回退中文名。
+type DisplayNamesLike = { of: (code: string) => string | undefined };
+
+let enCurrencyNames: DisplayNamesLike | null | undefined;
+
+function englishCurrencyName(code: string): string | null {
+  if (enCurrencyNames === undefined) {
+    try {
+      const DisplayNames = (Intl as unknown as {
+        DisplayNames?: new (locales: string[], options: { type: string }) => DisplayNamesLike;
+      }).DisplayNames;
+      enCurrencyNames = DisplayNames ? new DisplayNames(['en'], { type: 'currency' }) : null;
+    } catch {
+      enCurrencyNames = null;
+    }
+  }
+  try {
+    return enCurrencyNames ? enCurrencyNames.of(code) ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 界面语言对应的货币显示名:中文界面显示数据源中文名,英文界面显示英文名 */
+export function currencyDisplayName(c: CurrencyOption): string {
+  if (!i18n.locale.toLowerCase().startsWith('zh')) {
+    const en = getEnglishCurrencyName(c.code);
+    if (en) return en;
+  }
+  return c.name;
+}

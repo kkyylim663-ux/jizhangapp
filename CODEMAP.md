@@ -56,6 +56,7 @@ src/
 │  ├─ DateRangePickerSheet.tsx
 │  ├─ DonutChart.tsx        # SVG 环形图
 │  ├─ PressableScale.tsx    # 按压缩放反馈
+│  ├─ HeroMetalSheen.tsx    # Hero 金额笔画内流光 + 卡面扫光（MaskedView + 陀螺仪/自动循环，同一光源、同一 sweepPos）
 │  └─ ReceiptCameraModal.tsx    # 拍小票
 ├─ screens/                 # 18 个屏幕（见下文导航树）
 ├─ theme/
@@ -125,6 +126,7 @@ push 进的是**当前所在 Stack** 自己的栈，`goBack()` 天然回到正�
 | 金额输入 / 计算器键盘 | `AmountCalculatorKeypad` `AmountEntryPanel` `MoneyInput` | `useAmountExpression` `useMoneyCentsInput` `amountExpression.ts` |
 | 交易类型/转账/手续费逻辑 | `AddTransactionScreen` | `AppContext.tsx`（类型定义+持久化）、`types/index.ts` |
 | 首页卡片 / 预算进度 / 月份切换 | `HomeScreen` | `AppContext.tsx`、`DonutChart`（若涉及图表） |
+| Hero 金额流光 / 卡面扫光 / 陀螺仪倾斜 | `src/components/HeroMetalSheen.tsx` | `HomeScreen`（金额区/卡顶光缝/卡面扫光插入层/三处触发）、`theme.homeAmount*` 与 `theme.homeCardSheen*` |
 | 账单明细分组 | `TransactionListScreen` | `AppContext.tsx` |
 | 资产账户 / 信用卡字段 | `AssetScreen` | `creditCard.ts`（可用额度≠欠费金额）、`AppContext.tsx` |
 | 统计图表 | `ReportScreen` `DonutChart` | `AppContext.tsx`、月份切换逻辑 |

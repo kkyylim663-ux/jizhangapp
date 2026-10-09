@@ -2,7 +2,7 @@
 // - 计划付款列表:卡片(名称/金额/周期/下一扣账日/自动状态),点卡片进编辑页,长按删除
 // - 底部固定"＋ 新增规划"按钮 → 跳转整页表单(PlanFormScreen),不用弹窗
 // - 未来模块(储蓄目标等)按"模块卡"组织,各占一卡
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -41,6 +41,9 @@ export default function FinancialPlanningScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
   const setTabBarForceHidden = useTabBarForceHide();
+  // 头部右侧"添加规划"按钮的实测占位宽(本体+marginLeft)，回填右栏 minWidth：
+  // 英文标题(Finance Planning)更长时左右 flex:1 等分装不下按钮，不加 minWidth 按钮会溢出压到标题上
+  const [addBtnSlotW, setAddBtnSlotW] = useState(0);
   // 本页面（财务规划）**永远不显示底部导航栏**：与添加/编辑计划页同一语义——
   // 从设置项 push 进来的二级页不该有 Tab 栏。只要前台就一直强制隐藏，卸载时才交还。
   // 失焦时【不放栏】：从添加计划 goBack 回本页的转场里，本页的"聚焦隐藏"先执行、
@@ -98,24 +101,36 @@ export default function FinancialPlanningScreen({ navigation }: any) {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* 头部:左右两个 flex:1 侧栏夹住标题,保证标题严格居中(右侧按钮比返回键宽,不能用 space-between) */}
+      {/* 头部:左右两个 flex:1 侧栏夹住标题,保证标题严格居中(右侧按钮比返回键宽,不能用 space-between)。
+          英文标题(Finance Planning)比中文长得多,等分时右栏装不下按钮、按钮会溢出压到标题上——
+          右下按钮实测占位宽回填右栏 minWidth:中文左右仍等分(标题死居中),英文时右栏保底、
+          左栏让位,标题整体左移完全可见 */}
       <View style={styles.header}>
         <View style={styles.headerSide}>
           <PressableScale onPress={() => navigation.goBack()} style={styles.backBtn} activeScale={0.92}>
             <Ionicons name="chevron-back" size={22} color={colors.textPrimary} />
           </PressableScale>
         </View>
-        <Text style={styles.headerTitle}>{tr('finance.title')}</Text>
-        <View style={styles.headerSideRight}>
-          {/* 右上角"添加项目"按钮(与资产页头部"添加账户"同款规格) */}
-          <PressableScale
-            style={styles.headerAddBtn}
-            activeScale={0.92}
-            onPress={() => navigation.navigate(ROUTES.FINANCE_PLAN_EDIT)}
+        <Text style={styles.headerTitle} numberOfLines={1}>{tr('finance.title')}</Text>
+        <View style={[styles.headerSideRight, addBtnSlotW > 0 && { minWidth: addBtnSlotW }]}>
+          {/* 右上角"添加规划"按钮(与资产页头部"添加账户"同款规格)。
+              包一层测量 View:按钮实测占位宽(本体+marginLeft)回填右栏 minWidth,防溢出压标题 */}
+          <View
+            style={styles.headerAddBtnSlot}
+            onLayout={(e) => {
+              const w = e.nativeEvent.layout.width;
+              if (Math.abs(w - addBtnSlotW) > 0.5) setAddBtnSlotW(w);
+            }}
           >
-            <Ionicons name="add" size={16} color={colors.bg} />
-            <Text style={styles.headerAddBtnText}>{tr('finance.addPlan')}</Text>
-          </PressableScale>
+            <PressableScale
+              style={styles.headerAddBtn}
+              activeScale={0.92}
+              onPress={() => navigation.navigate(ROUTES.FINANCE_PLAN_EDIT)}
+            >
+              <Ionicons name="add" size={16} color={colors.bg} />
+              <Text style={styles.headerAddBtnText}>{tr('finance.addPlan')}</Text>
+            </PressableScale>
+          </View>
         </View>
       </View>
 
@@ -219,8 +234,9 @@ function makeStyles(colors: ThemeColors) {
       justifyContent: 'space-between',
       paddingHorizontal: 20,
     },
-    // 头部左右侧栏等宽(flex:1),把标题夹在正中间
-    headerSide: { flex: 1, flexDirection: 'row' },
+    // 头部左右侧栏等宽(flex:1),把标题夹在正中间;minWidth=内容兜底:
+    // 英文标题更长时右栏由实测按钮宽保底(样式内联 minWidth),左栏退化到返回键宽 40
+    headerSide: { flex: 1, flexDirection: 'row', minWidth: 40 },
     headerSideRight: { flex: 1, flexDirection: 'row', justifyContent: 'flex-end' },
     backBtn: {
       width: 40,
@@ -232,8 +248,11 @@ function makeStyles(colors: ThemeColors) {
       alignItems: 'center',
       justifyContent: 'center',
     },
-    headerTitle: { fontSize: 18, fontWeight: '700', color: colors.textPrimary },
-    // 右上角"添加项目"按钮:与资产页头部"添加账户"同款规格
+    // flexShrink:极小屏兜底——实在装不下时标题省略号收窄,绝不压到两侧
+    headerTitle: { fontSize: 18, fontWeight: '700', color: colors.textPrimary, flexShrink: 1 },
+    // 按钮测量槽:宽=按钮本体+marginLeft(onLayout 回填右栏 minWidth)
+    headerAddBtnSlot: { flexDirection: 'row' },
+    // 右上角"添加规划"按钮:与资产页头部"添加账户"同款规格
     headerAddBtn: {
       flexDirection: 'row',
       alignItems: 'center',
