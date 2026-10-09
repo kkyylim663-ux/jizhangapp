@@ -35,14 +35,15 @@ npx tsc --noEmit        # 本项目无 lint/测试，类型检查是唯一自动
 ## 二、目录地图
 
 ```
-App.tsx                     # 入口：Provider 层级 + 全部导航（Tab + 两个 Stack）
+App.tsx                     # 入口：Provider 层级 + 全部导航（Tab + 两个 Stack）+ 启动时加载 Inter 字体（未就绪先铺主题底色，失败回退系统字体）
 app.json / eas.json         # Expo & EAS 配置
+assets/fonts/               # Inter 4.1 静态字重（Regular/Medium/SemiBold/Bold，OFL）：只给数字与拉丁文本用，中文走系统字体
 src/
 ├─ config/aiConfig.ts       # OpenRouter API 配置（模型名、密钥）
 ├─ constants/uncategorized.ts
 ├─ context/
 │  ├─ AppContext.tsx        # ★ 单一全局 Context：全部业务数据 + AsyncStorage 持久化
-│  ├─ ThemeModeContext.tsx  # 深色模式偏好（跟随系统 + 手动覆盖）
+│  ├─ ThemeModeContext.tsx  # 主题模式：默认「跟随系统」（手机深色/省电模式自动变夜间），可固定日间/夜间；含一次性迁移标记 @jizhang/themeModeV2
 │  └─ TabBarAutoHideContext.tsx  # 滚动时浮空 TabBar 自动收起
 ├─ hooks/
 │  ├─ useAmountExpression.ts    # 金额四则表达式
@@ -60,9 +61,11 @@ src/
 │  └─ ReceiptCameraModal.tsx    # 拍小票
 ├─ screens/                 # 18 个屏幕（见下文导航树）
 ├─ theme/
-│  ├─ theme.ts              # ★ 设计令牌：上半部旧颜色层（lightColors/darkColors，兼容期保留）+ 下半部语义层（semantic 颜色 / typography 字号 / spacing / radius / elevation）
+│  ├─ theme.ts              # ★ 设计令牌：上半部旧颜色层（lightColors/darkColors，兼容期保留）+ 下半部语义层（semantic 颜色 / typography 字号 / spacing / radius / elevation）+ 字体层（fontFamily / fontFamilyByWeight / canUseInterText）
 │  ├─ motion.ts             # 动效令牌：spring 350/400/180 · fade 150 · 数字滚动 600 · 减弱动态效果降级档
-│  └─ useTheme.ts           # 取当前主题：colors + semantic + typography + spacing + layout + radius + elevation + motion（深色模式联动）
+│  ├─ useLayout.ts          # 版型分级：宽 compact/regular/large + 矮屏 short + 平板 560 收窄（页边距/键高/类别列数/Hero 字号/行高）
+│  ├─ useSystemColorScheme.ts  # ★ 实时系统外观：自订阅 Appearance + web matchMedia + 回前台重读（RN 自带 useColorScheme 在 web 上不跟随系统变化，勿用）
+│  └─ useTheme.ts           # 取当前主题：colors + semantic + typography + spacing + layout + radius + elevation + motion + fontFamily（深色模式联动）
 ├─ types/index.ts           # ★ 共享类型，改数据结构先改这里
 └─ utils/
    ├─ amountExpression.ts   # 四则表达式求值

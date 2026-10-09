@@ -416,7 +416,7 @@ export const zh = {
     rangeYear: '年',
     rangeMonth: '月',
     rangeWeek: '周',
-    rangeCustom: '定期',
+    rangeCustom: '自定义',
     noItems: '没有明细',
     noNote: '(无备注)',
     dateInvalidMsg: '请按 YYYY-MM-DD 格式填写',
@@ -488,6 +488,8 @@ export const zh = {
   },
   theme: {
     system: '跟随系统',
+    // 分段开关里的短标签（跟随系统 / 日间 / 夜间）
+    segSystem: '系统',
     light: '浅色模式',
     dark: '深色模式',
     segLight: '日间',
@@ -631,7 +633,7 @@ export const zh = {
     perYear: '年',
     activePlans: '{n} 个活跃计划',
     noPlans: '还没有财务规划项',
-    noPlansHint: '点右下角 + 添加房租、订阅等固定支出',
+    noPlansHint: '点「添加规划」添加房租、订阅等固定支出',
     deletePlan: '删除计划',
     deletePlanMsg: '删除后已入账的记录保留，之后不再自动扣账。',
     cancel: '取消',

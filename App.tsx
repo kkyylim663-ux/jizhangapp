@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
+import { useFonts } from 'expo-font';
 import { View, StyleSheet, Pressable, Animated, Platform, StyleProp, ViewStyle } from 'react-native';
 import { NavigationContainer, CommonActions, DarkTheme, DefaultTheme, useNavigation } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -43,6 +44,10 @@ import {
   useTabBarAutoHide,
 } from './src/context/TabBarAutoHideContext';
 import { useTheme } from './src/theme/useTheme';
+import { useSystemColorScheme } from './src/theme/useSystemColorScheme';
+// 启动占位页只需要"现有主题底色"这一个令牌：此时 ThemeModeProvider 还没挂载，
+// useTheme() 用不了（它会抛错），只能直接引 token
+import { lightColors, darkColors } from './src/theme/theme';
 import { hapticLight, hapticSelection } from './src/utils/haptics';
 import HomeScreen from './src/screens/HomeScreen';
 import AddTransactionScreen from './src/screens/AddTransactionScreen';
@@ -744,6 +749,35 @@ function AppContent() {
 }
 
 export default function App() {
+  // 打包字体（计划 8.2 第 1 条 / T01b）：4 档 Inter 静态字重随包发，只覆盖数字 / 拉丁字形，
+  // 中文继续走系统字体。键名 = 字体内部 PostScript 名，必须与 src/theme/theme.ts 的
+  // fontFamily 令牌保持一致（改一处要同步另一处）。
+  const [fontsLoaded, fontError] = useFonts({
+    'Inter-Regular': require('./assets/fonts/Inter-Regular.ttf'),
+    'Inter-Medium': require('./assets/fonts/Inter-Medium.ttf'),
+    'Inter-SemiBold': require('./assets/fonts/Inter-SemiBold.ttf'),
+    'Inter-Bold': require('./assets/fonts/Inter-Bold.ttf'),
+  });
+  // 占位页底色：ThemeModeProvider 还没挂载（它在下面才渲染），读不到用户在设置项里选的
+  // 深色偏好，只能按系统外观取 theme.ts 的既有底色令牌——只影响字体加载这一瞬间的画面。
+  // ⚠ 用自研的 useSystemColorScheme（RN 自带 useColorScheme 在 web 上不跟随系统变化，见该文件头注释）
+  const systemScheme = useSystemColorScheme();
+
+  // 字体未就绪：先铺满屏幕一层纯底色（不写任何文字）——不给用户看白屏，也不会闪一下
+  // 系统字体再切换；加载失败（fontError 非空）照常往下渲染 App，退回系统字体，绝不卡死。
+  // 不引 expo-splash-screen：app.json 现在没有任何 splash 插件配置，加它要动 app.json
+  // 和原生工程，超出本任务边界。
+  if (!fontsLoaded && !fontError) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: systemScheme === 'dark' ? darkColors.bg : lightColors.bg,
+        }}
+      />
+    );
+  }
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>

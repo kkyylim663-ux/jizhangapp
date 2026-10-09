@@ -275,8 +275,8 @@ export default function ProfileScreen({ navigation }: any) {
             )}
           </View>
 
-          {/* 6. 深色模式：行内分段开关（日间 | 夜间）——跟随系统选项去除，
-              旧存档 system 已在 ThemeModeProvider 启动时按设备外观迁移定死 */}
+          {/* 6. 深色模式：行内分段开关（系统 | 日间 | 夜间）——默认「跟随系统」，
+              手机深色 / 省电模式进入深色时 App 自动变夜间；选日间 / 夜间则固定不动 */}
           <Text style={styles.sectionTitle}>{tr('profile.appearance')}</Text>
           <View style={styles.groupCard}>
             <View style={styles.settingsRow}>
@@ -288,10 +288,11 @@ export default function ProfileScreen({ navigation }: any) {
               </View>
               <SegmentedControl
                 options={[
+                  { label: tr('theme.segSystem'), value: 'system' },
                   { label: tr('theme.segLight'), value: 'light' },
                   { label: tr('theme.segDark'), value: 'dark' },
                 ]}
-                selected={themeMode === 'system' ? 'light' : themeMode}
+                selected={themeMode}
                 onSelect={(v) => {
                   hapticSelection();
                   setThemeMode(v as ThemeMode);

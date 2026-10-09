@@ -751,3 +751,47 @@ export const darkElevation: Elevation = {
   level1: {},
   level2: { boxShadow: '0px 8px 24px rgba(0,0,0,0.50)' },
 };
+
+/**
+ * 打包字体层（计划 8.2 第 1 条 / 任务 T01b）：Inter 4.1 静态字重，随 App 打包，
+ * 数字 / RM / 英文在任何手机上完全一致；中文继续走系统字体（中文字体包几 MB，太大）。
+ * 只带 400 / 500 / 600 / 700 四档（UI_RULES 第 2 节允许的全部字重）。
+ * ⚠ 这里的值 = 字体内部 PostScript 名，也是 App.tsx 里 useFonts 的键 —— 改一处必须同步另一处。
+ * ⚠ 本任务只提供令牌，页面先别直接用：等 T03 的 AppText 统一按 canUseInterText() 判断后套用。
+ */
+export const fontFamily = {
+  regular: 'Inter-Regular',
+  medium: 'Inter-Medium',
+  semiBold: 'Inter-SemiBold',
+  bold: 'Inter-Bold',
+} as const;
+
+export type FontFamily = typeof fontFamily;
+
+/** fontFamily 令牌取值的联合（'Inter-Regular' | 'Inter-Medium' | 'Inter-SemiBold' | 'Inter-Bold'） */
+export type FontFamilyName = FontFamily[keyof FontFamily];
+
+/** typography 十一档里实际出现过的字重（UI_RULES 第 2 节：只用这四档） */
+export type FontWeightKey = '400' | '500' | '600' | '700';
+
+/** 字重 → Inter 家族：400→regular / 500→medium / 600→semiBold / 700→bold（新字体只认家族名，不认 fontWeight） */
+export const fontFamilyByWeight: Record<FontWeightKey, FontFamilyName> = {
+  '400': fontFamily.regular,
+  '500': fontFamily.medium,
+  '600': fontFamily.semiBold,
+  '700': fontFamily.bold,
+};
+
+/**
+ * Inter 静态字体只有数字 / 拉丁字母 / 拉丁符号字形，没有中文、日文、emoji。
+ * 允许范围：空白 + ASCII 可见字符 + Latin-1 + Latin Extended-A/B + 常用标点 / 货币 / 箭头 / 上下标 / 数学符号。
+ * 中文、日文、韩文、西里尔、泰文、emoji（含代理对）全部落在范围外 → 返回 false。
+ * ⚠ 纯函数，供 T03 的 AppText 使用：返回 true 才套 Inter 家族名，false 走系统字体
+ *   （否则中文/emoji 会被 Inter 盖掉，渲染成方框）。
+ */
+const INTER_SAFE_RE = /^[\s\u0020-\u007E\u00A0-\u024F\u2000-\u206F\u20A0-\u20BF\u2190-\u21FF\u2070-\u209F\u2200-\u22FF]*$/;
+
+/** 这段文本能不能用 Inter：整段都是数字 / 拉丁字母 / 拉丁符号才 true，含任何非拉丁字符一律 false（空串视为 true） */
+export function canUseInterText(text: string): boolean {
+  return INTER_SAFE_RE.test(text);
+}
