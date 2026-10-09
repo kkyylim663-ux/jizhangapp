@@ -170,6 +170,7 @@ export const zh = {
     itemsCount: '%{count} 项',
     catEditHint: '按住分类行拖动可调整顺序 · 点 − 删除分类',
     pickIconTitle: '选择图标',
+    manageCategories: '管理类别',
     deleteLastInGroupMsg: '「%{name}」是「%{group}」的最后一个分类，删除后该大组将一并移除，确定吗？',
     headerAdd: '新增',
     headerCollapse: '收起',

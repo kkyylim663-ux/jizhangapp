@@ -9,6 +9,7 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useTheme } from '../../theme/useTheme';
+import { useLayout } from '../../theme/useLayout';
 import { useT } from '../../i18n/LanguageContext';
 import AppText from '../ui/AppText';
 import Button from '../ui/Button';
@@ -44,6 +45,8 @@ export function TransactionTypeHeader({
   showTypeSwitch = true,
 }: Props) {
   const { semantic, spacing, layout } = useTheme();
+  // 矮屏（可用高 < 700）：页头上下留白再收一档（T15），给类别区留出「至少 2 行」的高度
+  const { isShort } = useLayout();
   const t = useT();
   const styles = useMemo(() => makeStyles(spacing, layout), [spacing, layout]);
 
@@ -55,7 +58,7 @@ export function TransactionTypeHeader({
   ];
 
   return (
-    <View style={styles.header}>
+    <View style={[styles.header, isShort && styles.headerShort]}>
       <View style={styles.headerRow}>
         <IconButton icon="chevron-back" accessibilityLabel={t('common.back')} onPress={onBack} />
         {/* 标题左对齐跟住返回键（页头规范：返回 + 标题 + 右侧动作），放不下也不缩字、不省略 */}
@@ -81,7 +84,7 @@ export function TransactionTypeHeader({
         ) : null}
       </View>
       {showTypeSwitch && (
-        <View style={styles.typeRow}>
+        <View style={[styles.typeRow, isShort && styles.typeRowShort]}>
           {/* 分段控件的选项值就是 UiType（字符串联合），回传时收窄 */}
           <SegmentedControl
             options={options}
@@ -103,6 +106,8 @@ function makeStyles(spacing: Spacing, layout: Layout) {
       paddingTop: spacing.xs,
       paddingBottom: spacing.sm,
     },
+    // 矮屏：上留白 4→0、下留白 8→4（一档收紧）
+    headerShort: { paddingTop: 0, paddingBottom: spacing.xs },
     // 第一行：返回 44 触控区 + 标题（吃满剩余宽）+ 右侧动作
     headerRow: {
       flexDirection: 'row',
@@ -113,6 +118,7 @@ function makeStyles(spacing: Spacing, layout: Layout) {
     title: { flex: 1 },
     // 第二行：类型分段独占一行（stretch 撑满内容宽），与标题行只留半个格
     typeRow: { marginTop: spacing.xs },
+    typeRowShort: { marginTop: 0 },
   });
 }
 

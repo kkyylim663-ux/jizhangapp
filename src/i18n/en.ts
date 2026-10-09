@@ -168,6 +168,7 @@ export const en = {
     itemsCount: '%{count} items',
     catEditHint: 'Hold a row and drag to reorder · Tap − to delete',
     pickIconTitle: 'Choose Icon',
+    manageCategories: 'Manage categories',
     deleteLastInGroupMsg: '"%{name}" is the last category in "%{group}". Deleting it will also remove this group. Continue?',
     headerAdd: 'Add',
     headerCollapse: 'Close',

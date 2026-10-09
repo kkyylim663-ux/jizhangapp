@@ -122,11 +122,11 @@ export function AmountCalculatorKeypad({
   useEffect(() => stopRepeatDelete, []);
 
   return (
-    <View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+    <View style={[styles.panel, { backgroundColor: semantic.surface, borderColor: semantic.hairline }]}>
       {/* 备注 + 小票：原来表单里那一行，原样搬过来，常驻在数字区上方；
           没传 onNoteChange 的调用方（转账/兑换）就不显示这一条 */}
       {onNoteChange && (
-        <View style={[styles.noteRow, { borderColor: colors.dividerHair }]}>
+        <View style={[styles.noteRow, { borderColor: semantic.hairline }]}>
           <View style={styles.noteInputPill}>
             <Ionicons name="create-outline" size={18} color={colors.textTertiary} style={{ marginRight: 8 }} />
             <TextInput
@@ -144,14 +144,14 @@ export function AmountCalculatorKeypad({
             <Pressable
               style={({ pressed }) => [
                 styles.smallChip,
-                { backgroundColor: colors.bg, borderColor: colors.link },
+                { backgroundColor: semantic.bg, borderColor: colors.link },
                 PRESS_TRANSITION,
                 pressed && { transform: [{ scale: 0.94 }] },
               ]}
               onPress={onPreviewReceipt}
               onLongPress={onAttachReceipt}
             >
-              <Image source={{ uri: receiptUri }} style={[styles.smallChipThumb, { backgroundColor: colors.dividerHair }]} />
+              <Image source={{ uri: receiptUri }} style={[styles.smallChipThumb, { backgroundColor: semantic.hairline }]} />
               <Pressable onPress={onRemoveReceipt} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 <Ionicons name="close-circle" size={17} color={colors.textSecondary} />
               </Pressable>
@@ -160,7 +160,7 @@ export function AmountCalculatorKeypad({
             <Pressable
               style={({ pressed }) => [
                 styles.smallChip,
-                { backgroundColor: colors.bg, borderColor: colors.link },
+                { backgroundColor: semantic.bg, borderColor: colors.link },
                 PRESS_TRANSITION,
                 pressed && { transform: [{ scale: 0.94 }] },
               ]}
@@ -182,7 +182,7 @@ export function AmountCalculatorKeypad({
             onPress={() => handlePress(item.key, item.type)}
             style={({ pressed }) => [
               styles.cell3Col,
-              { height: keypadKeyHeight, borderColor: colors.dividerHair },
+              { height: keypadKeyHeight, borderColor: semantic.hairline },
               // 按下即时反馈：整格缩放 0.96（CSS transition 由 PRESS_TRANSITION 提供）
               PRESS_TRANSITION,
               pressed && { transform: [{ scale: 0.96 }] },
@@ -213,7 +213,7 @@ export function AmountCalculatorKeypad({
           delayLongPress={350}
           style={({ pressed }) => [
             styles.cell1Col,
-            { height: keypadKeyHeight, borderColor: colors.dividerHair },
+            { height: keypadKeyHeight, borderColor: semantic.hairline },
             PRESS_TRANSITION,
             pressed && { transform: [{ scale: 0.96 }] },
           ]}
@@ -226,7 +226,7 @@ export function AmountCalculatorKeypad({
           onPress={() => handlePress('today', 'today')}
           style={({ pressed }) => [
             styles.cell1Col,
-            { height: keypadKeyHeight, borderColor: colors.dividerHair },
+            { height: keypadKeyHeight, borderColor: semantic.hairline },
             PRESS_TRANSITION,
             pressed && { transform: [{ scale: 0.96 }] },
           ]}
@@ -252,7 +252,7 @@ export function AmountCalculatorKeypad({
           style={({ pressed }) => [
             styles.cell1Col,
             styles.confirmCell,
-            { height: keypadKeyHeight * 2, borderColor: colors.dividerHair, backgroundColor: semantic.accent },
+            { height: keypadKeyHeight * 2, borderColor: semantic.hairline, backgroundColor: semantic.accent },
             PRESS_TRANSITION,
             pressed && { transform: [{ scale: 0.97 }] },
           ]}

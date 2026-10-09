@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -36,7 +36,7 @@ import { useTheme } from '../theme/useTheme';
 import { useLayout } from '../theme/useLayout';
 import { useTabClearance } from '../hooks/useTabClearance';
 import { useTabBarScrollHandler, useTabBarForceHide } from '../context/TabBarAutoHideContext';
-import { ThemeColors, SemanticColors, Spacing, Layout } from '../theme/theme';
+import { ThemeColors, SemanticColors, Spacing, Layout, Radius } from '../theme/theme';
 import { useAmountExpression } from '../hooks/useAmountExpression';
 import { getExpressionTotal } from '../utils/amountExpression';
 import { formatMoney } from '../utils/formatMoney';
@@ -45,11 +45,15 @@ import { AmountCalculatorKeypad } from '../components/AmountCalculatorKeypad';
 import { CursorAmountText } from '../components/CursorAmountText';
 import { ReceiptCameraModal } from '../components/ReceiptCameraModal';
 import AppText from '../components/ui/AppText';
+import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import Chip from '../components/ui/Chip';
+import ScreenHeader from '../components/ui/ScreenHeader';
+import { withAlpha } from '../components/ui/color';
 import PressableScale from '../components/PressableScale';
 import { TransactionTypeHeader } from '../components/transaction/TransactionTypeHeader';
 import { AccountPickerSheet } from '../components/transaction/AccountPickerSheet';
+import { CategoryPickerSheet } from '../components/transaction/CategoryPickerSheet';
 import { ReceiptPreviewModal } from '../components/transaction/ReceiptPreviewModal';
 import { useDialog } from '../components/AppDialog';
 
@@ -151,9 +155,9 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   const { categories, categoryGroups, addCategory, addCategoryGroup, deleteCategoryGroup, addTransaction, updateTransaction, addTransfer, updateCategory, deleteCategory, deleteTransaction, assets, getAssetBalance, currencySymbol, currency, activeLedgerId, paymentPlans, addPaymentPlan } =
     useApp();
   const insets = useSafeAreaInsets();
-  const { colors, isDark, semantic, spacing, layout, typography } = useTheme();
+  const { colors, isDark, semantic, spacing, layout, radius, typography } = useTheme();
   // 矮屏（可用高 < 700）：金额卡内边距 / 行距再收紧一档，保证「金额 + 至少 2 行类别 + 键盘」一屏可见
-  const { isShort } = useLayout();
+  const { isShort, categoryColumns } = useLayout();
   const t = useT();
   const { langMode } = useLanguage();
   // 主题化弹窗（替代系统 Alert）
@@ -162,7 +166,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   const onTabScroll = useTabBarScrollHandler(); // 不传参数！
   const setTabBarForceHidden = useTabBarForceHide();
   const isFocused = useIsFocused();
-  const styles = useMemo(() => makeStyles(colors, isDark, semantic, spacing, layout), [colors, isDark, semantic, spacing, layout]);
+  const styles = useMemo(() => makeStyles(colors, isDark, semantic, spacing, layout, radius), [colors, isDark, semantic, spacing, layout, radius]);
 
   const editTransaction: Transaction | undefined = route?.params?.editTransaction;
   const isEditing = !!editTransaction;
@@ -217,6 +221,8 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   // 普通收支专用：可选的资产账户（这笔钱从/到哪个账户）——没有编辑数据时，用"资产"页设的默认账户
   const [assetId, setAssetId] = useState<string | null>(editTransaction?.assetId ?? defaultAsset?.id ?? null);
   const [assetPickerOpen, setAssetPickerOpen] = useState(false);
+  // 「全部」类别抽屉（T15）：打开完整列表；管理与排序入口在里面 →（管理类别）→ 选择类别页
+  const [catSheetOpen, setCatSheetOpen] = useState(false);
 
   // 用户手动选过账户后就不再自动跟随"默认账户"变化；保存后重置（resetAll）恢复自动跟随。
   // 编辑已有账单时初始值来自账单本身，视为已手动确定
@@ -454,12 +460,15 @@ export default function AddTransactionScreen({ navigation, route }: any) {
 
   // ---------- 类别横排"最近用过"：外面直接显示4个，点了就直接选中，不用进选择页 ----------
   const [recentCategoryIds, setRecentCategoryIds] = useState<string[]>([]);
+  /** 网格顺序重建代号：列表数据（最近用过 / 固定格）落地、类型切换、重进页面（resetAll）时 +1 */
+  const [catListsGen, setCatListsGen] = useState(0);
   useEffect(() => {
     AsyncStorage.getItem(RECENT_CATEGORY_KEY)
       .then((raw) => {
         if (!raw) return;
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) setRecentCategoryIds(parsed);
+        setCatListsGen((g) => g + 1); // 最近用过落地 → 重建网格顺序
       })
       .catch(() => {});
   }, []);
@@ -494,6 +503,10 @@ export default function AddTransactionScreen({ navigation, route }: any) {
           } catch {}
         }
       })
+      .then(() => {
+        // 固定格数据落地（或已无更多读取）→ 重建网格顺序
+        if (!cancelled) setCatListsGen((g) => g + 1);
+      })
       .catch(() => {});
     return () => {
       cancelled = true;
@@ -509,13 +522,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
     });
   };
   // 最近用过的排前面，不够4个就用当前类型下的其他类别补齐，保证横排始终有得选
-  // ---------- 类别自适应网格：按机型定列数，最近用过的往下开新行，"全部"永远殿后 ----------
-  // 列数（类别胶囊数，不含"全部"）按屏宽分档：≥420 宽机 4 个，其余窄/中机 3 个；
-  // "全部"入口独占行尾一格，不与类别挤。用户选了新类别就追加进网格，
-  // "全部"随之往下移一行；网格不限行数（TASK-007），挤满自动换行继续往下铺
-  const winW = Dimensions.get('window').width;
-  const categoryColumns = winW >= 420 ? 4 : 3;
-  const categoryChipW = (winW - 36 - categoryColumns * 5) / (categoryColumns + 1);
+  // ---------- 类别网格（T15）：列数取 useLayout().categoryColumns（窄屏 4 / 常规·大屏 5，"全部"占一格） ----------
 
   // ---------- 类别网格内容：固定格 + 首行补齐 ----------
   // - 固定格：本次会话新选过的类别（新的在最前）+ 本地"最近用过"（记账成功时写入），顺序固定；
@@ -526,22 +533,35 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   const [sessionPickedIds, setSessionPickedIds] = useState<string[]>([]);
 
   const selectedCategory = categories.find((c) => c.id === categoryId);
-  // ---------- 可见容量计算（TASK-024：挪到 gridPinned 之前——补齐目标要用 gridMaxCount） ----------
-  // 五轮（用户定版尝试）：外层换成普通 View 不再可滚——内容物理上不可能滚到键盘底下，
-  // flex 纵向布局自动把键盘面板高度从容器里扣除，「全部」按钮天然停在键盘上沿。
-  // 兜底：仍保留容量 slice——用 View 的 onLayout 高度（已扣键盘）和网格顶内容坐标计算，
-  // 超出容量的类别不渲染，保证任何机型「全部」都完整可见。
-  const [scrollViewH, setScrollViewH] = useState<number | null>(null);
-  const [gridTopY, setGridTopY] = useState<number | null>(null);
-  // 行高（2026-09-25 字号15批次）：图标 23 + paddingV 3.5×2 + 边框 2 ≈ 32，+ 行距 6 = 38
-  const chipRowHeight = 38;
-  const columnsInRow = categoryColumns + 1; // 类别列 + 「全部」行尾格
-  const gridVisibleRows =
-    scrollViewH == null || gridTopY == null
-      ? null
-      : Math.max(1, Math.floor((scrollViewH - gridTopY) / chipRowHeight));
-  const gridMaxCount =
-    gridVisibleRows == null ? null : gridVisibleRows * columnsInRow - 1;
+  // ---------- T15：类别网格容量（实测，不再按字符估宽）----------
+  // 网格区是可滚动的 flex:1 区域：实测到多少高度就铺多少格（至少 2 行 —— 计划 8.2 第 7 条
+  // 「金额 + 至少 2 行类别 + 键盘」一屏可见）；历史用过的类别超出可见容量时靠网格滚动查看，不再裁剪
+  const [gridH, setGridH] = useState<number | null>(null);
+  /** 一格高度 = 44 方块 + 4 标签间距 + 32 两行标签 + 4 顶距 + 4 行距（与 catCell / catCellLabel / catGridContent 样式同步） */
+  const CAT_CELL_ROW_HEIGHT = 88;
+  const gridVisibleRows = gridH == null ? null : Math.max(2, Math.floor(gridH / CAT_CELL_ROW_HEIGHT));
+  const gridMaxCount = gridVisibleRows == null ? null : gridVisibleRows * categoryColumns - 1;
+  // ---------- 网格顺序冻结（T15 修正）----------
+  // 进入页面 / 切换支出·收入 / 列表数据落地（catListsGen）/ 保存后重进页面（resetAll）时重建一次；
+  // 本次会话里「点网格格子」只高亮、不重排 —— 修「手指下的格子弹到第 1 格」；
+  // 只有从「全部」抽屉选了「网格里没有」的类别才插到第 1 格（见抽屉 onPickCategory）；
+  // 下次进页面仍按最近使用排序（点选照旧写 sessionPicked / recent，只是不改本次的顺序）
+  const [gridOrder, setGridOrder] = useState<string[]>([]);
+  useEffect(() => {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    const push = (id: string) => {
+      if (!seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    };
+    sessionPickedIds.forEach(push);
+    recentCategoryIds.forEach(push);
+    setGridOrder(ids);
+    // 有意不把 sessionPickedIds / recentCategoryIds 放进依赖：点选会改它们，但顺序要冻结
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uiType, isEditing, catListsGen]);
   const gridPinned = useMemo(() => {
     const byId = new Map(filteredCategories.map((c) => [c.id, c] as const));
     const pinned: Category[] = [];
@@ -554,22 +574,17 @@ export default function AddTransactionScreen({ navigation, route }: any) {
         seen.add(id);
       }
     };
-    sessionPickedIds.forEach(push);
-    recentCategoryIds.forEach(push);
-    // TASK-024：补齐目标从"第一行"扩为"全部可见容量"（gridMaxCount 已为「全部」预留 -1 格）——
-    // Hero 区腾出的空间有多少格就填多少格（第 5 行自动出现）；首帧容量未知时维持只补第一行。
-    // 新选/最近用过的永远排在补齐类别前面，顺序规则不变
-    const fillTarget = gridMaxCount ?? categoryColumns;
+    gridOrder.forEach(push);
+    // TASK-024 / T15：补齐目标 = 可见容量（gridMaxCount 已为「全部」预留 -1 格），
+    // 首帧容量未知时至少补 2 行；冻结顺序（本次选过 + 最近用过）永远排在补齐类别前面
+    const fillTarget = gridMaxCount ?? categoryColumns * 2;
     for (const c of filteredCategories) {
       if (pinned.length >= fillTarget) break;
-      if (!seen.has(c.id)) {
-        pinned.push(c);
-        seen.add(c.id);
-      }
+      push(c.id);
     }
     return pinned;
-    // TASK-024：补齐目标跟随可见容量（键盘弹出/收起、Hero 压缩都会改变 gridMaxCount）
-  }, [sessionPickedIds, recentCategoryIds, filteredCategories, categoryColumns, gridMaxCount]);
+    // 补齐目标跟随可见容量（键盘弹出/收起、Hero 压缩都会改变 gridMaxCount）
+  }, [gridOrder, filteredCategories, categoryColumns, gridMaxCount]);
   // 金额币种只认所选账户（2026-09-24 用户定版）：选什么账户显示什么货币，没选账户用全局设置货币；
   // 弹层里的币种项只做账户筛选，不再改金额币种（displayCurrencyCode 直选机制已移除）
   const selectedAsset = assets.find((a) => a.id === assetId);
@@ -585,8 +600,12 @@ export default function AddTransactionScreen({ navigation, route }: any) {
       ? formatMoney(expressionTotal(amountExpr.displayValue))
       : amountExpr.displayValue
     : amount || '0.00';
-  // 金额字号档位（UI_RULES 第 5 节：按档位降级 44 → 34 → 28，不做连续压缩）
-  const heroAmountFontSize = amountFontTier(heroAmountDisplay, typography.amountEntry.fontSize);
+  // 金额字号档位（UI_RULES 第 5 节：按档位降级 44 → 34 → 28，不做连续压缩）；
+  // 矮屏基准降一档（44 → 40，与计划 8.2「矮屏 Hero −4」同口径），给类别区留高度
+  const heroAmountFontSize = amountFontTier(
+    heroAmountDisplay,
+    typography.amountEntry.fontSize - (isShort ? 4 : 0)
+  );
   const heroAmountLineHeight = Math.round(
     heroAmountFontSize * (typography.amountEntry.lineHeight / typography.amountEntry.fontSize)
   );
@@ -616,6 +635,8 @@ export default function AddTransactionScreen({ navigation, route }: any) {
     // 上次停在转账/兑换，回来就还是转账/兑换，而不是用户期望的全新支出表单
     setUiType('expense');
     setStep(stepForType('expense'));
+    // 重进页面：网格顺序按"最近用过"重建一次（本次会话里的点选只写存储、不改已冻结的顺序）
+    setCatListsGen((g) => g + 1);
     // TASK-009：退出返回不清类别——sessionPickedIds（本次选过的）/recentCategoryIds（本地历史）
     // /categoryId（当前选中）全部保留，回来网格和选中态原样恢复；只清表单内容
     setAmount('');
@@ -701,63 +722,13 @@ export default function AddTransactionScreen({ navigation, route }: any) {
     };
   }, [isFocused]);
 
-  // （可见容量计算已上移至 gridPinned 之前——TASK-024：gridPinned 补齐要用 gridMaxCount）
 
-  // 最终网格：容量裁剪兜底——能放几格显示几格，「全部」永远殿后可见；
-  // 当前选中的类别若被裁掉则强制保留（替换末尾一格），保证选中态高亮在网格里可见
-  // ---------- 可见容量（宽度感知装箱版，2026-09-25 字号14批次）----------
-  // 胶囊改 minWidth 自适应后，4 字名（如「贷款还款」≈97）比网格宽（≈78），
-  // 旧计数容量(rows×cols−1)会高估行容量——「全部」被挤到裁剪线外一行悬空。
-  // 这里按字符估宽模拟真实装箱：容器宽内逐格横排、放不下换行；
-  // 超过可见行数就从尾部丢类别，保证「全部」永远落在最后一行的行尾
-  // （=用户定版：全部前一个类别被全部替代）。
-  // ⚠纯估算、不回流测量——避免 TASK-009 记录过的 measure→trim→remeasure 正反馈循环。
-  // ⚠估宽常量与样式同步：label 14 号（CJK 全宽 14/半角 8）、图标座23+右距4+横padding12+边框2=41
-  const gridContentW = winW - 36; // categoryChipGrid paddingHorizontal 18×2
-  const chipWidthOf = useCallback((c: Category) => {
-    const label = getCategoryLabel(c, t);
-    let textW = 0;
-    for (const ch of label) textW += ch.charCodeAt(0) > 0x2e80 ? 14 : 8;
-    return Math.max(categoryChipW, 41 + Math.ceil(textW) + 1);
-  }, [categoryChipW, t]);
-
+  // 最终网格内容：固定在前的（本次选过 + 最近用过）、按默认顺序补齐到可见容量；
+  // 多出来的（历史用过的）不再按字符估宽裁剪丢弃 —— 网格区可滚动（T15），「全部」永远殿后
   const displayCategories = useMemo(() => {
-    const withSelected =
-      selectedCategory && !gridPinned.some((c) => c.id === selectedCategory.id)
-        ? [selectedCategory, ...gridPinned]
-        : gridPinned;
-    // 首帧（可见行数未知）：退回旧的计数裁剪兜底
-    if (gridVisibleRows == null) {
-      if (gridMaxCount == null || withSelected.length + 1 <= gridMaxCount) return withSelected;
-      const base = withSelected.slice(0, gridMaxCount);
-      if (selectedCategory && !base.some((c) => c.id === selectedCategory.id)) {
-        base[base.length - 1] = selectedCategory;
-      }
-      return base;
-    }
-    // 宽度感知装箱：放不下「全部」就从尾部丢，丢完保持「选中项可见」的既有规则
-    const list = [...withSelected];
-    const rowsNeeded = (items: Category[]) => {
-      let rows = 1;
-      let w = 0;
-      for (const c of items) {
-        const cw = chipWidthOf(c);
-        if (w > 0 && w + 5 + cw > gridContentW) {
-          rows++;
-          w = cw;
-        } else {
-          w = w > 0 ? w + 5 + cw : cw;
-        }
-      }
-      if (w > 0 && w + 5 + categoryChipW > gridContentW) rows++; // 「全部」固定宽 categoryChipW
-      return rows;
-    };
-    while (list.length > 0 && rowsNeeded(list) > gridVisibleRows) list.pop();
-    if (selectedCategory && list.length > 0 && !list.some((c) => c.id === selectedCategory.id)) {
-      list[list.length - 1] = selectedCategory;
-    }
-    return list;
-  }, [gridPinned, selectedCategory, gridMaxCount, gridVisibleRows, chipWidthOf, categoryChipW, gridContentW]);
+    if (!selectedCategory || gridPinned.some((c) => c.id === selectedCategory.id)) return gridPinned;
+    return [selectedCategory, ...gridPinned];
+  }, [gridPinned, selectedCategory]);
 
   // 计算器键盘和浮空 Tab bar 在同一块屏幕区域，键盘展开时强制把 Tab bar 收起，
   // 键盘收起（按完成、或者切到别的表单）时恢复——避免两者叠在一起互相挡住点击
@@ -790,6 +761,8 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   }, [isFocused]);
 
   const handlePickCategory = (id: string) => {
+    // 选类别 = selection 震动（UI_RULES 4.3；网格格与「全部」抽屉共用这一套）
+    hapticSelection();
     setCategoryId(id);
     // TASK-022 补充：编辑账单时点类别只改这一笔，绝不写持久化键——
     // 否则会污染"记一笔（新增）"记住的默认类别（编辑模式自己又不读这个键，表现为两边不同步）
@@ -1467,7 +1440,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
             底部留白收紧(insets-32)：edge-to-edge 下根视图已延伸到导航条后面，
             再垫满 insets 会在键盘下方多出一条空位——键盘整体下移填补它 */}
         {amountKeypadOpen && (
-          <View style={[styles.stickyFooter, { paddingBottom: Math.max(insets.bottom - 40, 8), paddingHorizontal: 0 }]}>
+          <View style={[styles.stickyFooter, isShort && styles.stickyFooterShort, { paddingBottom: Math.max(insets.bottom - 40, isShort ? 4 : 8), paddingHorizontal: 0 }]}>
             <AmountCalculatorKeypad
               onPressKey={handleExprKey}
               onPressToday={() => setDatePickerOpen(true)}
@@ -1561,38 +1534,24 @@ export default function AddTransactionScreen({ navigation, route }: any) {
       <EdgeBackSwipe onBack={edgeBackHome}>
       <SafeAreaView style={styles.container} edges={['top']}
       onTouchStart={() => { Keyboard.dismiss(); }}>
-        <View style={styles.formHeaderRow}>
-          <View style={styles.formHeaderSide}>
-            <TouchableOpacity
-              style={styles.txHeaderBackBtn}
-              onPress={() => setStep('detail')}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons name="chevron-back" size={22} color={colors.icon} style={{ fontWeight: "700" }} />
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.formHeaderTitle}>{t('addTx.selectCategory')}</Text>
-          <View style={styles.formHeaderSideRight}>
-            {/* 右上编辑键：进出排版模式——三条横线行式拖动排序 + ⊖ 删除（资产页同款范式） */}
-            <TouchableOpacity
-              style={[styles.catEditToggleBtn, catEditMode && styles.catEditToggleBtnActive]}
+        {/* 二级页标准页头（T15 换 ScreenHeader）：返回 + 居中标题 + 编辑（进排版模式） */}
+        <ScreenHeader
+          title={t('addTx.selectCategory')}
+          onBack={() => setStep('detail')}
+          right={
+            <Button
+              title={catEditMode ? t('common.done') : t('addTx.edit')}
+              icon={catEditMode ? 'checkmark' : 'create-outline'}
+              variant={catEditMode ? 'primary' : 'secondary'}
+              size="sm"
+              fullWidth={false}
               onPress={() => {
                 hapticLight();
                 setCatEditMode((prev) => !prev);
               }}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons
-                name={catEditMode ? 'checkmark' : 'create-outline'}
-                size={16}
-                color={catEditMode ? colors.fabIcon : colors.link}
-              />
-              <Text style={[styles.catEditToggleText, catEditMode && { color: colors.fabIcon }]}>
-                {catEditMode ? t('common.done') : t('addTx.edit')}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+            />
+          }
+        />
 
         {/* 类别选择页不再显示 支出/收入/转账/兑换 切换栏：进来是什么类型就只显示该类型的类别 */}
 
@@ -1906,16 +1865,10 @@ export default function AddTransactionScreen({ navigation, route }: any) {
       onTouchStart={() => { Keyboard.dismiss(); }}>
       <View style={{ flex: 1 }}>
       {/* TASK-011 五轮（用户定版尝试）：外层不再可滚——普通 View 替代 ScrollView。
-          页面不能滚 → 内容不可能被滚到键盘底下 → flex 布局让「全部」按钮天然停在键盘上沿。
+          页面不能滚 → 内容不可能被滚到键盘底下；T15 起类别网格自己可滚（catGridScroll），
+          flex 布局把键盘面板高度从容器里扣除，网格天然停在键盘上沿。
           scrollViewRef 不再挂在本页（scrollToField 的 ?. 兜底安全跳过）；转账/兑换分支不动 */}
-      <View
-        style={{ flex: 1 }}
-        onLayout={(e) => {
-          // 可视高度锁存（flex 已自动扣除键盘面板高度）——slice 裁剪兜底的输入
-          const h = e.nativeEvent.layout.height;
-          setScrollViewH((prev) => (prev == null || Math.abs(prev - h) > 0.5 ? h : prev));
-        }}
-      >
+      <View style={{ flex: 1 }}>
         {/* 头部两行（T14）：返回 + 标题 + 右侧动作（编辑模式 = 删除键）/ 类型分段单独一行 */}
         {isEditing ? (
           <TransactionTypeHeader
@@ -2035,65 +1988,83 @@ export default function AddTransactionScreen({ navigation, route }: any) {
           </View>
         </Card>
 
-        {/* 类别：自适应网格——列数按机型（宽机 4 个/行、窄机 3 个/行，"全部"占行尾一格）；
-            最近用过的排前面，选了新类别就追加进网格、"全部"随之下移一行（TASK-007：
-            不限行数，挤满自动换行继续往下铺，铺不下的滚动查看） */}
-        <View style={styles.categorySectionHeader}>
-          <Text style={styles.sectionLabel}>
-            {selectedCategory ? `${t('addTx.categoryPrefix')}${getCategoryLabel(selectedCategory, t)}` : t('addTx.categoryRequired')}
-          </Text>
-        </View>
-        {/* 类别网格容器：onLayout 记录它在内容里的顶部 y（slice 裁剪兜底输入）。
-            外层已不可滚，网格被 flex 顶在键盘上方——此值仅作容量计算 */}
-        <View
-          style={styles.categoryChipGrid}
+        {/* 类别（T15）：列数取版型（窄屏 4 / 其它 5）；格 = 44 图标方块 + 12pt 标签（预留 2 行高度，整格对齐）；
+            选中 = accent 描边 + accentSoft 底 + selection 震动；网格区可滚动，「全部」永远殿后
+            矮屏不渲染这一行提示（选中态在网格高亮、未选保存时仍会弹「请选择一个分类」），
+            把高度让给「金额 + 至少 2 行类别 + 键盘」一屏可见 */}
+        {!isShort && (
+          <View style={styles.categorySectionHeader}>
+            <AppText variant="footnote" weight="600" color={semantic.textPrimary}>
+              {selectedCategory ? `${t('addTx.categoryPrefix')}${getCategoryLabel(selectedCategory, t)}` : t('addTx.categoryRequired')}
+            </AppText>
+          </View>
+        )}
+        <ScrollView
+          style={styles.catGridScroll}
+          contentContainerStyle={styles.catGridContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
           onLayout={(e) => {
-            const top = e.nativeEvent.layout.y;
-            setGridTopY((prev) => (prev == null || Math.abs(prev - top) > 0.5 ? top : prev));
+            // 实测网格区可见高度 → 决定铺多少格（至少 2 行）；超出的历史类别靠网格自身滚动
+            const h = e.nativeEvent.layout.height;
+            setGridH((prev) => (prev == null || Math.abs(prev - h) > 0.5 ? h : prev));
           }}
         >
+          {/* 每格外包一层 View 承载百分比宽度 —— RN Web 里百分比宽度必须落在 flex 直接子项上
+              （PressableScale 的 Pressable 宽度是内容自适应，百分比给不到它内部那层） */}
           {displayCategories.map((c) => {
             const active = categoryId === c.id;
             return (
-              <TouchableOpacity
-                key={c.id}
-                style={[
-                  styles.categoryChip,
-                  // 长名不截断（2026-09-25 字号15批次）：短名保持网格等宽（minWidth），
-                  // 4 字名按内容加长、flexWrap 自动 reflow——文字永不被挤出框外
-                  { minWidth: categoryChipW },
-                  active && { backgroundColor: colors.fabBg, borderColor: colors.fabBg },
-                ]}
-                onPress={() => handlePickCategory(c.id)}
-              >
-                <View
-                  style={[
-                    styles.categoryChipIconBox,
-                    { backgroundColor: active ? 'rgba(255,255,255,0.28)' : c.color + '20' },
-                  ]}
+              <View key={c.id} style={[styles.catCellWrap, { width: `${100 / categoryColumns}%` as unknown as `${number}%` }]}>
+                <PressableScale
+                  style={[styles.catCell, isShort && styles.catCellShort]}
+                  activeScale={0.94}
+                  onPress={() => handlePickCategory(c.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={getCategoryLabel(c, t)}
+                  accessibilityState={{ selected: active }}
                 >
-                  {/* TASK-011 三轮（用户定版）：选中不再渲染白色✓，图标格保持原分类图标不变 */}
-                  <Ionicons name={c.icon as IconName} size={15} color={active ? '#fff' : c.color} />
-                </View>
-                <Text style={[styles.categoryChipLabel, active && { color: '#fff' }]} numberOfLines={1}>
-                  {getCategoryLabel(c, t)}
-                </Text>
-              </TouchableOpacity>
+                  <View
+                    style={[
+                      styles.catCellSquare,
+                      active ? styles.catCellSquareActive : { backgroundColor: withAlpha(c.color, 0.12) },
+                    ]}
+                  >
+                    <Ionicons name={c.icon as IconName} size={20} color={c.color} />
+                  </View>
+                  <AppText
+                    variant="caption"
+                    align="center"
+                    numberOfLines={2}
+                    weight={active ? '600' : undefined}
+                    color={active ? semantic.accentText : semantic.textPrimary}
+                    style={styles.catCellLabel}
+                  >
+                    {getCategoryLabel(c, t)}
+                  </AppText>
+                </PressableScale>
+              </View>
             );
           })}
 
-          {/* "全部"入口：做成和类别胶囊一样大小的紫色描边 Pill，放在网格最后一位。
-              TASK-011 容量裁剪：超出可见容量的类别不渲染，「全部」永远殿后且必在
-              键盘面板上方的可见区域内（网格顶→停止线之间），不会再被键盘盖住 */}
-          <TouchableOpacity
-            style={[styles.morePill, { width: categoryChipW }]}
-            onPress={() => setStep('category')}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.morePillText}>{t('common.all')}</Text>
-            <Ionicons name="chevron-forward" size={13} color={colors.link} />
-          </TouchableOpacity>
-        </View>
+          {/* 「全部」殿后格：与类别格同尺寸，打开完整列表抽屉（组内新增 / 排序 / 删除都在「管理类别」页） */}
+          <View style={[styles.catCellWrap, { width: `${100 / categoryColumns}%` as unknown as `${number}%` }]}>
+            <PressableScale
+              style={[styles.catCell, isShort && styles.catCellShort]}
+              activeScale={0.94}
+              onPress={() => setCatSheetOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel={t('common.all')}
+            >
+              <View style={styles.catCellSquareMore}>
+                <Ionicons name="chevron-forward" size={20} color={semantic.textSecondary} />
+              </View>
+              <AppText variant="caption" align="center" color={semantic.textSecondary} style={styles.catCellLabel}>
+                {t('common.all')}
+              </AppText>
+            </PressableScale>
+          </View>
+        </ScrollView>
       </View>
       </View>
 
@@ -2102,7 +2073,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
           再垫满 insets 会在键盘下方多出一条空位——键盘整体下移填补它 */}
       {amountKeypadOpen && (
         <View
-          style={[styles.stickyFooter, { paddingBottom: Math.max(insets.bottom - 40, 8), paddingHorizontal: 0 }]}
+          style={[styles.stickyFooter, isShort && styles.stickyFooterShort, { paddingBottom: Math.max(insets.bottom - 40, isShort ? 4 : 8), paddingHorizontal: 0 }]}
         >
           <AmountCalculatorKeypad
             onPressKey={(key) => setAmountCursor(amountExpr.pressKeyAt(key, amountCursor))}
@@ -2182,15 +2153,36 @@ export default function AddTransactionScreen({ navigation, route }: any) {
           }}
         />
       )}
+
+      {/* 「全部」类别抽屉（T15）：完整列表 + 行内打勾；管理与排序入口在「管理类别」页 */}
+      {catSheetOpen && (
+        <CategoryPickerSheet
+          sections={groupedExpenseSections}
+          selectedId={categoryId}
+          onPickCategory={(id) => {
+            // 「全部」抽屉选了「网格里没有」的类别 → 插到第 1 格（原行为）；
+            // 已在网格里的只高亮、不重排（T15 修正：格子不在手指下乱跑）
+            const visible = displayCategories.some((c) => c.id === id);
+            if (!visible) setGridOrder((prev) => [id, ...prev.filter((x) => x !== id)]);
+            handlePickCategory(id);
+            setCatSheetOpen(false);
+          }}
+          onManage={() => {
+            setCatSheetOpen(false);
+            setStep('category');
+          }}
+          onClose={() => setCatSheetOpen(false)}
+        />
+      )}
     </SafeAreaView>
     </EdgeBackSwipe>
   );
 }
 
 // 关键：样式表要写成函数，接收 colors，返回 StyleSheet
-function makeStyles(colors: ThemeColors, isDark: boolean, semantic: SemanticColors, spacing: Spacing, layout: Layout) {
+function makeStyles(colors: ThemeColors, isDark: boolean, semantic: SemanticColors, spacing: Spacing, layout: Layout, radius: Radius) {
   return StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.card },
+  container: { flex: 1, backgroundColor: semantic.bg },
   scanningWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   scanningText: { marginTop: 16, color: colors.textSecondary, fontSize: 14 },
   catGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 12 },
@@ -2246,19 +2238,6 @@ function makeStyles(colors: ThemeColors, isDark: boolean, semantic: SemanticColo
   catMiniColorDot: { width: 26, height: 26, borderRadius: 13, marginRight: 10, marginBottom: 8 },
   catMiniColorDotActive: { borderWidth: 2, borderColor: colors.textPrimary },
   // 右上编辑键（TASK-006）：与返回键同尺寸圆框，未激活 link 描边、激活 fabBg 实底
-  catEditToggleBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    height: 34,
-    paddingHorizontal: 12,
-    borderRadius: 17,
-    borderWidth: 1.5,
-    borderColor: colors.link,
-    backgroundColor: colors.card,
-  },
-  catEditToggleBtnActive: { backgroundColor: colors.fabBg, borderColor: colors.fabBg },
-  catEditToggleText: { color: colors.link, fontSize: 12, fontWeight: '700' },
   // TASK-016⑤：编辑模式行式列表（资产页三条横线同款）
   catEditListWrap: { paddingHorizontal: 10, paddingBottom: 8 },
   catEditRow: {
@@ -2368,33 +2347,17 @@ function makeStyles(colors: ThemeColors, isDark: boolean, semantic: SemanticColo
   stickyFooter: {
     paddingHorizontal: 20,
     paddingTop: 6,
-    backgroundColor: colors.card,
+    // 键盘区表面用令牌 surface（夜间不再沿用旧 card 的藏青）；页底与其它页统一 bg
+    backgroundColor: semantic.surface,
     borderTopWidth: 1,
-    borderTopColor: colors.dividerHair,
+    borderTopColor: semantic.hairline,
   },
+  // 矮屏：键盘面板上沿留白 6→0（键盘本身高度由 useLayout 键高决定）
+  stickyFooterShort: { paddingTop: 0 },
 
   // ---------- 支出/收入卡片式表单新增样式 ----------
   // 与转账/兑换页头部(txHeaderRow)对齐：同样的水平边距和更高的上下留白，
   // 让选择类别/编辑页的返回按钮和标题与主页面保持在同一层
-  formHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingTop: 6,
-    paddingBottom: 10,
-    // 与主页面头部(内容高50px)完全同高：Yoga 的 minHeight 不会让子元素重新居中，
-    // 必须用显式高度，返回钮/标题才会和主页面一样居中下沉 5px
-    height: 66,
-  },
-  formHeaderSide: { flex: 1, flexDirection: 'row', alignItems: 'center' },
-  formHeaderSideRight: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
-  formHeaderTitle: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 17,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
   // TASK-016③：图标选择底部弹层（fade 遮罩 + 顶部圆角面板 + 6 列图标网格）
   iconPickerOverlay: {
     flex: 1,
@@ -2438,23 +2401,13 @@ function makeStyles(colors: ThemeColors, isDark: boolean, semantic: SemanticColo
 
   // ---------- 记一笔的编辑 / 选择类别页头部（返回键、删除键；主表单头部已抽成 TransactionTypeHeader 组件） ----------
   // 返回按钮：更大(40)、紫色外环（与"全部"Pill 同色）、加粗箭头，让返回入口足够明显
-  txHeaderBackBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: 1.5,
-    borderColor: colors.link,
-    backgroundColor: colors.card,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 8,
-  },
   // 编辑页右上角的删除按钮：与返回键同款圆环，用红色警示色
 
   // ---------- T14：金额 Hero 区（标准卡 surface + radius.lg + level1；算式在上、金额主角、Chip 行在下） ----------
   heroCard: { marginHorizontal: layout.page, marginTop: spacing.sm, marginBottom: spacing.md },
   // 矮屏：卡内边距 16→12、与下个分区的间距 12→8（一档收紧，见渲染处 isShort）
-  heroCardShort: { padding: spacing.md, marginBottom: spacing.sm },
+  // 矮屏：卡内边距 12→8、上外边距 8→4、与下个分区的间距 12→8（给类别区腾出至少 2 行）
+  heroCardShort: { padding: spacing.sm, marginTop: spacing.xs, marginBottom: spacing.xs },
   // 算式行（15pt 次要文字，右对齐与金额同侧）：只在多项算式时出现
   heroExpr: { marginBottom: spacing.xs },
   // 金额行：币种按钮（左）+ 金额（右）；minHeight 撑住 44pt 档，不与 Chip 的 44 触控区打架
@@ -2486,6 +2439,49 @@ function makeStyles(colors: ThemeColors, isDark: boolean, semantic: SemanticColo
   // 矮屏：与金额行的间距 8→4
   heroChipsRowShort: { marginTop: spacing.xs },
 
+  // ---------- T15：类别网格（列数按版型；格 = 44 图标方块 + 12pt 标签，标签预留 2 行高度） ----------
+  // 网格区可滚动：吃掉剩余高度（flex:1），历史类别超出可见容量时滚下去看，「全部」永远殿后
+  catGridScroll: { flex: 1 },
+  catGridContent: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: layout.page,
+    paddingBottom: spacing.xs,
+    rowGap: spacing.xs,
+  },
+  // 一格：方块 44 + 标签间距 4 + 两行标签 32 + 顶距 4 = 84（与 CAT_CELL_ROW_HEIGHT 常量同步）
+  catCellWrap: {},
+  catCell: { alignItems: 'center', paddingTop: spacing.xs },
+  // 矮屏：去掉格顶留白（44→40 两行总高，让「至少 2 行」稳落在一屏内）
+  catCellShort: { paddingTop: 0 },
+  catCellSquare: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    // 描边恒 1.5（选中才换色）：选中/未选中之间不跳 1px
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+  },
+  // 选中：accent 描边 + accentSoft 底（图标保持类别色，UI_RULES：类别色 100% 图标）
+  catCellSquareActive: { borderColor: semantic.accent, backgroundColor: semantic.accentSoft },
+  // 「全部」格：中性样式（surface 底 + textSecondary 箭头），与「选中」accent 描边区分开，
+  // 结构上与类别格一致：描边恒 1.5 透明（不跳 1px）
+  catCellSquareMore: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+    backgroundColor: semantic.surface,
+  },
+  // 标签：12pt 居中、最多 2 行；minHeight 32（两行）+ alignSelf stretch 让整格宽度对齐
+  // （stretch 而不是 width:'100%'：百分比在 RN Web 的嵌套 flex 里解析不到父级实测宽）
+  catCellLabel: { marginTop: spacing.xs, minHeight: 32, alignSelf: 'stretch' },
+
   rateCursor: { fontSize: 17, fontWeight: '300', color: colors.link, marginLeft: 2 },
   feeCursor: { fontSize: 15, fontWeight: '400', color: colors.link, marginLeft: 3 },
 
@@ -2494,58 +2490,10 @@ function makeStyles(colors: ThemeColors, isDark: boolean, semantic: SemanticColo
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 18,
-    marginTop: 2,
-    marginBottom: 6,
+    paddingHorizontal: layout.page,
+    marginBottom: spacing.xs,
   },
-  sectionLabel: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
-  // "全部"入口做成紫色药丸按钮，比纯文字明显得多
-  // 分类网格容器：flexWrap 自动叠层；左右 18 与 hero 卡边距对齐，行间 6
-  categoryChipGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    paddingHorizontal: 18,
-    columnGap: 5,
-    rowGap: 6,
-    paddingBottom: 6,
-  },
-  categoryChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.bg,
-    borderRadius: 15, // TASK-011 三轮：圆角做方一些（19→15）——用户定版值，不随字号等比
-    borderWidth: 1,
-    borderColor: colors.dividerHair,
-    paddingHorizontal: 6,
-    paddingVertical: 3.5, // 字号 15 等比增高：3→3.5，总高 20座→23座+7+2 = 32
-    minHeight: 32, // 2026-09-25 字号15批次：胶囊总高 28→32（等比 ×1.154）
-  },
-  categoryChipIconBox: {
-    width: 23, // 字号 15 等比增高：20→23（图标 glyph 同步 13→15）
-    height: 23,
-    borderRadius: 7,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 4,
-  },
-  // 文字 14 号（2026-09-25 二批）：宽度自适应胶囊（minWidth 网格宽，长名加长），不再 flexShrink 截断
-  categoryChipLabel: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
-  // "全部"入口 Pill：尺寸/圆角/内边距与类别胶囊一致，紫色描边+紫色文字做入口区分；
-  // 宽度由 JSX 内联 categoryChipW 给出（与胶囊同一格宽）
-  morePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 15, // 与 categoryChip 同步（19→15）
-    borderWidth: 1,
-    borderColor: colors.link,
-    backgroundColor: colors.bg,
-    paddingHorizontal: 6,
-    paddingVertical: 3.5, // 与 categoryChip 同步等比增高
-    minHeight: 32, // 与新高胶囊对齐（殿后格不变矮）
-  },
-  morePillText: { fontSize: 14, fontWeight: '600', color: colors.link },
+  // 矮屏：整行再收 4（标签行不占多余高度，给类别格留位置）
 
   // ---------- 转账/兑换新版整页排版 ----------
   exchangePageContent: { paddingHorizontal: 18, paddingBottom: 26 },
