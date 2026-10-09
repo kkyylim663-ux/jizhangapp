@@ -396,8 +396,8 @@ export const zh = {
     noAssets: '暂无资产',
     addLedger: '新增账本',
     selectCurrency: '选择货币',
-    // 首页净资产货币下拉的标题（按交互视频 1:1：中文 + 英文括注）
-    currencyMenuTitle: '选择币种 (CURRENCY)',
+    // 首页净资产货币下拉的标题（T08 验收：标题只走 i18n 单一语言，不再中英混排）
+    currencyMenuTitle: '选择币种',
     ledgerName: '账本',
     notificationTitle: '消息通知',
     notificationMsg: '这个功能还在开发中',
@@ -411,6 +411,23 @@ export const zh = {
     deleteLedgerDone: '账本已删除',
     balanceLabel: '结余',
     calNet: '总额',
+    // T08：Hero 头部「日历/列表切换」按钮的读屏标签
+    toggleView: '切换视图',
+    // T08：Hero 隐藏/显示金额按钮的读屏标签
+    toggleAmount: '显示或隐藏金额',
+    // T08：Hero 无账户空状态的按钮
+    addAccount: '添加账户',
+    // T08：预算面板三段文案（金额片段由 MoneyText 拼在后面）
+    budgetUsed: '已用',
+    budgetLeftLabel: '剩余',
+    budgetOverLabel: '超支',
+    // T09：账单列表跨月分隔的月份标签（%{m} 取 date.months，中文如「10月」）
+    monthSep: '%{y}年%{m}',
+    // T09：无交易空状态的按钮
+    addFirst: '记第一笔',
+    // T12：日历卡 ‹ › 翻月按钮的读屏标签（图标按钮无文字，标签必须说明动作）
+    prevMonth: '上个月',
+    nextMonth: '下个月',
   },
   report: {
     expense: '支出',
