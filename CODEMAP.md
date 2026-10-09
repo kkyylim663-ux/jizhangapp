@@ -60,14 +60,17 @@ src/
 │  └─ ReceiptCameraModal.tsx    # 拍小票
 ├─ screens/                 # 18 个屏幕（见下文导航树）
 ├─ theme/
-│  ├─ theme.ts              # ★ 全部设计令牌：颜色/间距/圆角/字号
-│  └─ useTheme.ts           # 取当前主题色（深色模式联动）
+│  ├─ theme.ts              # ★ 设计令牌：上半部旧颜色层（lightColors/darkColors，兼容期保留）+ 下半部语义层（semantic 颜色 / typography 字号 / spacing / radius / elevation）
+│  ├─ motion.ts             # 动效令牌：spring 350/400/180 · fade 150 · 数字滚动 600 · 减弱动态效果降级档
+│  └─ useTheme.ts           # 取当前主题：colors + semantic + typography + spacing + layout + radius + elevation + motion（深色模式联动）
 ├─ types/index.ts           # ★ 共享类型，改数据结构先改这里
 └─ utils/
    ├─ amountExpression.ts   # 四则表达式求值
    ├─ creditCard.ts         # 信用卡：可用额度 vs 欠费金额两套算法
    ├─ currencies.ts         # 内置 12 种货币
    ├─ defaultCategories.ts  # 预置 30 支出 + 6 收入分类
+   ├─ formatDate.ts         # ★ 日期格式化唯一入口：今天/昨天/10月7日 周三（英文 Today/Oct 7, Wed）
+   ├─ formatMoney.ts        # ★ 金额格式化唯一入口：千分位 / 真减号 U+2212 / 币种开关 / 紧凑 1.5k / 隐藏 ••••••
    ├─ haptics.ts            # 震动反馈封装
    ├─ notifications.ts      # expo-notifications 封装
    ├─ scanReceipt.ts        # AI 小票识别（OpenRouter 视觉模型）

@@ -20,6 +20,17 @@ export const zh = {
     notSelected: '未选择',
     optional: '选填',
   },
+  // 日期显示（src/utils/formatDate.ts 用；键与 en.ts 一一对应）
+  date: {
+    today: '今天',
+    yesterday: '昨天',
+    // 日期模板：%{mn} 月份（中文如 '10月'）/ %{d} 日 / %{y} 年份 / %{w} 星期（中文如 '周三'）
+    full: '%{mn}%{d}日 %{w}',
+    fullWithYear: '%{y}年%{mn}%{d}日 %{w}',
+    monthDay: '%{mn}%{d}日',
+    months: ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'],
+    weekdays: ['周日', '周一', '周二', '周三', '周四', '周五', '周六'],
+  },
   lang: {
     title: '语言',
     system: '跟随系统',

@@ -19,6 +19,17 @@ export const en = {
     notSelected: 'Not selected',
     optional: 'Optional',
   },
+  // 日期显示（src/utils/formatDate.ts 用；键与 zh.ts 一一对应）
+  date: {
+    today: 'Today',
+    yesterday: 'Yesterday',
+    // 模板：%{mn} 月份缩写 / %{d} 日 / %{y} 年份 / %{w} 星期缩写
+    full: '%{mn} %{d}, %{w}',
+    fullWithYear: '%{mn} %{d}, %{y}, %{w}',
+    monthDay: '%{mn} %{d}',
+    months: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+    weekdays: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+  },
   lang: {
     title: 'Language',
     system: 'System default',

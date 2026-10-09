@@ -1,12 +1,18 @@
 // theme.ts
 // 颜色 token，light / dark 两套，字段名保持一致方便直接替换 StyleSheet 里的写死颜色。
 //
+// ⚠ 2026-10-09 起：文件下半部分是「设计系统语义层」（颜色 / 字号 / 间距 / 圆角 / 阴影），
+//   上面原有令牌**全部保留**（兼容期，页面逐步迁移）。新代码一律从语义层取值 ——
+//   规则见项目根 UI_RULES.md，取用：const { semantic, typography, spacing, radius, elevation } = useTheme();
+//
 // v4 设计原则（参照 apple-design / emil-design-eng skill）：
 // 1. 全屏只有一个"主角"——净资产卡保留渐变，但收敛成更沉稳的深紫，
 //    不再和正文卡片抢注意力；正文卡片一律纯色卡面 + 发丝描边。
 // 2. 单一强调色：紫色系（link/fab/expense 同族），收入用薄荷绿区分，
 //    超支/警示统一玫红。两套主题语义一致，只调明度。
 // 3. 中性底色（去掉旧的紫底粉底），让卡面和强调色自己说话。
+
+import type { TextStyle } from 'react-native';
 
 export type ThemeColors = {
   bg: string;
@@ -520,4 +526,228 @@ export const darkColors: ThemeColors = {
   avatarBg: '#202028',
 
   overlay: 'rgba(0,0,0,0.55)',
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 设计系统语义层（UI/UX 改造计划 第 4 节，2026-10-09）
+// 上方旧令牌全部保留；新代码只从这里取值。规则文档：项目根 UI_RULES.md。
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * 语义颜色层（计划 4.1）。按「用途」命名，不按长相：
+ * 紫色只有 accent / accentText / accentSoft 三档 —— 它们只用于主按钮、选中态、链接。
+ */
+export type SemanticColors = {
+  /** 页面底（中性微紫灰 / 近黑），大面积画布 */
+  bg: string;
+  /** 卡片、列表组 */
+  surface: string;
+  /** 抽屉、弹层、浮动 Tab 栏（配 elevation.level2） */
+  surfaceElevated: string;
+  /** 分割线、卡片描边 */
+  hairline: string;
+  /** 主文字 */
+  textPrimary: string;
+  /** 次要文字 */
+  textSecondary: string;
+  /** 弱化文字 —— 只给 ≥13pt（footnote 及以上）的辅助文字用 */
+  textTertiary: string;
+  /** 主按钮 / 选中底 / 强调填充（唯一紫色填充） */
+  accent: string;
+  /** 紫底上的文字（一律白色，修旧 colors.bg 当字色用的 bug） */
+  onAccent: string;
+  /** 紫色文字 / 链接（夜间要提亮，所以与 accent 分开两档） */
+  accentText: string;
+  /** 选中胶囊底、选中图标方块底（10% 紫） */
+  accentSoft: string;
+  /** 支出金额 = 主文字色 + 「−」（中性，既不是红也不是紫） */
+  amountExpense: string;
+  /** 收入金额 = 绿 + 「+」 */
+  amountIncome: string;
+  /** 转账金额 = 次要文字色 + ⇄ 图标（无正负号） */
+  amountTransfer: string;
+  /** 超支 / 删除 / 错误（删除图标、滑动删除底一律改用它） */
+  danger: string;
+  /** 预算接近上限（≥80%，>100% 用 danger） */
+  warning: string;
+  /** 全 App 唯一遮罩色（替换现有 6 种写法） */
+  scrim: string;
+};
+
+export const lightSemantic: SemanticColors = {
+  bg: '#F6F5F9',
+  surface: '#FFFFFF',
+  surfaceElevated: '#FFFFFF',
+  hairline: 'rgba(17,17,26,0.08)',
+  textPrimary: '#111118',
+  textSecondary: '#5E5E6E',
+  textTertiary: '#8E8E9A',
+  accent: '#6C4DF6',
+  onAccent: '#FFFFFF',
+  accentText: '#6C4DF6',
+  accentSoft: 'rgba(108,77,246,0.10)',
+  amountExpense: '#111118', // = textPrimary
+  amountIncome: '#0E9F6E',
+  amountTransfer: '#5E5E6E', // = textSecondary
+  danger: '#E11D48',
+  warning: '#D97706',
+  scrim: 'rgba(10,8,20,0.40)',
+};
+
+export const darkSemantic: SemanticColors = {
+  // 夜间：bg < surface < surfaceElevated 逐级变亮（Apple 深色模式：底层后退、浮层前进），不靠阴影
+  bg: '#0B0B12',
+  surface: '#15151E',
+  surfaceElevated: '#1E1E2A',
+  hairline: 'rgba(255,255,255,0.08)',
+  textPrimary: '#F4F4F7',
+  textSecondary: '#A3A3B2',
+  textTertiary: '#6E6E7E',
+  accent: '#6C4DF6',
+  onAccent: '#FFFFFF',
+  accentText: '#A595FF',
+  accentSoft: 'rgba(165,149,255,0.14)',
+  amountExpense: '#F4F4F7', // = textPrimary
+  amountIncome: '#34D399',
+  amountTransfer: '#A3A3B2', // = textSecondary
+  danger: '#FB7185',
+  warning: '#FBBF24',
+  scrim: 'rgba(0,0,0,0.55)',
+};
+
+/**
+ * 字号层（计划 4.2）：11 档取代现有 26 种字号，最小 11pt（禁止 7–10pt）。
+ * - letterSpacing 只对数字 / 拉丁字母有意义，中文文本请置 0（AppText 会自动判断）。
+ * - maxFontSizeMultiplier：尊重系统「大字」设置又保证不破版（计划 8.2 第 3 条）。
+ * - 全部金额文字必须加 fontVariant: ['tabular-nums']（等宽数字）。
+ */
+export type TypographyVariant =
+  | 'display'
+  | 'amountEntry'
+  | 'title1'
+  | 'title2'
+  | 'title3'
+  | 'headline'
+  | 'body'
+  | 'subhead'
+  | 'footnote'
+  | 'caption'
+  | 'caption2';
+
+export type TypographyToken = {
+  fontSize: number;
+  lineHeight: number;
+  fontWeight: TextStyle['fontWeight'];
+  letterSpacing: number;
+  maxFontSizeMultiplier: number;
+};
+
+export type Typography = Record<TypographyVariant, TypographyToken>;
+
+export const typography: Typography = {
+  // 净资产金额（Hero 卡）；超过 9 位整数按档位降级 40 → 34 → 28，不做连续压缩
+  display: { fontSize: 40, lineHeight: 46, fontWeight: '600', letterSpacing: -0.8, maxFontSizeMultiplier: 1.15 },
+  // 记一笔输入金额（自动缩小，下限 28）
+  amountEntry: { fontSize: 44, lineHeight: 52, fontWeight: '600', letterSpacing: -0.9, maxFontSizeMultiplier: 1.15 },
+  // Tab 根页面大标题（资产 / 统计 / 设置）
+  title1: { fontSize: 28, lineHeight: 34, fontWeight: '700', letterSpacing: -0.4, maxFontSizeMultiplier: 1.2 },
+  // 卡片大数字、页内主数字
+  title2: { fontSize: 22, lineHeight: 28, fontWeight: '700', letterSpacing: -0.3, maxFontSizeMultiplier: 1.2 },
+  // 二级页标题
+  title3: { fontSize: 20, lineHeight: 25, fontWeight: '600', letterSpacing: 0, maxFontSizeMultiplier: 1.2 },
+  // 列表行标题、按钮
+  headline: { fontSize: 17, lineHeight: 22, fontWeight: '600', letterSpacing: 0, maxFontSizeMultiplier: 1.2 },
+  // 正文
+  body: { fontSize: 17, lineHeight: 22, fontWeight: '400', letterSpacing: 0, maxFontSizeMultiplier: 1.35 },
+  // 行副标题、账户名
+  subhead: { fontSize: 15, lineHeight: 20, fontWeight: '400', letterSpacing: 0, maxFontSizeMultiplier: 1.35 },
+  // 日期头、说明
+  footnote: { fontSize: 13, lineHeight: 18, fontWeight: '400', letterSpacing: 0, maxFontSizeMultiplier: 1.35 },
+  // 徽章、标签
+  caption: { fontSize: 12, lineHeight: 16, fontWeight: '500', letterSpacing: 0.1, maxFontSizeMultiplier: 1.3 },
+  // 最小字号档（任何地方都不许比它更小）
+  caption2: { fontSize: 11, lineHeight: 13, fontWeight: '500', letterSpacing: 0.2, maxFontSizeMultiplier: 1.3 },
+};
+
+/** 间距层（计划 4.3）：8pt 网格，只有这 8 个值，页面上不许再出现别的数字 */
+export type Spacing = {
+  xs: number;
+  sm: number;
+  md: number;
+  lg: number;
+  xl: number;
+  xxl: number;
+  xxxl: number;
+  huge: number;
+};
+
+export const spacing: Spacing = {
+  xs: 4,
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 20,
+  xxl: 24,
+  xxxl: 32,
+  huge: 40,
+};
+
+/** 页面级固定尺寸（计划 4.3）：页边距 / 卡内边距 / 分组间距 / 列表行最小高度 */
+export const layout = {
+  /** 页面左右边距 */
+  page: 16,
+  /** 卡内边距 */
+  card: 16,
+  /** 分组间距 */
+  section: 24,
+  /** 列表行最小高度（44 触控区 + 留白） */
+  rowMinHeight: 56,
+} as const;
+
+export type Layout = typeof layout;
+
+/** 圆角层（计划 4.3）：6 档取代现有约 28 档 */
+export const radius = {
+  /** 徽章 */
+  xs: 6,
+  /** 胶囊 / 输入框 */
+  sm: 10,
+  /** 按钮、图标方块 */
+  md: 14,
+  /** 卡片、Hero */
+  lg: 20,
+  /** 抽屉顶部 */
+  xl: 28,
+  /** 全圆 */
+  full: 999,
+} as const;
+
+export type Radius = typeof radius;
+
+/**
+ * 阴影层（计划 4.3 / 8.2 第 6 条）：全部走 RN 跨平台 boxShadow 字符串，iOS / Android 一致。
+ * level0 = 无阴影（用 hairline 撑轮廓）；夜间 level1 也无阴影（靠 surface 比 bg 亮一档 + hairline）。
+ * 用法：StyleSheet.create({ card: { ...elevation.level1 } }) 或 style={[styles.card, elevation.level2]}
+ */
+export type ElevationToken = { boxShadow?: string };
+
+export type Elevation = {
+  level0: ElevationToken;
+  level1: ElevationToken;
+  level2: ElevationToken;
+};
+
+export const lightElevation: Elevation = {
+  level0: {},
+  // 卡片：极轻双层阴影（日间）
+  level1: { boxShadow: '0px 1px 2px rgba(23,15,45,0.04), 0px 4px 12px rgba(23,15,45,0.06)' },
+  // 浮层：Tab 栏、抽屉、下拉
+  level2: { boxShadow: '0px 8px 24px rgba(23,15,45,0.12)' },
+};
+
+export const darkElevation: Elevation = {
+  level0: {},
+  // 夜间卡片不用阴影：surface(#15151E) 比 bg(#0B0B12) 亮一档即分层
+  level1: {},
+  level2: { boxShadow: '0px 8px 24px rgba(0,0,0,0.50)' },
 };
