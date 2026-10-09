@@ -8,6 +8,10 @@ export const en = {
   },
   common: {
     add: 'Add',
+    // 页头返回键的读屏标签（ScreenHeader 默认值）
+    back: 'Back',
+    // 关闭键 / 遮罩的读屏标签（BottomSheet 默认值）
+    close: 'Close',
     cancel: 'Cancel',
     delete: 'Delete',
     done: 'Done',

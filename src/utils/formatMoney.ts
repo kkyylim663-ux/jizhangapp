@@ -29,6 +29,7 @@
 //   9. formatMoney(1500, { compact: true })                           → '1.5k'
 //  10. formatMoney(1234567, { compact: true })                        → '1.2M'
 //  11. formatMoney(1234.5, { hidden: true })                          → '••••••'
+//  12. formatMoney(123456789012345, { compact: true })                 → '123.5T'（万亿档；再大进位到 Q）
 //  （小数位自定义：formatMoney(1234.5, { decimals: 0 }) → '1,235'）
 
 import { getCurrencySymbol } from './currencies';
@@ -82,10 +83,22 @@ function groupThousands(n: number, decimals: number): string {
   return int.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + frac;
 }
 
-/** 紧凑格式：1.5k / 1.2M / 3.4B；1000 以下保留原值（去尾零） */
+/** 紧凑格式：1.5k / 1.2M / 3.4B / 5.6T（万亿）；1000 以下保留原值（去尾零） */
 function compactNumber(abs: number): string {
-  if (abs >= 1e9) return trimZeros(abs / 1e9, 1) + 'B';
-  if (abs >= 1e6) return trimZeros(abs / 1e6, 1) + 'M';
+  // 万亿：15 位以上金额的兜底写法（验收退回第 2 条，例 +RM123.5T）
+  if (abs >= 1e12) {
+    const t = trimZeros(abs / 1e12, 1);
+    // 999,999,999,999,999 → '1000T' 这种进位直接升一级（与下面 k→M 同一规矩）
+    return Number(t) >= 1000 ? trimZeros(abs / 1e15, 1) + 'Q' : t + 'T';
+  }
+  if (abs >= 1e9) {
+    const b = trimZeros(abs / 1e9, 1);
+    return Number(b) >= 1000 ? trimZeros(abs / 1e12, 1) + 'T' : b + 'B';
+  }
+  if (abs >= 1e6) {
+    const m = trimZeros(abs / 1e6, 1);
+    return Number(m) >= 1000 ? trimZeros(abs / 1e9, 1) + 'B' : m + 'M';
+  }
   if (abs >= 1e3) {
     const k = trimZeros(abs / 1e3, 1);
     // 999,999 → '1000k' 这种进位直接升一级成 '1M'

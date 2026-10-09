@@ -9,6 +9,10 @@ export const zh = {
   },
   common: {
     add: '添加',
+    // 页头返回键的读屏标签（ScreenHeader 默认值）
+    back: '返回',
+    // 关闭键 / 遮罩的读屏标签（BottomSheet 默认值）
+    close: '关闭',
     cancel: '取消',
     delete: '删除',
     done: '完成',

@@ -36,6 +36,9 @@ import { AppDialogProvider } from './src/components/AppDialog';
 import { useSyncManager } from './src/hooks/useSyncManager';
 import { ThemeModeProvider } from './src/context/ThemeModeContext';
 import { LanguageProvider, useT } from './src/i18n/LanguageContext';
+// ⚠ 组件预览页（T03–T05 起）：只在 __DEV__ + web + ?gallery=1 时生效，不进正式导航。
+//   后续每一批都用它做回归截图，**T32 清理任务时才删**（本行 + App() 里的 galleryMode 守卫 + 预览页文件）。
+import ComponentGallery from './src/screens/_preview/ComponentGallery';
 import { useNotificationSetup } from './src/hooks/useNotificationSetup';
 import { usePaymentReminders } from './src/hooks/usePaymentReminders';
 import {
@@ -749,6 +752,10 @@ function AppContent() {
 }
 
 export default function App() {
+  // ⚠ 组件预览页开关（仅 __DEV__ + web + ?gallery=1；后续批次回归测试用，T32 清理时删）
+  const galleryMode =
+    Platform.OS === 'web' && typeof window !== 'undefined' && /[?&]gallery=1/.test(window.location.search);
+
   // 打包字体（计划 8.2 第 1 条 / T01b）：4 档 Inter 静态字重随包发，只覆盖数字 / 拉丁字形，
   // 中文继续走系统字体。键名 = 字体内部 PostScript 名，必须与 src/theme/theme.ts 的
   // fontFamily 令牌保持一致（改一处要同步另一处）。
@@ -788,7 +795,9 @@ export default function App() {
               <AppLockProvider>
                 <AppDialogProvider>
                   <AppProvider>
-                    <AppContent />
+                    {/* ⚠ 组件预览页（后续批次回归测试用，T32 清理时删）：
+                        只在 __DEV__ + web + URL 带 ?gallery=1 时替换真实 App，不进正式导航。 */}
+                    {__DEV__ && galleryMode ? <ComponentGallery /> : <AppContent />}
                     {/* 全局主题化弹窗 Host 已内置于 AppDialogProvider：
                         <AppDialog /> 的 DialogHost 随 Provider 渲染 */}
                   </AppProvider>
