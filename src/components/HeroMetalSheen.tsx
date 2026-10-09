@@ -30,8 +30,9 @@
  *  - 卡顶光缝：1.5dp、透明度=强度（静止 0.5 → 扫光 1.0，同步亮一下）；被卡圆角裁切。
  *
  * 降级（处方 7）：系统「减少动态效果」→ 不订阅陀螺仪、不循环扫光，只保留静态效果（光带停正中）；
- * 无传感器的设备 → 只保留自动循环 + 触发扫光；Web：masked-view 的 Web 实现只渲染遮罩本身
- * （不裁子层）→ 本组件整体不渲染（Web 只是预览环境，真机不受影响）。
+ * 无传感器的设备 → 只保留自动循环 + 触发扫光；Web / 订阅失败（T11a）→ 同样不订阅陀螺仪、
+ * 退回自动扫光（15s 一次），流光照常显示、不白屏；
+ * Web：masked-view 的 Web 实现只渲染遮罩本身（不裁子层）→ 本组件整体不渲染（Web 只是预览环境，真机不受影响）。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Platform, StyleSheet, Text, View } from 'react-native';
@@ -46,6 +47,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import { DeviceMotion } from 'expo-sensors';
+import type { DeviceMotionMeasurement } from 'expo-sensors';
 import MaskedView from '@react-native-masked-view/masked-view';
 
 const GAMMA_MAX_RAD = 0.35; // ±20°（左右倾）映射满行程：小倾角即可见
@@ -135,6 +137,12 @@ export function useHeroSheen({ active }: { active: boolean }): HeroSheen {
 
   // 传感器可用性探测：无陀螺仪的设备（与 Web）拿不到 → 仍保留自动循环 + 触发扫光
   useEffect(() => {
+    // T11a：Web 端 expo-sensors 的 DeviceMotion 没有对应原生模块，addListener 会直接抛
+    // "this._nativeModule.addListener is not a function"（整页白屏）→ 直接判为不可用，不订阅。
+    if (Platform.OS === 'web') {
+      setSensorOk(false);
+      return;
+    }
     let mounted = true;
     DeviceMotion.isAvailableAsync()
       .then((ok) => {
@@ -157,9 +165,7 @@ export function useHeroSheen({ active }: { active: boolean }): HeroSheen {
   // 倾斜 → 高光位置：仅「页面聚焦 + App 在前台 + 有传感器 + 未开减少动效」时订阅
   useEffect(() => {
     if (!active || !appActive || !sensorOk || reduceMotion) return;
-    DeviceMotion.setUpdateInterval(32); // ~30Hz：足够顺滑，也省电
-    betaNeutralRef.current = null; // 重新订阅 = 重新取一次握姿基线
-    const sub = DeviceMotion.addListener(({ rotation }) => {
+    const handleRotation = ({ rotation }: DeviceMotionMeasurement) => {
       if (!rotation) return;
       const beta = rotation.beta ?? 0;
       const gamma = rotation.gamma ?? 0;
@@ -193,8 +199,19 @@ export function useHeroSheen({ active }: { active: boolean }): HeroSheen {
       const betaPos = clamp1((beta - betaNeutralRef.current) / BETA_MAX_RAD);
       const target = clamp1(gammaPos * (1 - BETA_WEIGHT) + betaPos * BETA_WEIGHT);
       tiltPos.value = withTiming(target, { duration: TILT_FOLLOW_MS, easing: Easing.linear });
-    });
-    return () => sub.remove();
+    };
+    let sub: { remove: () => void } | null = null;
+    try {
+      // T11a：真正碰传感器前才做订阅动作；拿不到（原生模块缺失 / 环境不支持）就退化为
+      // 「无传感器」—— 只走自动扫光（15s 一次），流光与静态效果照常显示，绝不白屏
+      DeviceMotion.setUpdateInterval(32); // ~30Hz：足够顺滑，也省电
+      betaNeutralRef.current = null; // 重新订阅 = 重新取一次握姿基线
+      sub = DeviceMotion.addListener(handleRotation);
+    } catch (e) {
+      console.warn('陀螺仪订阅失败，退回自动扫光：', e);
+      setSensorOk(false);
+    }
+    return () => sub?.remove();
   }, [active, appActive, sensorOk, reduceMotion, sweepOn, tiltPos]);
 
   // 聚焦/前后台/减少动效/传感器可用性变化 → 清计时器并重新判断（处方 7/8）
