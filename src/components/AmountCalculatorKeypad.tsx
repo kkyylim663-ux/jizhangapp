@@ -2,9 +2,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, Image, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/useTheme';
-import { useT } from '../i18n/LanguageContext';
+import { useLayout } from '../theme/useLayout';
+import { useT, useLanguage } from '../i18n/LanguageContext';
 import { PRESS_TRANSITION } from './PressableScale';
-import { hapticLight } from '../utils/haptics';
+import { hapticLight, hapticSelection } from '../utils/haptics';
+import { formatDate } from '../utils/formatDate';
 
 interface AmountCalculatorKeypadProps {
   onPressKey: (key: string) => void;
@@ -35,8 +37,6 @@ interface AmountCalculatorKeypadProps {
   selectedDate?: string;
 }
 
-const CELL_HEIGHT = 70; // 数字格子调大——原来 58，现在整体键盘区更大更好按
-
 export function AmountCalculatorKeypad({
   onPressKey,
   onPressToday,
@@ -55,8 +55,12 @@ export function AmountCalculatorKeypad({
   onNoteBlur,
   selectedDate,
 }: AmountCalculatorKeypadProps) {
-  const { colors } = useTheme();
+  const { colors, semantic } = useTheme();
   const t = useT();
+  const { langMode } = useLanguage();
+  // 键高按版型分级（计划 8.2：窄 48 / 常规 56 / 大 60；矮屏统一 48），
+  // 4 行按键总高随档位变化；数字格 / 退格 / 日期格 = 1 键高，「完成」= 2 键高
+  const { keypadKeyHeight } = useLayout();
 
   // 日期键实时显示表单选中的日期；只有选中的就是今天时才标注"今天"，
   // 选了别的日子就显示那天的月/日，避免误导用户还停留在今天
@@ -65,8 +69,10 @@ export function AmountCalculatorKeypad({
   const isToday = !selectedDate || selectedDate === todayStr;
   const parsedSelected = isToday ? today : new Date(`${selectedDate}T00:00:00`);
   const shownDate = isNaN(parsedSelected.getTime()) ? today : parsedSelected;
-  // 日期显示格式：日在前、月在后（如 9月2日 显示 2/9）
-  const dateLabel = `${shownDate.getDate()}/${shownDate.getMonth() + 1}`;
+  // 日期显示格式统一走 formatDate（计划 4.4，修掉「日在前 / 月在前」的混乱）：
+  // 中文 10月9日 / 英文 Oct 9。relative:false —— 上行标签已单独说「今天 / 日期」，
+  // 这里恒定输出绝对月日，避免选中的是「今天」时两行都写「今天」
+  const dateLabel = formatDate(shownDate, langMode, { style: 'monthDay', relative: false });
 
   // 左侧 3 列布局数据：右下角是小数点键（标准金额录入，替代原来的 Enter 箭头）
   const leftKeys = [
@@ -77,8 +83,16 @@ export function AmountCalculatorKeypad({
   ];
 
   const handlePress = (key: string, type?: string) => {
-    // 按键触感：普通键 light、完成键（确认保存）success 由调用方处理，这里只管键面
-    hapticLight();
+    // 震动分级（计划 4.3）：数字键 0-9 = selection；退格 / C / 小数点 / 日期键 = light；
+    // 「完成」键这里不震（保存成功的 success 震动由调用方统一处理）。
+    // 注：退格长按连删走 onPressKeyRef 直连循环、不经过这里 —— 只在按下时震一次，连删保持静默
+    if (type === 'confirm') {
+      // 完成键：不震
+    } else if (!type) {
+      hapticSelection(); // 数字键 0-9
+    } else {
+      hapticLight(); // 退格 / C / 小数点 / 日期键
+    }
     if (type === 'today') return onPressToday();
     if (type === 'confirm') return onConfirm();
     if (type === 'clear') return onClear();
@@ -168,7 +182,7 @@ export function AmountCalculatorKeypad({
             onPress={() => handlePress(item.key, item.type)}
             style={({ pressed }) => [
               styles.cell3Col,
-              { borderColor: colors.dividerHair },
+              { height: keypadKeyHeight, borderColor: colors.dividerHair },
               // 按下即时反馈：整格缩放 0.96（CSS transition 由 PRESS_TRANSITION 提供）
               PRESS_TRANSITION,
               pressed && { transform: [{ scale: 0.96 }] },
@@ -199,7 +213,7 @@ export function AmountCalculatorKeypad({
           delayLongPress={350}
           style={({ pressed }) => [
             styles.cell1Col,
-            { borderColor: colors.dividerHair },
+            { height: keypadKeyHeight, borderColor: colors.dividerHair },
             PRESS_TRANSITION,
             pressed && { transform: [{ scale: 0.96 }] },
           ]}
@@ -212,7 +226,7 @@ export function AmountCalculatorKeypad({
           onPress={() => handlePress('today', 'today')}
           style={({ pressed }) => [
             styles.cell1Col,
-            { borderColor: colors.dividerHair },
+            { height: keypadKeyHeight, borderColor: colors.dividerHair },
             PRESS_TRANSITION,
             pressed && { transform: [{ scale: 0.96 }] },
           ]}
@@ -238,14 +252,14 @@ export function AmountCalculatorKeypad({
           style={({ pressed }) => [
             styles.cell1Col,
             styles.confirmCell,
-            { borderColor: colors.dividerHair, backgroundColor: colors.fabBg },
+            { height: keypadKeyHeight * 2, borderColor: colors.dividerHair, backgroundColor: semantic.accent },
             PRESS_TRANSITION,
             pressed && { transform: [{ scale: 0.97 }] },
           ]}
         >
-          <Text style={[styles.keyText, { color: colors.fabIcon, fontWeight: '600' }]}>{t('addTx.keypadConfirm')}</Text>
+          <Text style={[styles.keyText, { color: semantic.onAccent, fontWeight: '600' }]}>{t('addTx.keypadConfirm')}</Text>
           {!!onConfirmLongPress && (
-            <Text style={[styles.confirmHint, { color: colors.fabIcon }]}>{t('addTx.keypadConfirmHint')}</Text>
+            <Text style={[styles.confirmHint, { color: semantic.onAccent }]}>{t('addTx.keypadConfirmHint')}</Text>
           )}
         </Pressable>
       </View>
@@ -313,7 +327,7 @@ const styles = StyleSheet.create({
   },
   cell3Col: {
     width: '33.33%',
-    height: CELL_HEIGHT,
+    // 高度不用写死：由 JSX 内联传 useLayout().keypadKeyHeight（4 行总高随版型档位变化）
     justifyContent: 'center',
     alignItems: 'center',
     borderRightWidth: StyleSheet.hairlineWidth,
@@ -321,14 +335,14 @@ const styles = StyleSheet.create({
   },
   cell1Col: {
     width: '100%',
-    height: CELL_HEIGHT,
+    // 高度由 JSX 内联传 useLayout().keypadKeyHeight
     justifyContent: 'center',
     alignItems: 'center',
     borderRightWidth: StyleSheet.hairlineWidth,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   confirmCell: {
-    height: CELL_HEIGHT * 2,
+    // 高度 = 2 × keypadKeyHeight，由 JSX 内联传入（占右侧第 3、4 行两格）
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -350,14 +364,16 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   confirmHint: {
-    fontSize: 10,
+    // 11pt = 字号令牌最小档（UI_RULES：禁止 7–10pt），仍在「完成」键内部第二行
+    fontSize: 11,
     marginTop: 3,
     opacity: 0.75,
     textAlign: 'center',
     alignSelf: 'center',
   },
   keyText: {
-    fontSize: 25,
+    // 26pt 为计划 5.3 A5 用户定版值
+    fontSize: 26,
     textAlign: 'center',
     alignSelf: 'center',
   },
