@@ -1,158 +1,118 @@
 // TransactionTypeHeader.tsx
-// 记一笔页头（T13 / 计划 A8 抽取）：返回 + 支出/收入/转账/兑换 四格类型切换 + 扫票。
-// 提取自 AddTransactionScreen 里重复两份的头部（转账/兑换分支与支出/收入分支），
-// T13 阶段视觉与行为零变化；T14 会在此基础上改成「返回+标题+扫票 / 分段控件」两行。
+// 记一笔页头（T13 抽取 / T14 改两行 —— 计划 9.2 第 ① 条「把挤的控件挪到单独一行」）：
+//   第一行：返回 IconButton + 标题 + 右侧动作（扫票；编辑模式换成红色垃圾桶）
+//   第二行：类型分段 SegmentedControl（stretch 四等分占满一整行，每段约 82dp，
+//          英文 Exchange 也放得下；编辑模式没有类型切换，不渲染这一行）
 //
-// 扫票：转账/兑换不做扫票识别 —— 不传 onScanPress 时渲染同尺寸透明占位，保住排版不位移。
+// 扫票：支出/收入传 onScanPress；转账/兑换不做扫票识别（不传就不渲染，标题左对齐不受影响）。
 
-import React from 'react';
-import { Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import React, { useMemo } from 'react';
+import { StyleSheet, View } from 'react-native';
 import { useTheme } from '../../theme/useTheme';
-import { useT, useLanguage } from '../../i18n/LanguageContext';
-import { hapticSelection } from '../../utils/haptics';
-import { ThemeColors } from '../../theme/theme';
+import { useT } from '../../i18n/LanguageContext';
+import AppText from '../ui/AppText';
+import Button from '../ui/Button';
+import IconButton from '../ui/IconButton';
+import SegmentedControl from '../SegmentedControl';
+import type { Layout, Spacing } from '../../theme/theme';
 
 /** UI 层四个类型入口（兑换在数据层复用 transfer） */
 export type TransactionUiType = 'expense' | 'income' | 'transfer' | 'exchange';
 
 interface Props {
   uiType: TransactionUiType;
-  /** 点类型格：父层负责 setUiType / 清类别 / 切步骤 */
+  /** 点类型格：父层负责 setUiType / 清类别 / 切步骤（分段控件的选中震动由组件内部发） */
   onSelectType: (type: TransactionUiType) => void;
   onBack: () => void;
-  /** 扫票入口；不传 → 透明占位（转账/兑换） */
+  /** 标题（记一笔 / 编辑账单） */
+  title: string;
+  /** 扫票入口（相机图标 + 文字）；转账/兑换不传 */
   onScanPress?: () => void;
+  /** 删除入口（编辑模式：右侧红色垃圾桶，替代扫票） */
+  onDeletePress?: () => void;
+  /** 类型分段行（默认显示；编辑模式传 false） */
+  showTypeSwitch?: boolean;
 }
 
-export function TransactionTypeHeader({ uiType, onSelectType, onBack, onScanPress }: Props) {
-  const { colors, isDark } = useTheme();
+export function TransactionTypeHeader({
+  uiType,
+  onSelectType,
+  onBack,
+  title,
+  onScanPress,
+  onDeletePress,
+  showTypeSwitch = true,
+}: Props) {
+  const { semantic, spacing, layout } = useTheme();
   const t = useT();
-  const { langMode } = useLanguage();
-  const styles = React.useMemo(() => makeStyles(colors, isDark), [colors, isDark]);
+  const styles = useMemo(() => makeStyles(spacing, layout), [spacing, layout]);
 
-  const TYPE_TABS: { key: TransactionUiType; label: string }[] = [
-    { key: 'expense', label: t('addTx.expense') },
-    { key: 'income', label: t('addTx.income') },
-    { key: 'transfer', label: t('addTx.transfer') },
-    { key: 'exchange', label: t('addTx.exchange') },
+  const options = [
+    { value: 'expense', label: t('addTx.expense') },
+    { value: 'income', label: t('addTx.income') },
+    { value: 'transfer', label: t('addTx.transfer') },
+    { value: 'exchange', label: t('addTx.exchange') },
   ];
 
   return (
-    <View style={styles.txHeaderRow}>
-      <TouchableOpacity
-        style={styles.txHeaderBackBtn}
-        onPress={onBack}
-        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-      >
-        <Ionicons name="chevron-back" size={22} color={colors.icon} style={{ fontWeight: '700' }} />
-      </TouchableOpacity>
-      <View style={styles.txHeaderTypeSwitch}>
-        {TYPE_TABS.map((tab, idx) => (
-          <React.Fragment key={tab.key}>
-            {/* 格间竖分割线：一体框格内的分格标记 */}
-            {idx > 0 && <View style={styles.txHeaderTypeDivider} />}
-            <Pressable
-              style={({ pressed }) => [
-                styles.txHeaderTypeBtn,
-                uiType === tab.key && styles.txHeaderTypeBtnActive,
-                pressed && (uiType === tab.key ? styles.txHeaderTypeBtnSinkActive : styles.txHeaderTypeBtnSink),
-              ]}
-              onPress={() => {
-                hapticSelection();
-                onSelectType(tab.key);
-              }}
-            >
-              <Text
-                style={[styles.txHeaderTypeText, langMode !== 'zh' && styles.txHeaderTypeTextEn, uiType === tab.key && styles.txHeaderTypeTextActive]}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.8}
-              >
-                {tab.label}
-              </Text>
-              {/* 底线：标记当前所在页面 */}
-              {uiType === tab.key && <View style={styles.txHeaderTypeUnderline} />}
-            </Pressable>
-          </React.Fragment>
-        ))}
+    <View style={styles.header}>
+      <View style={styles.headerRow}>
+        <IconButton icon="chevron-back" accessibilityLabel={t('common.back')} onPress={onBack} />
+        {/* 标题左对齐跟住返回键（页头规范：返回 + 标题 + 右侧动作），放不下也不缩字、不省略 */}
+        <AppText variant="title3" numberOfLines={1} style={styles.title}>
+          {title}
+        </AppText>
+        {onDeletePress ? (
+          <IconButton
+            icon="trash-outline"
+            color={semantic.danger}
+            accessibilityLabel={t('common.delete')}
+            onPress={onDeletePress}
+          />
+        ) : onScanPress ? (
+          <Button
+            title={t('addTx.scanReceipt')}
+            icon="camera-outline"
+            variant="ghost"
+            size="sm"
+            fullWidth={false}
+            onPress={onScanPress}
+          />
+        ) : null}
       </View>
-      {onScanPress ? (
-        <TouchableOpacity style={styles.txHeaderScanBtn} onPress={onScanPress}>
-          <Ionicons name="camera-outline" size={13} color={colors.link} style={{ marginRight: 4 }} />
-          <Text style={styles.txHeaderScanBtnText}>{t('addTx.scanReceipt')}</Text>
-        </TouchableOpacity>
-      ) : (
-        /* 转账/兑换不做扫票识别：按钮隐藏，但用同尺寸的透明占位保住排版不变 */
-        <View style={[styles.txHeaderScanBtn, { opacity: 0 }]} pointerEvents="none">
-          <Ionicons name="camera-outline" size={13} color={colors.link} style={{ marginRight: 4 }} />
-          <Text style={styles.txHeaderScanBtnText}>{t('addTx.scanReceipt')}</Text>
+      {showTypeSwitch && (
+        <View style={styles.typeRow}>
+          {/* 分段控件的选项值就是 UiType（字符串联合），回传时收窄 */}
+          <SegmentedControl
+            options={options}
+            selected={uiType}
+            onSelect={(value) => onSelectType(value as TransactionUiType)}
+            stretch
+          />
         </View>
       )}
     </View>
   );
 }
 
-/** 令牌进、StyleSheet 出（T13 零视觉变化：沿用调整前页面的同一组旧令牌值） */
-function makeStyles(colors: ThemeColors, isDark: boolean) {
+/** 令牌进、StyleSheet 出（禁止写死色值 / 字号 / 间距） */
+function makeStyles(spacing: Spacing, layout: Layout) {
   return StyleSheet.create({
-    txHeaderRow: {
+    header: {
+      paddingHorizontal: layout.page,
+      paddingTop: spacing.xs,
+      paddingBottom: spacing.sm,
+    },
+    // 第一行：返回 44 触控区 + 标题（吃满剩余宽）+ 右侧动作
+    headerRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      paddingHorizontal: 12,
-      paddingTop: 6,
-      paddingBottom: 10,
+      minHeight: 44,
+      columnGap: spacing.sm,
     },
-    // 返回按钮：更大(40)、紫色外环（与"全部"Pill 同色）、加粗箭头，让返回入口足够明显
-    txHeaderBackBtn: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
-      borderWidth: 1.5,
-      borderColor: colors.link,
-      backgroundColor: colors.card,
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginRight: 8,
-    },
-    // 类型导航（支出/收入/转账/兑换）：一体框格——外层一个大框，内部四格间竖分割线贯通整格
-    txHeaderTypeSwitch: {
-      flex: 1,
-      flexDirection: 'row',
-      alignItems: 'stretch',
-      backgroundColor: colors.bg,
-      borderRadius: 14,
-      borderWidth: 1,
-      borderColor: colors.dividerHair,
-      overflow: 'hidden',
-    },
-    txHeaderTypeDivider: { width: 1, alignSelf: 'stretch', backgroundColor: colors.dividerHair },
-    txHeaderTypeBtn: {
-      flex: 1,
-      minHeight: 46,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    txHeaderTypeBtnSink: { backgroundColor: colors.link + '14' },
-    txHeaderTypeBtnSinkActive: { backgroundColor: colors.fabBg },
-    txHeaderTypeBtnActive: { backgroundColor: colors.fabBg },
-    txHeaderTypeText: { fontSize: 14, fontWeight: '700', color: colors.textSecondary, textAlign: 'center' },
-    // 英文界面 Exchange 在 60px 格内差 2px 会出省略号：收紧字距兜住（中文两字不受影响）
-    txHeaderTypeTextEn: { letterSpacing: -0.5 },
-    txHeaderTypeTextActive: { color: colors.bg },
-    txHeaderTypeUnderline: { height: 2, width: '60%', marginTop: 3, borderRadius: 1, backgroundColor: colors.bg },
-    txHeaderScanBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      marginLeft: 8,
-      paddingHorizontal: 10,
-      paddingVertical: 10,
-      borderRadius: 18,
-      borderWidth: 1,
-      borderColor: colors.link,
-      backgroundColor: colors.bg,
-    },
-    txHeaderScanBtnText: { fontSize: 12, fontWeight: '600', color: colors.link },
+    title: { flex: 1 },
+    // 第二行：类型分段独占一行（stretch 撑满内容宽），与标题行只留半个格
+    typeRow: { marginTop: spacing.xs },
   });
 }
 

@@ -33,6 +33,11 @@ interface Props {
   selected: string;
   /** 点选项立即生效（含重复点已选中项，由调用方决定行为） */
   onSelect: (value: string) => void;
+  /**
+   * 等分撑满父容器宽度（T14：记一笔类型分段「支出/收入/转账/兑换」占满一整行，每段约 82dp）。
+   * 默认 false = 保持原来的「内容宽 + 左对齐」，现有调用方（设置页 / 日历卡）外观不变。
+   */
+  stretch?: boolean;
 }
 
 /** 槽高（视觉高度） */
@@ -46,7 +51,7 @@ const SEGMENT_MIN_WIDTH = 52;
 /** 每段上下各补多少触控：轨道 36 + 外侧留白 → 整块 44 */
 const SEGMENT_HIT_SLOP = (TOUCH_HEIGHT - TRACK_HEIGHT) / 2 + TRACK_PADDING;
 
-export default function SegmentedControl({ options, selected, onSelect }: Props) {
+export default function SegmentedControl({ options, selected, onSelect, stretch }: Props) {
   const { semantic, radius, motion } = useTheme();
   const styles = useMemo(() => makeStyles(semantic, radius), [semantic, radius]);
 
@@ -94,7 +99,7 @@ export default function SegmentedControl({ options, selected, onSelect }: Props)
   }));
 
   return (
-    <View style={styles.touchWrap}>
+    <View style={[styles.touchWrap, stretch && styles.touchWrapStretch]}>
       <View style={styles.track}>
         <Animated.View style={[styles.thumb, thumbStyle]} />
         {options.map((opt) => {
@@ -102,7 +107,7 @@ export default function SegmentedControl({ options, selected, onSelect }: Props)
           return (
             <TouchableOpacity
               key={opt.value}
-              style={styles.segment}
+              style={[styles.segment, stretch && styles.segmentStretch]}
               activeOpacity={0.75}
               onLayout={onSegmentLayout(opt.value)}
               hitSlop={{ top: SEGMENT_HIT_SLOP, bottom: SEGMENT_HIT_SLOP, left: 0, right: 0 }}
@@ -135,6 +140,8 @@ function makeStyles(semantic: SemanticColors, radius: Radius) {
   return StyleSheet.create({
     // 外侧留白：把触控区从 36 撑到 44，视觉轨道仍是 36
     touchWrap: { paddingVertical: (TOUCH_HEIGHT - TRACK_HEIGHT) / 2, alignSelf: 'flex-start' },
+    // stretch 档：外层撑满父容器（轨道随之等宽），段与段 flex:1 四等分
+    touchWrapStretch: { alignSelf: 'stretch' },
     // 槽：中性灰底（hairline 在日夜两套里都是"浅一档的底"），minHeight 而非固定高度
     track: {
       flexDirection: 'row',
@@ -160,5 +167,7 @@ function makeStyles(semantic: SemanticColors, radius: Radius) {
       alignItems: 'center',
       justifyContent: 'center',
     },
+    // stretch 档：每段等分（四段各占 1/4 行宽）
+    segmentStretch: { flex: 1 },
   });
 }

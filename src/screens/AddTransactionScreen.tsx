@@ -20,7 +20,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import Svg, { Path } from 'react-native-svg';
 import * as ImagePicker from 'expo-image-picker';
 import { useApp } from '../context/AppContext';
 import { ROUTES } from '../navigation/routes';
@@ -34,13 +33,21 @@ import { getCurrencySymbol } from '../utils/currencies';
 import { CATEGORY_ICON_OPTIONS, CATEGORY_COLOR_OPTIONS, CategoryIconName } from '../constants/categoryAddOptions';
 import { hapticLight, hapticSelection, hapticSuccess, hapticWarning } from '../utils/haptics';
 import { useTheme } from '../theme/useTheme';
+import { useLayout } from '../theme/useLayout';
 import { useTabClearance } from '../hooks/useTabClearance';
 import { useTabBarScrollHandler, useTabBarForceHide } from '../context/TabBarAutoHideContext';
-import { ThemeColors } from '../theme/theme';
+import { ThemeColors, SemanticColors, Spacing, Layout } from '../theme/theme';
 import { useAmountExpression } from '../hooks/useAmountExpression';
+import { getExpressionTotal } from '../utils/amountExpression';
+import { formatMoney } from '../utils/formatMoney';
+import { formatDate as formatDateLabel } from '../utils/formatDate';
 import { AmountCalculatorKeypad } from '../components/AmountCalculatorKeypad';
 import { CursorAmountText } from '../components/CursorAmountText';
 import { ReceiptCameraModal } from '../components/ReceiptCameraModal';
+import AppText from '../components/ui/AppText';
+import Card from '../components/ui/Card';
+import Chip from '../components/ui/Chip';
+import PressableScale from '../components/PressableScale';
 import { TransactionTypeHeader } from '../components/transaction/TransactionTypeHeader';
 import { AccountPickerSheet } from '../components/transaction/AccountPickerSheet';
 import { ReceiptPreviewModal } from '../components/transaction/ReceiptPreviewModal';
@@ -99,6 +106,27 @@ function twoLineLabel(label: string, boxW: number, fullW: number) {
   return boxW < fullW && label.indexOf(' ') > 0 ? label.replace(' ', '\n') : label;
 }
 
+// T14：把 getExpressionDisplay() 的输出（"5.00" / "5.00 + 2.00"）还原成求和函数要吃的最小结构，
+// 交给共享的 getExpressionTotal 求和——只为「算式在上、合计在下」的展示，不改任何计算逻辑
+// （保存时的金额仍由 amountExpr.confirm() 出，这里是纯展示值）
+function expressionTotal(display: string): number {
+  const tokens = display.split(/\s+([+-])\s+/); // 值 / 运算符交替
+  const terms = tokens
+    .filter((_, i) => i % 2 === 0)
+    .map((tok, i) => ({
+      op: (i === 0 ? '+' : (tokens[i * 2 - 1] as '+' | '-')),
+      raw: String(Math.round((parseFloat(tok) || 0) * 100)),
+    }));
+  return getExpressionTotal({ terms });
+}
+
+/** 金额字号档位（UI_RULES 第 5 节：按档位降级、不做连续压缩）：≤9 字符 = 基准 44 · ≤12 字符 34 · 更多 28 */
+function amountFontTier(display: string, base: number): number {
+  if (display.length <= 9) return base;
+  if (display.length <= 12) return 34;
+  return 28;
+}
+
 type Step = 'category' | 'detail' | 'transferDetail';
 
 // 类别横排"最近用过"快捷选择：本地存一份最近选过的类别 id（新的插最前面，去重），
@@ -123,7 +151,9 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   const { categories, categoryGroups, addCategory, addCategoryGroup, deleteCategoryGroup, addTransaction, updateTransaction, addTransfer, updateCategory, deleteCategory, deleteTransaction, assets, getAssetBalance, currencySymbol, currency, activeLedgerId, paymentPlans, addPaymentPlan } =
     useApp();
   const insets = useSafeAreaInsets();
-  const { colors, isDark } = useTheme();
+  const { colors, isDark, semantic, spacing, layout, typography } = useTheme();
+  // 矮屏（可用高 < 700）：金额卡内边距 / 行距再收紧一档，保证「金额 + 至少 2 行类别 + 键盘」一屏可见
+  const { isShort } = useLayout();
   const t = useT();
   const { langMode } = useLanguage();
   // 主题化弹窗（替代系统 Alert）
@@ -132,7 +162,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   const onTabScroll = useTabBarScrollHandler(); // 不传参数！
   const setTabBarForceHidden = useTabBarForceHide();
   const isFocused = useIsFocused();
-  const styles = useMemo(() => makeStyles(colors, isDark), [colors, isDark]);
+  const styles = useMemo(() => makeStyles(colors, isDark, semantic, spacing, layout), [colors, isDark, semantic, spacing, layout]);
 
   const editTransaction: Transaction | undefined = route?.params?.editTransaction;
   const isEditing = !!editTransaction;
@@ -187,8 +217,6 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   // 普通收支专用：可选的资产账户（这笔钱从/到哪个账户）——没有编辑数据时，用"资产"页设的默认账户
   const [assetId, setAssetId] = useState<string | null>(editTransaction?.assetId ?? defaultAsset?.id ?? null);
   const [assetPickerOpen, setAssetPickerOpen] = useState(false);
-  // 从金额卡的币种标签（L 型上半）打开账户弹层时，币种下拉要同时展开；账户行进入则不展开
-  const [pickerOpenWithCurrencyDrop, setPickerOpenWithCurrencyDrop] = useState(false);
 
   // 用户手动选过账户后就不再自动跟随"默认账户"变化；保存后重置（resetAll）恢复自动跟随。
   // 编辑已有账单时初始值来自账单本身，视为已手动确定
@@ -546,49 +574,22 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   // 弹层里的币种项只做账户筛选，不再改金额币种（displayCurrencyCode 直选机制已移除）
   const selectedAsset = assets.find((a) => a.id === assetId);
   const amountCurrencyCode = selectedAsset?.currency ?? currency;
-  const amountCurrencySymbol = getCurrencySymbol(amountCurrencyCode);
   // Hero 账户选择框宽度 = 转账页账户块的实测宽度（transferBlockW，onLayout 从转账块同步来，
   // 两页切换零跑位）；首次渲染还没量到时用几何公式兜底（转账卡内 flex:1 均分 = (屏宽−116)/2）
   const [transferBlockW, setTransferBlockW] = useState((Dimensions.get('window').width - 116) / 2);
-  const heroPickerW = transferBlockW;
-  // D-3.1：真机反馈——账户名过长会被截断，账户框改「弹性撑满」金额行下方可用宽度
-  // （不再跟随转账块定宽）；宽度 onLayout 实测喂给 SVG 路径。货币标签仍贴内容宽不跟长
-  const [heroWrapW, setHeroWrapW] = useState(heroPickerW);
-  // D-3：L 型选择器整块改 SVG 一笔轮廓——标签+胶囊一根线画完，物理上无接缝；
-  // 内凹圆角（ri）让标签右缘自然拐进胶囊顶边，是 View 边框画不出的「自然拐角」。
-  // 标签宽 Wt=标签内容 onLayout 实测（货币代码恒 3 字母，稳定），路径随其实测值动态生成
-  const [heroTabW, setHeroTabW] = useState(88);
-  const HT = 38; // 标签高
-  const HP = 54; // 胶囊高
-  const HH = HT + HP; // 整块高 92
-  const heroLPaths = useMemo(() => {
-    const W = Math.max(heroWrapW, heroTabW + 40);
-    const wt = Math.min(heroTabW, W - 40); // 防御：标签宽不得挤掉内凹角与胶囊右圆角
-    const ri = 10; // 内凹拐角半径
-    const rT = 14; // 标签顶部圆角
-    const rP = 15; // 胶囊圆角（与原 heroCurrencyTouch radius 一致）
-    const f = (n: number) => n.toFixed(2);
-    const dL = [
-      `M ${f(rT)},0`,
-      `H ${f(wt - rT)}`,
-      `A ${rT} ${rT} 0 0 1 ${f(wt)},${rT}`,
-      `V ${f(HT - ri)}`,
-      `A ${ri} ${ri} 0 0 0 ${f(wt + ri)},${f(HT)}`,
-      `H ${f(W - rP)}`,
-      `A ${rP} ${rP} 0 0 1 ${f(W)},${f(HT + rP)}`,
-      `V ${f(HH - rP)}`,
-      `A ${rP} ${rP} 0 0 1 ${f(W - rP)},${f(HH)}`,
-      `H ${f(rP)}`,
-      `A ${rP} ${rP} 0 0 1 0,${f(HH - rP)}`,
-      `V ${f(rT)}`,
-      `A ${rT} ${rT} 0 0 1 ${f(rT)},0`,
-      'Z',
-    ].join(' ');
-    return { dL, W };
-  }, [heroWrapW, heroTabW]);
-  // Hero 金额字号：TASK-022 用户指定 21 号——基准 21，每多 1 位 -0.25px；底线 13 号
-  const heroAmountRaw = amountKeypadOpen ? amountExpr.displayValue : amount || '0.00';
-  const heroAmountFontSize = Math.max(13, 21 - Math.max(0, heroAmountRaw.replace('.', '').length - 9) * 0.25);
+  // T14：金额显示串——键盘打开时，单项 = 正在输入的金额串（带光标），
+  // 多项（有 +/− 运算符）= 算式移到金额上方 15pt、金额行显示合计（expressionTotal 复用共享求和函数）；
+  // 键盘关着时 = 已保存的金额（与保存语义一致，不改任何计算逻辑）
+  const heroAmountDisplay = amountKeypadOpen
+    ? amountExpr.isMulti
+      ? formatMoney(expressionTotal(amountExpr.displayValue))
+      : amountExpr.displayValue
+    : amount || '0.00';
+  // 金额字号档位（UI_RULES 第 5 节：按档位降级 44 → 34 → 28，不做连续压缩）
+  const heroAmountFontSize = amountFontTier(heroAmountDisplay, typography.amountEntry.fontSize);
+  const heroAmountLineHeight = Math.round(
+    heroAmountFontSize * (typography.amountEntry.lineHeight / typography.amountEntry.fontSize)
+  );
   const fromAsset = assets.find((a) => a.id === fromAssetId);
   const toAsset = assets.find((a) => a.id === toAssetId);
   const isCrossCurrency = !!fromAsset && !!toAsset && fromAsset.currency !== toAsset.currency;
@@ -1214,7 +1215,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
       <SafeAreaView style={styles.container} edges={['top']}
       onTouchStart={() => { Keyboard.dismiss(); }}>
         <View style={{ flex: 1 }}>
-        {/* 顶部与收入/支出完全统一：返回 + 四个类型 Tab + 扫票（T13 抽成 TransactionTypeHeader） */}
+        {/* 页头两行（T14）：返回 + 标题 + 扫票 / 类型分段独占一行；转账·兑换不做扫票识别 */}
         <TransactionTypeHeader
           uiType={uiType}
           onBack={() => navigation?.goBack()}
@@ -1223,6 +1224,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
             setCategoryId(null);
             setStep(stepForType(nextType));
           }}
+          title={t('nav.add')}
         />
 
         <ScrollView
@@ -1497,8 +1499,6 @@ export default function AddTransactionScreen({ navigation, route }: any) {
             title={accountPickerRole === 'from' ? t('addTx.selectOut') : t('addTx.selectIn')}
             selectedId={accountPickerRole === 'from' ? fromAssetId : toAssetId}
             excludeId={accountPickerRole === 'from' ? toAssetId : fromAssetId}
-            balance="transfer"
-            anchorDropToHeader
             currencyCode={amountCurrencyCode}
             onPickAsset={(id) => {
               // 手动选择/取消，之后不再自动跟随"默认账户"变化；再点一次已选＝取消选择
@@ -1916,30 +1916,16 @@ export default function AddTransactionScreen({ navigation, route }: any) {
           setScrollViewH((prev) => (prev == null || Math.abs(prev - h) > 0.5 ? h : prev));
         }}
       >
-        {/* 头部：返回 + 类型切换 + 扫票，合并成一行；编辑模式没有类型切换，保留原来的标题式头部 */}
+        {/* 头部两行（T14）：返回 + 标题 + 右侧动作（编辑模式 = 删除键）/ 类型分段单独一行 */}
         {isEditing ? (
-          <View style={styles.formHeaderRow}>
-            <View style={styles.formHeaderSide}>
-              <TouchableOpacity
-                style={styles.txHeaderBackBtn}
-                onPress={() => navigation?.goBack()}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <Ionicons name="chevron-back" size={22} color={colors.icon} style={{ fontWeight: "700" }} />
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.formHeaderTitle}>{t('addTx.editTitle')}</Text>
-            <View style={styles.formHeaderSideRight}>
-              {/* 删除入口从账单列表的滑动改到这里：点垃圾桶确认后删除并返回 */}
-              <TouchableOpacity
-                style={styles.txDeleteBtn}
-                onPress={handleDeleteTransaction}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <Ionicons name="trash-outline" size={20} color={colors.expense} />
-              </TouchableOpacity>
-            </View>
-          </View>
+          <TransactionTypeHeader
+            uiType={uiType}
+            onBack={() => navigation?.goBack()}
+            onSelectType={() => {}}
+            title={t('addTx.editTitle')}
+            onDeletePress={handleDeleteTransaction}
+            showTypeSwitch={false}
+          />
         ) : (
           <TransactionTypeHeader
             uiType={uiType}
@@ -1949,148 +1935,105 @@ export default function AddTransactionScreen({ navigation, route }: any) {
               setCategoryId(null);
               setStep(stepForType(nextType));
             }}
+            title={t('nav.add')}
             onScanPress={handleScanPress}
           />
         )}
 
-        {/* 金额：整屏视觉主角——与转账/兑换的资金流向卡同款外框,内含金额行 + 账户选择下拉 */}
-        <View style={styles.heroCard}>
-        <View style={styles.heroAmountWrap} onLayout={registerFieldY('amount')}>
-          {/* D-2（2026-09-24 用户拍板）：货币钮并入账户选择器成 L 型标签——
-              金额行只剩金额（行高 44 不变、改垂直居中），点金额区域打开自绘计算器键盘 */}
-          <View style={styles.heroAmountLine}>
-            {/* 金额行：TASK-015 固定行高不随位数变化——缩字+单行截断，14 位也不撑变形；
-                金额自己接管点按（原 heroAmountLine 的 onPress 移到 CursorAmountText 外包一层） */}
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={styles.heroAmountTextWrap}
-              onPress={() => {
-                // 备注框的系统键盘/光标退场：一次只允许一个光标显示
-                noteInputRef.current?.blur();
-                // 打开键盘即从空态起输：按 5 就是 5 元，新输入直接替换旧值（不再从尾部续接）
-                amountExpr.reset();
-                setAmountCursor(0);
-                setAmountKeypadOpen(true);
-                scrollToField('amount');
-              }}
-            >
-              <CursorAmountText
-                containerStyle={styles.heroAmountTextInner}
-                style={[styles.heroAmountText, { fontSize: heroAmountFontSize, lineHeight: heroAmountFontSize * 1.2 }]}
-                cursorStyle={[styles.heroCursorInline, { fontSize: heroAmountFontSize * 0.85 }]}
-                display={amountKeypadOpen ? amountExpr.displayValue : amount || '0.00'}
-                enabled={amountKeypadOpen}
-                cursorFromEnd={amountCursor}
-                onCursorChange={setAmountCursor}
+        {/* 金额：整屏视觉主角（T14 / A1）——算式（多项时）在上方 15pt，金额 44pt 右对齐按档位降级；
+            第一行 = 币种 Chip（左）+ 金额（右）；第二行 = 账户 / 日期 / 月度结转 Chip（放不下自动换行） */}
+        <Card style={[styles.heroCard, isShort && styles.heroCardShort]}>
+          <View onLayout={registerFieldY('amount')}>
+            {/* 算式行：多项（有 +/− 运算符）时才出现 */}
+            {amountExpr.isMulti && (
+              <AppText
+                variant="subhead"
+                color={semantic.textSecondary}
+                align="right"
                 numberOfLines={1}
+                style={styles.heroExpr}
+              >
+                {amountExpr.displayValue}
+              </AppText>
+            )}
+            {/* 金额行：币种按钮（左）+ 金额（右，档位 44 → 34 → 28），点金额打开自绘键盘 */}
+            <View style={[styles.heroAmountLine, isShort && styles.heroAmountLineShort]}>
+              <Chip
+                label={amountCurrencyCode}
+                trailingIcon="chevron-down"
+                onPress={() => setAssetPickerOpen(true)}
+                accessibilityLabel={t('addTx.selectCurrency')}
               />
-            </TouchableOpacity>
+              <PressableScale
+                style={styles.heroAmountTouch}
+                activeScale={0.98}
+                hitSlop={0}
+                onPress={() => {
+                  // 备注框的系统键盘/光标退场：一次只允许一个光标显示
+                  noteInputRef.current?.blur();
+                  // 打开键盘即从空态起输：按 5 就是 5 元，新输入直接替换旧值（不再从尾部续接）
+                  amountExpr.reset();
+                  setAmountCursor(0);
+                  setAmountKeypadOpen(true);
+                  scrollToField('amount');
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={`${amountCurrencyCode} ${heroAmountDisplay}`}
+              >
+                {amountExpr.isMulti && amountKeypadOpen ? (
+                  /* 多项算式：金额行显示合计（算式已在上方），金额永不换行、只按档位降级 */
+                  <AppText
+                    variant="amountEntry"
+                    style={[styles.heroAmountText, { fontSize: heroAmountFontSize, lineHeight: heroAmountLineHeight }]}
+                    numberOfLines={1}
+                    ellipsizeMode="clip"
+                  >
+                    {heroAmountDisplay}
+                  </AppText>
+                ) : (
+                  <CursorAmountText
+                    containerStyle={styles.heroAmountTextInner}
+                    style={[styles.heroAmountText, { fontSize: heroAmountFontSize, lineHeight: heroAmountLineHeight }]}
+                    cursorStyle={[styles.heroCursorInline, { fontSize: Math.round(heroAmountFontSize * 0.8) }]}
+                    display={heroAmountDisplay}
+                    enabled={amountKeypadOpen}
+                    cursorFromEnd={amountCursor}
+                    onCursorChange={setAmountCursor}
+                    numberOfLines={1}
+                  />
+                )}
+              </PressableScale>
+            </View>
           </View>
 
-          {/* D-3（2026-09-24 用户拍板）：第二行 = L 型选择器（左）+ 自动月结开关（右）。
-              视觉整块交给一张 SVG 一笔轮廓（外填紫罩+描边），标签与胶囊物理上无接缝、
-              拐角内凹圆弧自然过渡；内容与触区仍是透明 RN 视图叠在 SVG 上：
-              标签区=弹层直开「选择货币」，账户区=普通开弹层（选完账户币种自动跟随
-              =选择账户同时就能切换货币）；原金额行内联「选择货币」下拉面板已删 */}
-          <View style={styles.heroSecondRow}>
-            <View
-              style={[styles.heroCurrencyWrap, { height: HH }]}
-              onLayout={(e) => {
-                const w = e.nativeEvent.layout.width;
-                if (Math.abs(w - heroWrapW) > 0.5) setHeroWrapW(w);
-              }}
-            >
-              <Svg width={heroLPaths.W} height={HH} style={styles.heroLSvg}>
-                <Path d={heroLPaths.dL} fill={colors.link + '14'} />
-                <Path
-                  d={heroLPaths.dL}
-                  stroke={assetPickerOpen ? colors.link : colors.link + '33'}
-                  strokeWidth={1}
-                  fill="none"
-                />
-              </Svg>
-              {/* 货币标签触区+内容（L 型上半）：点开弹层并直接展开「选择货币」面板 */}
-              <TouchableOpacity
-                style={styles.heroLTabRow}
-                activeOpacity={0.75}
-                onLayout={(e) => {
-                  const w = e.nativeEvent.layout.width;
-                  if (Math.abs(w - heroTabW) > 0.5) setHeroTabW(w);
-                }}
-                onPress={() => {
-                  setPickerOpenWithCurrencyDrop(true);
-                  setAssetPickerOpen(true);
-                }}
-              >
-                <Text style={[styles.heroCurrencyTabText, { fontSize: 21, lineHeight: 21 * 1.2 }]}>
-                  {amountCurrencyCode}
-                </Text>
-                {/* D-3.5：货币旁的下拉箭头去除（用户定版）——点击整块标签仍可开「选择货币」面板 */}
-              </TouchableOpacity>
-              {/* 账户触区+内容（L 型下半）：收起货币面板防串态；选完账户币种自动跟随 */}
-              <TouchableOpacity
-                style={styles.heroLAccRow}
-                activeOpacity={0.7}
-                onPress={() => {
-                  setPickerOpenWithCurrencyDrop(false);
-                  setAssetPickerOpen(true);
-                }}
-              >
-                <View
-                  style={[
-                    styles.heroCurrencyIconCircle,
-                    { backgroundColor: (selectedAsset?.color ?? colors.link) + '20' },
-                  ]}
-                >
-                  <Ionicons
-                    name={(selectedAsset?.icon as IconName) ?? 'wallet-outline'}
-                    size={20}
-                    color={selectedAsset?.color ?? colors.link}
-                  />
-                </View>
-                <Text
-                  style={styles.heroCurrencyAccName}
-                  numberOfLines={2}
-                  textBreakStrategy={Platform.OS === 'android' ? 'simple' : undefined}
-                >
-                  {/* 窄框里英文按词两行显示（"Not selected" 不缩字只能 Not/selected）；
-                      可用宽 = 账户行实测宽 - 固定占用（padding 8 + 图标 40 + 名字间距 4 + 箭头 2+12） */}
-                  {selectedAsset
-                    ? selectedAsset.name
-                    : twoLineLabel(t('common.notSelected'), heroWrapW - 66, 130)}
-                </Text>
-                <Ionicons name="chevron-down" size={12} color={colors.textTertiary} style={styles.heroCurrencyChevron} />
-              </TouchableOpacity>
-            </View>
-
-            {/* 月度结转开关（仅新增模式，默认关）：图示胶囊按钮式——左状态圆（关=空心圈/开=✓ 实心圆）
-                + 右侧文字；开时胶囊发光描边；整行点按切换 */}
+          {/* 账户 / 日期 / 月度结转：一行标准 Chip（账户名过长换行不截断；放不下自动掉第二行） */}
+          <View style={[styles.heroChipsRow, isShort && styles.heroChipsRowShort]}>
+            <Chip
+              label={selectedAsset ? selectedAsset.name : t('common.notSelected')}
+              trailingIcon="chevron-down"
+              onPress={() => setAssetPickerOpen(true)}
+              accessibilityLabel={t('addTx.selectAccount')}
+            />
+            <Chip
+              label={formatDateLabel(date, langMode, { style: 'monthDay' })}
+              trailingIcon="chevron-down"
+              onPress={() => setDatePickerOpen(true)}
+              accessibilityLabel={formatDateLabel(date, langMode, { style: 'monthDay' })}
+            />
             {!isEditing && (
-              <TouchableOpacity
-                style={[styles.autoMonthlyRow, autoMonthly && styles.autoMonthlyRowOn]}
-                activeOpacity={0.8}
+              <Chip
+                /* 文案按 9.2 ④ 长度预算取短档（胶囊 ≤10 字符）：英文 "Monthly expense" 会把整行挤换行，
+                   支出/收入类型由上方分段控件表达，这里只表达「每月一次」 */
+                label={t('finance.monthlyLabel')}
+                selected={autoMonthly}
                 onPress={() => {
                   hapticLight();
                   setAutoMonthly((v) => !v);
                 }}
-              >
-                {/* 左状态圆：关=空心圈（dividerHair 描边），开=实心 link 圆 + 白色 ✓ */}
-                {autoMonthly ? (
-                  <View style={[styles.autoMonthlyStateCircle, styles.autoMonthlyStateCircleOn]}>
-                    <Ionicons name="checkmark" size={16} color="#FFFFFF" />
-                  </View>
-                ) : (
-                  <View style={styles.autoMonthlyStateCircle} />
-                )}
-                <Text style={[styles.autoMonthlyLabel, autoMonthly && styles.autoMonthlyLabelOn]} numberOfLines={1}>
-                  {/* 按类型显示「月度支出/月度收入」 */}
-                  {type === 'income' ? t('finance.typeIncome') : t('finance.typeExpense')}
-                </Text>
-              </TouchableOpacity>
+              />
             )}
           </View>
-        </View>
-        </View>
+        </Card>
 
         {/* 类别：自适应网格——列数按机型（宽机 4 个/行、窄机 3 个/行，"全部"占行尾一格）；
             最近用过的排前面，选了新类别就追加进网格、"全部"随之下移一行（TASK-007：
@@ -2225,8 +2168,6 @@ export default function AddTransactionScreen({ navigation, route }: any) {
         <AccountPickerSheet
           title={t('addTx.selectAccount')}
           selectedId={assetId}
-          balance="display"
-          openCurrencyDropOnShow={pickerOpenWithCurrencyDrop}
           currencyCode={amountCurrencyCode}
           onPickAsset={(id) => {
             userPickedAssetRef.current = true;
@@ -2247,7 +2188,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
 }
 
 // 关键：样式表要写成函数，接收 colors，返回 StyleSheet
-function makeStyles(colors: ThemeColors, isDark: boolean) {
+function makeStyles(colors: ThemeColors, isDark: boolean, semantic: SemanticColors, spacing: Spacing, layout: Layout) {
   return StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.card },
   scanningWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
@@ -2509,187 +2450,41 @@ function makeStyles(colors: ThemeColors, isDark: boolean) {
     marginRight: 8,
   },
   // 编辑页右上角的删除按钮：与返回键同款圆环，用红色警示色
-  txDeleteBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: 1.5,
-    borderColor: colors.expense,
-    backgroundColor: colors.card,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
 
-  // ---------- 金额 Hero 区：整屏视觉主角（货币胶囊贴左侧，金额在胶囊右侧的整段空间里居中，
-  // 数字变长时光标一路向右推进到屏幕边缘才缩字） ----------
-  // Hero 外框:与转账/兑换页"资金流向卡"同款——bg 底、圆角 18、1px 描边
-  // 宽度:转账卡所在内容区左右 padding 18(总 36),记一笔页面是 20(总 40),
-  // 这里用 -2 外边距补偿,让两页卡片宽度一致;上下留白比原来拉高(20/18 → 24/22)
-  heroCard: {
-    backgroundColor: colors.bg,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: colors.dividerHair,
-    // TASK-022：顶部留白从 5 收到 2.5（三处同步缩共省 9.2px，卡边到 MYR/0.00 ≈ 9px）；
-    // 左右/底部保持 5
-    paddingTop: 2.5,
-    paddingBottom: 5,
-    paddingHorizontal: 5,
-    // 左右留白与转账/兑换一致:内容区滚动容器无水平 padding,这里直接给 18
-    marginHorizontal: 18,
-    // 顶部与转账页"资金流向卡"对齐:那边是零上边距贴着头部排,这边也要 0,
-    // 切换支出/收入/转账时两张卡的第一条边在同一高度
-    marginTop: 0,
-    marginBottom: 5,
-  },
-  heroAmountWrap: {
-    flexDirection: 'column',
-    // TASK-022：上方留白从 4 收到 2（三处同步缩，见 heroCard 注释）
-    // D-2 真机反馈：胶囊下探后底部余白偏大，下方收紧 4→2
-    paddingTop: 2,
-    paddingBottom: 2,
-    // 左右 0：账户按钮距卡内边 = 卡片 padding 5，与转账页"转出资金"块完全一致
-    paddingHorizontal: 0,
-  },
-  // 金额行:固定高 44（TASK-015：固定大小不随输入位数变化）——
-  // D-2：货币钮并入账户选择器成 L 型标签后，行内只剩金额；标签由 heroCurrencyWrap 负
-  // margin 上移到本行（见 heroCurrencyWrap 注释），对齐沿用校准体系（顶对齐+金额 paddingTop 9.3）
+  // ---------- T14：金额 Hero 区（标准卡 surface + radius.lg + level1；算式在上、金额主角、Chip 行在下） ----------
+  heroCard: { marginHorizontal: layout.page, marginTop: spacing.sm, marginBottom: spacing.md },
+  // 矮屏：卡内边距 16→12、与下个分区的间距 12→8（一档收紧，见渲染处 isShort）
+  heroCardShort: { padding: spacing.md, marginBottom: spacing.sm },
+  // 算式行（15pt 次要文字，右对齐与金额同侧）：只在多项算式时出现
+  heroExpr: { marginBottom: spacing.xs },
+  // 金额行：币种按钮（左）+ 金额（右）；minHeight 撑住 44pt 档，不与 Chip 的 44 触控区打架
   heroAmountLine: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'flex-start',
-    height: 44,
-    flexShrink: 0,
-  },
-  // ---------- D-3：L 型选择器（SVG 一笔轮廓版，2026-09-24 用户拍板）----------
-  // 视觉全部由 SVG Path 承担（外填紫罩 + 一根描边画完整个 L，内凹圆角自然拐进胶囊顶边）；
-  // RN 视图只负责内容与触区。旧 View 边框方案（heroCurrencyTab/TabInner/Touch 盒）退役——
-  // 双色调相接必有色阶线、内凹拐角 View 画不出，是接缝去不掉的根因
-  heroLSvg: { position: 'absolute', top: 0, left: 0 },
-  // 标签触区+内容行：随内容自适应宽（onLayout 实测喂给 SVG 路径的 wt），不随账户框加长
-  heroLTabRow: {
-    height: 38,
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 12,
-  },
-  // 账户触区+内容行（L 型下半）：图标圆 + 完整账户名（超一行自动折行，行高 54 容两行）+ 内联箭头
-  heroLAccRow: {
-    height: 54,
-    flexDirection: 'row',
-    alignItems: 'center',
-    // 2026-10-04 第二轮：padding 6→4，再收 4px 给账户名（英文 "Not selected" 不缩字、两行兜底）
-    padding: 4,
-  },
-  heroCurrencyTabText: { fontWeight: '700', color: colors.link },
-  // 账户触区内容：与转账块同规格（图标圆 40 + 账户名 13/700 + 内联箭头）；盒边框/底色归 SVG 路径
-  // 下拉箭头：与转账/兑换账户块同款（size 12 / textTertiary / 右上角定位）
-  // TASK-019：金额行下方第二行 = 账户框（左）+ 自动月结开关（右）并排
-  // D-2：L 型组合的胶囊顶边随负 margin 上探越过本行顶部，必须 overflow visible 放行；
-  // marginTop 归零让胶囊顶边贴住标签底边（一体相接）
-  heroSecondRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 0,
-    overflow: 'visible',
+    columnGap: spacing.sm,
+    minHeight: 56,
   },
-  // 下拉箭头：TASK-019 改为内联跟在账户名后（图1 排列），不再钉右上角
-  // 2026-10-04 第二轮：marginLeft 6→4→2，继续回收给账户名窄框两行兜底
-  heroCurrencyChevron: { marginLeft: 2 },
-  // ---------- 月度结转开关（TASK-022 图示胶囊按钮式，用户反馈加大）：左状态圆 + 右文字，开时发光描边 ----------
-  autoMonthlyRow: {
+  // 矮屏：金额行再收一档（56→48，44pt 金额串本身约 52 高，靠行高自然撑开、不挤字）
+  heroAmountLineShort: { minHeight: 48 },
+  // 金额点按热区：吃掉剩余宽度、内容右对齐；14 位大数字也绝不换行（档位降级由 JS 选）
+  heroAmountTouch: { flex: 1, minWidth: 0, alignItems: 'flex-end', justifyContent: 'center' },
+  // 金额文字：右对齐 + 等宽数字；字号 / 行高由档位函数按字符串长度内联给出（44 → 34 → 28）
+  heroAmountText: { textAlign: 'right', fontVariant: ['tabular-nums'], color: semantic.textPrimary },
+  heroAmountTextInner: { alignItems: 'flex-end' },
+  // 光标：内联在金额文字流里（CursorAmountText 切片渲染）
+  heroCursorInline: { color: semantic.accent },
+  // 账户 / 日期 / 月度结转 Chip 行：放不下整块掉第二行（9.2 ②），不截断、不缩字
+  heroChipsRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
-    gap: 10,
-    height: 40,
-    marginRight: 5,
-    // D-3.2：与账户框右缘留 8px（marginRight 5 保留=金额右缘对齐锚点不动）
-    marginLeft: 8,
-    paddingLeft: 8,
-    // 2026-10-04 第二轮：paddingRight 16→12，胶囊收窄 4px 让给账户框（英文月度收入标签更宽）
-    paddingRight: 12,
-    borderRadius: 20,
-    borderWidth: 1.5,
-    borderColor: colors.dividerHair,
-    backgroundColor: colors.card,
+    columnGap: spacing.xs,
+    rowGap: spacing.xs,
+    marginTop: spacing.sm,
   },
-  // 开：link 发光描边（阴影同色模拟霓虹）+ 微亮底
-  autoMonthlyRowOn: {
-    borderColor: colors.link,
-    backgroundColor: colors.link + '14',
-    shadowColor: colors.link,
-    shadowOpacity: 0.45,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 4,
-  },
-  autoMonthlyLabel: { fontSize: 13, fontWeight: '600', color: colors.textTertiary },
-  autoMonthlyLabelOn: { color: colors.link, fontWeight: '700' },
-  // 左状态圆：关=空心圈；开=实心 link 圆内白 ✓（由 JSX 条件渲染，圆尺寸不变）
-  autoMonthlyStateCircle: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    borderWidth: 1.5,
-    borderColor: colors.dividerHair,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  autoMonthlyStateCircleOn: {
-    backgroundColor: colors.link,
-    borderColor: colors.link,
-  },
-  // MYR 触发器容器（D-3.4：账户框弹性撑满至月结开关左侧 8px（用户红竖线定版）——长名单行展示；
-  // 高度由 JSX 内联 HH 给出）
-  // 负 margin 把整块上移到与金额同行：标签顶 = 弹层 paddingTop 2 + 4.7（原货币钮校准位），
-  // 即 -(2+44) + 6.7 = -39.3；胶囊顶边随之上探越过行顶，靠 heroSecondRow overflow visible 放行；
-  // 月结开关经 alignItems center 自对齐胶囊中线（±1px），左缘 8px 间隙（autoMonthlyRow marginLeft）。
-  // 货币标签贴内容宽（heroLTabRow 自适应），不跟账户框宽度走
-  heroCurrencyWrap: { flex: 1, flexDirection: 'column', marginTop: -39.3 },
-  // 账户触区内容在 SVG 之上，不再需要盒边框/底色（视觉归 SVG 路径）
-  // 主行：40×40 圆角图标 + 账户名，与 transferAccountMain/Icon/Name 同规格
-  heroCurrencyIconCircle: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  // 账户名：两行内完整展示（numberOfLines=2）；flexShrink 让长名在框内折行而非溢出
-  // 2026-10-04 第二轮：marginLeft 10→6→4；断行策略改 simple（安卓默认 highQuality 均衡断行
-  // 会把 "Not selected" 切在词中间成 "Not sel/ected"，见 twoLineLabel）
-  heroCurrencyAccName: { fontSize: 17, fontWeight: '700', color: colors.textPrimary, marginLeft: 4, flexShrink: 1, lineHeight: 20 },
-  // 金额:对齐资产页（800 右对齐、等宽数字）；字号由组件内 heroAmountFontSize 按位数微调;
-  // 外层（TouchableOpacity 点按热区）：占金额行整行宽度
-  heroAmountTextWrap: {
-    flex: 1,
-    flexShrink: 1, // 大金额时金额侧收缩让位，14 位也不撑变形（D-2：货币钮已并入账户选择器）
-    minWidth: 0, // 允许缩到比内容窄：配合 numberOfLines=1 + 缩字截断
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-    // 对齐 MYR 标签（标签已由负 margin 回到原货币钮校准位）：标签文字中心 ≈ 24.3（行顶相对）；
-    // 金额 paddingTop 9.3 后中心 ≈ 26.6——沿用五轮校准的视觉平行关系，勿改回居中
-    paddingTop: 9.3,
-    height: '100%',
-    position: 'relative', // 光标的定位基准
-  },
-  // 内层（CursorAmountText 容器）：内容右对齐，宽度随内容不撑满
-  heroAmountTextInner: {
-    alignItems: 'flex-end',
-  },
-  heroAmountText: {
-    // 字号由组件内 heroAmountFontSize 给出（TASK-022：基准 21 号，超 9 位每字 −0.25）；
-    // lineHeight 由 JSX 内联 21×1.2=25.2——与货币按钮同一 lineHeight，基线完全平行；
-    // 字重 800/等宽数字一致；颜色日夜分档——金额区底是浅紫 L 型填充，日间必须深字
-    // （货币标签 link/账户名 textPrimary 同族深色，白字曾只在夜间正确）；
-    // TASK-022：paddingRight 22→5——光标已内联不再需要预留位，右缘对齐下方开关按钮
-    // （autoMonthlyRow marginRight: 5，同一 5px 让金额光标与开关右缘垂直对齐）
-    fontWeight: '800',
-    color: isDark ? colors.netWorthValue : colors.textPrimary,
-    textAlign: 'right',
-    fontVariant: ['tabular-nums'],
-    width: 'auto',
-    paddingRight: 5,
-  },
-  // 光标：内联在金额文字流里（CursorAmountText 切片渲染），紧跟光标位置而非固定右下角
-  heroCursorInline: { fontWeight: '300', color: colors.link },
+  // 矮屏：与金额行的间距 8→4
+  heroChipsRowShort: { marginTop: spacing.xs },
 
   rateCursor: { fontSize: 17, fontWeight: '300', color: colors.link, marginLeft: 2 },
   feeCursor: { fontSize: 15, fontWeight: '400', color: colors.link, marginLeft: 3 },
