@@ -5,7 +5,7 @@ export const zh = {
     home: '首页',
     assets: '资产',
     stats: '统计',
-    settings: '设置项',
+    settings: '设置',
   },
   common: {
     add: '添加',
@@ -49,7 +49,7 @@ export const zh = {
     assets: '资产',
     add: '记一笔',
     stats: '统计',
-    settings: '设置项',
+    settings: '设置',
   },
   cat: {
     food: '餐饮',

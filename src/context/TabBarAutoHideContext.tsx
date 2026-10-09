@@ -16,6 +16,8 @@
 import React, { createContext, useContext, useMemo } from 'react';
 import { Animated, Easing, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+// 收起距离跟外壳几何同源（T07）：不再写死 60 + 8 + 30
+import { tabBarHideOffset } from '../hooks/useTabClearance';
 
 type TabBarAutoHideValue = {
   translateY: Animated.Value;
@@ -53,8 +55,9 @@ export function useCreateTabBarAutoHide(): TabBarAutoHideValue {
     const toggle = (hide: boolean) => {
       if (hide === hidden) return;
       hidden = hide;
-      // 收起位移 = 栏体 60 + 距底 8 + 安全区 + 余量，确保完全滑出屏幕之外
-      const off = 60 + 8 + insets.bottom + 30;
+      // 收起位移 = 外壳完整高度 + 距底 + 安全区（tabBarHideOffset 从 useTabClearance
+      // 的同一组常量推导）——保证整栏连中央凸起的圆钮一起滑出屏幕之外
+      const off = tabBarHideOffset(insets.bottom);
       const anim = { duration: ANIM_MS, easing: Easing.out(Easing.cubic), useNativeDriver: Platform.OS !== 'web' };
       Animated.parallel([
         Animated.timing(translateY, { toValue: hide ? off : 0, ...anim }),

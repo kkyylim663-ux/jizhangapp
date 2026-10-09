@@ -1,7 +1,7 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
-import { View, StyleSheet, Pressable, Animated, Platform, StyleProp, ViewStyle } from 'react-native';
+import { View, StyleSheet, Pressable, Animated, Platform } from 'react-native';
 import { NavigationContainer, CommonActions, DarkTheme, DefaultTheme, useNavigation } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { BottomTabBar } from '@react-navigation/bottom-tabs';
@@ -17,17 +17,6 @@ import type {
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-// 中央玻璃球用的 SVG 渐变/图形（别名避免和 expo 的 LinearGradient 重名）
-import Svg, {
-  Circle as SvgCircle,
-  Defs as SvgDefs,
-  Ellipse as SvgEllipse,
-  LinearGradient as SvgLinearGradient,
-  Path as SvgPath,
-  RadialGradient as SvgRadialGradient,
-  Stop as SvgStop,
-} from 'react-native-svg';
 
 import { AppProvider, useApp } from './src/context/AppContext';
 import { AuthProvider } from './src/context/AuthContext';
@@ -48,6 +37,17 @@ import {
 } from './src/context/TabBarAutoHideContext';
 import { useTheme } from './src/theme/useTheme';
 import { useSystemColorScheme } from './src/theme/useSystemColorScheme';
+// 浮空 Tab 栏的几何常量（全项目唯一来源）：外壳 / 底部留白 / 收起距离共用同一组数
+import {
+  TAB_BAR_HEIGHT,
+  TAB_BAR_GAP,
+  TAB_BAR_RAISE,
+  TAB_BAR_SHELL_HEIGHT,
+  TAB_CENTER_BUTTON_SIZE,
+  TAB_CENTER_BUTTON_BOTTOM,
+} from './src/hooks/useTabClearance';
+// 标签文字走统一文字组件（令牌字号 caption2 = 11pt；英文自动走 Inter）
+import { AppText } from './src/components/ui';
 // 启动占位页只需要"现有主题底色"这一个令牌：此时 ThemeModeProvider 还没挂载，
 // useTheme() 用不了（它会抛错），只能直接引 token
 import { lightColors, darkColors } from './src/theme/theme';
@@ -203,337 +203,92 @@ function AddTransactionStack() {
   );
 }
 
-// 中间那个凸起的圆形"记一笔"按钮，盖在底部Tab栏上方。
-// 独立函数组件，会被 Tab.Navigator 渲染在 ThemeModeProvider 之下，
-// 可以直接自己调用 useTheme() 拿主题色。
-//
-// 设计（2026-10-06 换版，照用户效果图取值）：玻璃球体 ——
-// 上半是亮面玻璃（顶部高光 → 浅薰衣草），向下【平滑渐变】过渡到蓝紫填充
-// （用户明确：要颜色渐变、不要双拼硬分界）；球体描边用很淡的垂直渐变
-// （顶淡底略亮，收着画）；球面上半一片很轻的渐隐椭圆高光；
-// 球外两层光晕（薰衣草大晕 + 偏下的品红光团）用 SVG 径向渐变画，尺寸已收敛。
-// 按下仍是水波纹 + 轻触感，行为未动。
-function CenterTabButton({
-  onPress,
-  style,
-}: {
-  onPress?: () => void;
-  style?: StyleProp<ViewStyle>;
-}) {
-  const { colors, isDark } = useTheme();
-  const ripple = useRef(new Animated.Value(0)).current;
-
-  const triggerRipple = () => {
-    ripple.setValue(0);
-    hapticLight();
-    Animated.timing(ripple, {
-      toValue: 1,
-      duration: 550,
-      useNativeDriver: true,
-    }).start();
-  };
-
-  const rippleScale = ripple.interpolate({ inputRange: [0, 1], outputRange: [1, 2.2] });
-  const rippleOpacity = ripple.interpolate({ inputRange: [0, 0.4, 1], outputRange: [0.35, 0.18, 0] });
+// 中央「记一笔」圆钮（T06 G3，2026-10-10）：
+// 56pt 纯 accent 圆 + 单层柔和阴影 + 白色「+」。旧的 8 段渐变光球 / 球面高光 / 描边 /
+// 外光晕 / 水波纹整组退役（用户：简化到纯色）。
+// 触摸区：整圆都落在 SlidingTabBar 外壳里（旧版用 top:-25 把大半截露在父容器外，
+// Android 收不到父容器外的触摸 → 球的上半截点不中）。
+// 铁律：不加任何按压视觉反馈（无缩放 / 无位移 / 无水波），只保留点击震动。
+function CenterTabButton({ onPress }: { onPress?: () => void }) {
+  const { semantic, elevation } = useTheme();
+  const t = useT();
 
   return (
     <Pressable
-      onPressIn={triggerRipple}
+      onPressIn={hapticLight}
       onPress={onPress}
-      style={[style, styles.centerButtonPress]}
+      accessibilityRole="button"
+      accessibilityLabel={t('nav.add')}
+      style={[
+        styles.centerButton,
+        // 不透明填充 → 阴影可以用 boxShadow（跨平台一致；elevation 令牌的浮层档）
+        { backgroundColor: semantic.accent, boxShadow: elevation.level2.boxShadow },
+      ]}
     >
-      <View style={styles.centerButtonWrap}>
-        {/* 球外光晕（2026-10-09 修正 24 处方 5）：只保留一圈很淡的同色光晕 ——
-            原来的「偏下品红光团」整层删除（用户「去掉粉色外晕」；fabOrbAuraBloom 0 引用保留）。
-            渐变 id 带主题指纹（修正 14 铁律：RNSVG 同 id 跨主题不重建定义） */}
-        <View style={styles.centerAura} pointerEvents="none">
-          <Svg width={AURA_SIZE} height={AURA_SIZE}>
-            <SvgDefs>
-              <SvgRadialGradient id={`fabAuraHalo${isDark ? 'D' : 'L'}`} cx="50%" cy="50%" r="50%">
-                <SvgStop offset="0" stopColor={colors.fabOrbAura} stopOpacity={0.26} />
-                <SvgStop offset="0.5" stopColor={colors.fabOrbAura} stopOpacity={0.26} />
-                <SvgStop offset="0.72" stopColor={colors.fabOrbAura} stopOpacity={0.14} />
-                <SvgStop offset="0.9" stopColor={colors.fabOrbAura} stopOpacity={0.04} />
-                <SvgStop offset="1" stopColor={colors.fabOrbAura} stopOpacity={0} />
-              </SvgRadialGradient>
-            </SvgDefs>
-            <SvgCircle cx={52} cy={52} r={47} fill={`url(#fabAuraHalo${isDark ? 'D' : 'L'})`} />
-          </Svg>
-        </View>
-
-        {/* 点击水波纹：从按钮同尺寸放大并淡出（行为与旧版一致） */}
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.ripple,
-            {
-              backgroundColor: colors.fabRipple,
-              opacity: rippleOpacity,
-              transform: [{ scale: rippleScale }],
-            },
-          ]}
-        />
-
-        <View style={[styles.centerButtonShadow, { shadowColor: colors.fabShadow }]}>
-          <View style={styles.centerButton}>
-            {/* 球体基底：垂直渐变 —— 顶部高光 → 浅薰衣草玻璃 → 平滑过渡到
-                蓝紫填充向下渐深（纯渐变，无硬分界/液面线） */}
-            <LinearGradient
-              colors={[
-                colors.fabOrbGlassTop,
-                colors.fabOrbGlassFall,
-                colors.fabOrbGlassMid,
-                colors.fabOrbGlassLow,
-                colors.fabOrbGlassEdge,
-                colors.fabOrbFillTop,
-                colors.fabOrbFillLow,
-                colors.fabOrbFillBottom,
-              ]}
-              locations={[0, 0.07, 0.22, 0.5, 0.66, 0.8, 0.9, 1]}
-              start={{ x: 0.5, y: 0 }}
-              end={{ x: 0.5, y: 1 }}
-              style={styles.centerButtonFace}
-            >
-              {/* 球面高光 + 球体描边（顶淡底亮）+ 白色加号，叠在基底层上 */}
-              <View style={StyleSheet.absoluteFill} pointerEvents="none">
-                <Svg width={CORE_SIZE} height={CORE_SIZE}>
-                  <SvgDefs>
-                    <SvgRadialGradient id="fabOrbLight" cx="50%" cy="50%" r="50%">
-                      <SvgStop offset="0" stopColor="#FFFFFF" stopOpacity={0.22} />
-                      <SvgStop offset="0.55" stopColor="#FFFFFF" stopOpacity={0.08} />
-                      <SvgStop offset="1" stopColor="#FFFFFF" stopOpacity={0} />
-                    </SvgRadialGradient>
-                    {/* 白色细亮边（修正 24 处方 5）：整圈 0.45~0.62 的白，细而不虚 */}
-                    <SvgLinearGradient id="fabOrbRim" x1="0" y1="0" x2="0" y2="1">
-                      <SvgStop offset="0" stopColor="#FFFFFF" stopOpacity={0.45} />
-                      <SvgStop offset="0.3" stopColor="#FFFFFF" stopOpacity={0.6} />
-                      <SvgStop offset="0.7" stopColor="#FFFFFF" stopOpacity={0.5} />
-                      <SvgStop offset="1" stopColor="#FFFFFF" stopOpacity={0.62} />
-                    </SvgLinearGradient>
-                  </SvgDefs>
-                  <SvgEllipse cx={26.7} cy={17.5} rx={22.75} ry={19.25} fill="url(#fabOrbLight)" />
-                  <SvgCircle
-                    cx={28}
-                    cy={28}
-                    r={27.3}
-                    fill="none"
-                    stroke="url(#fabOrbRim)"
-                    strokeWidth={1.1}
-                  />
-                  <SvgPath
-                    d="M28 20.34 V35.66 M20.34 28 H35.66"
-                    stroke={colors.fabIcon}
-                    strokeOpacity={0.1}
-                    strokeWidth={4.4}
-                    strokeLinecap="round"
-                  />
-                  <SvgPath
-                    d="M28 20.34 V35.66 M20.34 28 H35.66"
-                    stroke={colors.fabIcon}
-                    strokeWidth={3.1}
-                    strokeLinecap="round"
-                  />
-                </Svg>
-              </View>
-            </LinearGradient>
-          </View>
-        </View>
-      </View>
+      <Ionicons name="add" size={24} color={semantic.onAccent} />
     </Pressable>
   );
 }
 
-// 浮空 Tab 栏的可滑动外壳：几何定位（absolute/左右缩进/距底）在这里，
-// 视觉全部由本层负责：底色+圆角+投影在 tabBase（毛玻璃渐变垫在图标下面），
-// 描边在渐变描边覆盖层（见下方 outlineD）；内部 BottomTabBar 只留布局、底色透明。
+// 浮空 Tab 栏外壳：几何定位（absolute / 左右缩进 / 距底 / 圆角）与收起展开的 transform 在这里，
+// 材质全部交给内层栏自己的 tabBarStyle（不透明 semantic.surfaceElevated + 顶/四周发丝线
+// semantic.hairline + elevation.level2 阴影）——旧的多层描边 rim、水滴/托盘指示器、
+// 列表渐隐遮罩全部退役（T06 G2 简化）。
+// 外壳还负责一件事：**把中央圆钮整个包进可点区域**——外壳高度 = 栏身 + 圆钮凸起 + 触摸余量，
+// 这样圆上缘（凸出栏顶的部分）在 Android 上也判得中。
 // 注意：v7 会以普通函数方式调用 tabBar（tabBar(props) 而非 <tabBar/>），
 // 所以这层不能放 hooks——hooks 全部在 SlidingTabBarInner 组件里。
 function SlidingTabBar(props: any) {
   return <SlidingTabBarInner {...props} />;
 }
 
-// 选中托（2026-10-09 修正 24 处方 3）：圆角方小托 —— 圆角 15 = 与顶部玻璃按钮一致
-const BLOB_W = 54;
-const BLOB_H = 46;
-const BLOB_RADIUS = 15;
-// 栏圆角（处方 6：与首页卡片一致 —— Hero 卡 20）
+// 栏圆角（与首页 Hero 卡一致：radius.lg = 20）
 const BAR_RADIUS = 20;
-// 栏缘 9 层柔光的描边宽度（沿用 GlassLift 方案：0.25→2.25 逐层加粗、共用一条竖向白渐变）
-const RIM_STROKES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.25];
-// 列表渐隐遮罩高度（处方 2）：48dp 渐变带；同一数值已计入 useTabClearance 的底部留白
-const TAB_FADE_H = 48;
 
 function SlidingTabBarInner(props: any) {
-  const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
   const { translateY, opacity } = useTabBarAutoHide();
-  const { state } = props;
+  const { state, navigation } = props;
 
-  // 外壳宽度 → 每个 tab 槽位宽 → 指示器目标位置
-  const [barW, setBarW] = useState(0);
-  const blobX = useRef(new Animated.Value(0)).current;
-  const blobOpacity = useRef(new Animated.Value(0)).current;
-  // 移动时的"液体挤压"：滑动的瞬间先压扁（scaleY 0.82 / scaleX 1.1），到位后弹回
-  const squashY = useRef(new Animated.Value(1)).current;
-  const squashX = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    if (!barW) return;
-    const slot = barW / state.routes.length;
-    const target = slot * state.index + slot / 2 - BLOB_W / 2;
-    const isActionTab = state.routes[state.index].name === '记一笔';
-    Animated.parallel([
-      // 主滴：快一点、带回弹
-      Animated.spring(blobX, { toValue: target, friction: 7, tension: 90, useNativeDriver: true }),
-      Animated.timing(blobOpacity, { toValue: isActionTab ? 0 : 1, duration: 150, useNativeDriver: true }),
-      // 液体挤压：走的时候压扁，到位弹回
-      Animated.sequence([
-        Animated.timing(squashY, { toValue: 0.82, duration: 110, useNativeDriver: true }),
-        Animated.spring(squashY, { toValue: 1, friction: 4, tension: 80, useNativeDriver: true }),
-      ]),
-      Animated.sequence([
-        Animated.timing(squashX, { toValue: 1.1, duration: 110, useNativeDriver: true }),
-        Animated.spring(squashX, { toValue: 1, friction: 4, tension: 80, useNativeDriver: true }),
-      ]),
-    ]).start();
-  }, [barW, state.index, state.routes, blobX, blobOpacity, squashX, squashY]);
-
-  // 胶囊描边路径：整圈圆角矩形（描边画在内容之下，球体自然遮住穿越处，无需留缺口）
-  const O_ROUND = BAR_RADIUS - 0.6; // 描边路径圆角半径（= 栏圆角 − 内缩 0.6，与栏边线严丝合缝）
-  const outlineD =
-    barW > O_ROUND * 2 + 2
-      ? [
-          `M ${O_ROUND + 0.6} 0.6`,
-          `H ${barW - 0.6 - O_ROUND}`,
-          `A ${O_ROUND} ${O_ROUND} 0 0 1 ${barW - 0.6} ${O_ROUND + 0.6}`,
-          `V ${54 - O_ROUND - 0.6}`,
-          `A ${O_ROUND} ${O_ROUND} 0 0 1 ${barW - 0.6 - O_ROUND} ${54 - 0.6}`,
-          `H ${O_ROUND + 0.6}`,
-          `A ${O_ROUND} ${O_ROUND} 0 0 1 0.6 ${54 - O_ROUND - 0.6}`,
-          `V ${O_ROUND + 0.6}`,
-          `A ${O_ROUND} ${O_ROUND} 0 0 1 ${O_ROUND + 0.6} 0.6`,
-          'Z',
-        ].join(' ')
-      : '';
+  // 中央「+」的按压：与 react-navigation 内层 BottomTabItem 的行为逐字一致
+  // （先 emit tabPress，没被阻止才 navigate）——这样 resetToRootOnTabPress 的
+  // 「回根页 + 震动」监听照常生效；「记一笔」已聚焦时只 emit（回它自己的根页）
+  const addIndex = state.routes.findIndex((r: any) => r.name === '记一笔');
+  const onPressAdd = () => {
+    const route = state.routes[addIndex];
+    if (!route) return;
+    const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
+    if (state.index !== addIndex && !event.defaultPrevented) {
+      navigation.dispatch({ ...CommonActions.navigate(route.name, route.params), target: state.key });
+    }
+  };
 
   return (
     <Animated.View
-      onLayout={(e) => setBarW(e.nativeEvent.layout.width)}
+      // box-none：外壳本身不吃触摸（透明区域让页面照常点击），子元素（栏 / 圆钮）正常接收
+      pointerEvents="box-none"
       style={[
-        styles.floatingTabShell,
-        // 导航条区域已由 AppContent 外层垫色并裁掉（内层 marginBottom: insets.bottom），
-        // 这里只需留 2px 缝隙，栏卡片紧贴导航条上沿
-        { bottom: 2 },
-        { transform: [{ translateY }], opacity },
+        styles.tabShell,
+        {
+          // 栏底距安全区上沿留一道缝隙（浮空观感）；外壳向上多出「圆钮凸起 + 触摸余量」
+          bottom: TAB_BAR_GAP + insets.bottom,
+          height: TAB_BAR_SHELL_HEIGHT,
+          transform: [{ translateY }],
+          opacity,
+        },
       ]}
     >
-      {/* 列表渐隐遮罩（2026-10-09 修正 24 处方 2）：栏上方 48dp，从「背景渐变的末端色 · 透明」
-          渐到不透明 → 列表滚到栏附近时柔和淡出，不会被栏硬切、也不会透进栏里。
-          左右 -12 出血到屏幕边（外壳本身左右各缩进 12）；pointerEvents none 不挡操作；
-          颜色取 bgGradientTo（= 栏顶区域的本地色，避免与页面渐变出现接缝），日/夜实时切换 */}
-      <LinearGradient
-        colors={[colors.bgGradientTo + '00', colors.bgGradientTo + 'B3', colors.bgGradientTo]}
-        locations={[0, 0.6, 1]}
-        start={{ x: 0.5, y: 0 }}
-        end={{ x: 0.5, y: 1 }}
-        style={styles.tabFadeMask}
-        pointerEvents="none"
-      />
+      {/* 内层栏（react-navigation 自带）：底色 / 发丝线 / 圆角 / 阴影全在 screenOptions 的
+          tabBarStyle 里（库内部把 tabBarStyle 排在样式数组最后，能压过它自带的底色/描边）；
+          这里只把它的 54pt 内容区摆到外壳下缘（上缘留给凸起的圆钮） */}
+      <View style={styles.tabBarRow}>
+        <BottomTabBar {...props} />
+      </View>
 
-      {/* 栏体（2026-10-09 修正 24 处方 1；修正 25 日间金属化）：**完全不透明**的同色系竖向渐变，
-          背后内容彻底不透出来（用户：「背后的内容完全不透出来，画面干净」）；
-          日间档 = 与顶部按钮同一「银紫拉丝金属」3 段（亮 → 略暗 → 中间调，见 lightColors.tabGlass*）；
-          外投影深紫、向下偏移柔和扩散 —— 填充不透明，这里可以走 elevation
-          （半透明填充才必须禁 elevation；当年那条"白条"= 库内层栏自带 elevation:8，
-          已在 tabBarStyle / innerTabBar 里清零，别再动那两处） */}
-      <LinearGradient
-        colors={[colors.tabGlassFrom, colors.tabGlassMid, colors.tabGlassTo]}
-        locations={[0, 0.5, 1]}
-        start={{ x: 0.5, y: 0 }}
-        end={{ x: 0.5, y: 1 }}
-        style={[
-          styles.tabBaseFill,
-          {
-            shadowColor: colors.tabShadow,
-            shadowOffset: { width: 0, height: 8 },
-            shadowRadius: 18,
-            shadowOpacity: isDark ? 0.4 : 0.26,
-            elevation: 8,
-          },
-        ]}
-      />
-
-      {/* 栏缘（2026-10-09 修正 24 处方 1；修正 25 日间金属化）：夜间＝白色细边（1px 0.22）
-          + 顶缘柔光（沿用 GlassLift 的 9 层描边方案：同一白竖向渐变、逐层 0.25→2.25 加粗，
-          顶最亮、往下渐暗；绝不做 per-path opacity 台阶）。
-          日间＝与顶部按钮同一「金属倒角」：单层 1px 描边 + 竖向渐变（顶白 0.95 锐利高光 →
-          0.7 处仍近白 → 底 rgb(60,40,120) 0.22 深紫灰）= 顶部/两侧亮棱、底部暗边；
-          日间不再画那 9 层柔光（用户：去掉柔和发光，边缘要锐利）。
-          原来那条对角 X 型粉红描边（tabOutline*）整层删除（用户：去掉所有粉红/粉紫描边）。
-          ⚠ 渐变 id 必须带主题指纹（修正 14 铁律：RNSVG 同 id 跨主题不重建定义）；
-          ⚠ RNSVG 的 Stop 不读 stopColor 的 rgba alpha（修正 13）→ 底部色拆 rgb + stopOpacity
-          （值 = lightColors.glassEdgeShade rgba(60,40,120,0.22)，两处改动要同步） */}
-      {outlineD ? (
-        <View style={styles.tabRim} pointerEvents="none">
-          <Svg width={barW} height={54}>
-            <SvgDefs>
-              {isDark ? (
-                <SvgLinearGradient id="tabRimGradD" x1="0" y1="0" x2="0" y2="1">
-                  <SvgStop offset="0" stopColor="#FFFFFF" stopOpacity={0.017} />
-                  <SvgStop offset="0.5" stopColor="#FFFFFF" stopOpacity={0.0131} />
-                  <SvgStop offset="1" stopColor="#FFFFFF" stopOpacity={0.0105} />
-                </SvgLinearGradient>
-              ) : (
-                <SvgLinearGradient id="tabChamferL" x1="0" y1="0" x2="0" y2="1">
-                  <SvgStop offset="0" stopColor="#FFFFFF" stopOpacity={0.95} />
-                  <SvgStop offset="0.7" stopColor="#FFFFFF" stopOpacity={0.8} />
-                  <SvgStop offset="1" stopColor="rgb(60,40,120)" stopOpacity={0.22} />
-                </SvgLinearGradient>
-              )}
-            </SvgDefs>
-            {isDark ? (
-              <>
-                {RIM_STROKES.map((w) => (
-                  <SvgPath
-                    key={w}
-                    d={outlineD}
-                    stroke="url(#tabRimGradD)"
-                    strokeWidth={w}
-                    fill="none"
-                  />
-                ))}
-                <SvgPath d={outlineD} stroke={colors.tabEdge} strokeWidth={1} fill="none" />
-              </>
-            ) : (
-              <SvgPath d={outlineD} stroke="url(#tabChamferL)" strokeWidth={1} fill="none" />
-            )}
-          </Svg>
-        </View>
-      ) : null}
-
-      {/* 选中托（2026-10-09 修正 24 处方 3）：圆角方小托（圆角 15 = 顶部玻璃按钮同值）——
-          白填充（夜 0.10 / 日 0.7）+ 白细边；**画在按钮层之前 = 在图标/文字之下**（"托"在背后，
-          日间 0.7 的白才不会把图标洗掉；内层栏底色已透明，不会再像旧版那样被白胶囊盖住）；
-          切换 Tab 由 spring 滑过去（复用原 blobX spring + 液体挤压，行为未动）。
-          ⚠ 半透明填充 → 阴影只能 boxShadow（外部专用），禁用 elevation（会透出内框，既有铁律） */}
-      <Animated.View
-        pointerEvents="none"
-        style={[
-          styles.tabBlob,
-          {
-            width: BLOB_W,
-            height: BLOB_H,
-            transform: [{ translateX: blobX }, { scaleX: squashX }, { scaleY: squashY }],
-            backgroundColor: colors.tabBlobBg,
-            borderWidth: 1,
-            borderColor: colors.tabEdge,
-            boxShadow: isDark ? '0px 3px 10px rgba(18,8,43,0.45)' : '0px 3px 10px rgba(61,42,122,0.22)',
-            opacity: blobOpacity,
-          },
-        ]}
-      />
-
-      <BottomTabBar {...props} style={styles.innerTabBar} />
+      {/* 中央「+」：绝对定位在外壳之内（整圆都在可点区里），横向居中对齐五个槽位的中缝 */}
+      <View style={styles.centerButtonSlot} pointerEvents="box-none">
+        <CenterTabButton onPress={onPressAdd} />
+      </View>
     </Animated.View>
   );
 }
@@ -575,9 +330,8 @@ function resetToRootOnTabPress(tabName: string) {
 // App() 自己不行——ThemeModeProvider 是 App() 渲染出来的，
 // useTheme() 得在它渲染出的子孙组件里调用才能读到值。
 function AppContent() {
-  const { isDark, colors } = useTheme();
+  const { isDark, colors, semantic, spacing, elevation } = useTheme();
   const t = useT();
-  const insets = useSafeAreaInsets();
   const tabAutoHide = useCreateTabBarAutoHide();
 
   // 底部 Tab 显示名随语言切换；路由内部名保持中文（见 routes.ts 注释），
@@ -600,22 +354,22 @@ function AppContent() {
   usePaymentReminders();
 
   // web 端根节点底部有约 12px 布局偏移区，不垫色会露出白色；
-  // 顺带把浏览器滚动溢出区也染成应用底色
+  // 顺带把浏览器滚动溢出区也染成应用底色（T06 G1：跟随语义底色 semantic.bg）
   useEffect(() => {
     if (Platform.OS === 'web') {
-      document.body.style.backgroundColor = colors.bg;
-      document.documentElement.style.backgroundColor = colors.bg;
+      document.body.style.backgroundColor = semantic.bg;
+      document.documentElement.style.backgroundColor = semantic.bg;
     }
-  }, [colors.bg]);
+  }, [semantic.bg]);
 
-  // 导航容器主题：背景跟应用底色一致——TabShell 预留的悬空条带、
-  // 浮空栏圆角的缺口都由它上色，深色模式下才不会露出导航默认的浅灰
+  // 导航容器主题：背景跟应用底色一致（T06 G1：纯色 semantic.bg，不再跟薰衣草渐变）——
+  // TabShell 预留的悬空条带、浮空栏圆角的缺口都由它上色，深色模式下才不会露出导航默认的浅灰
   const baseTheme = isDark ? DarkTheme : DefaultTheme;
   const navTheme = {
     ...baseTheme,
     colors: {
       ...baseTheme.colors,
-      background: colors.bg,
+      background: semantic.bg,
       card: colors.card,
       border: colors.dividerHair,
       text: colors.textPrimary,
@@ -627,25 +381,17 @@ function AppContent() {
   return (
     <>
       <TabBarAutoHideProvider value={tabAutoHide}>
-      {/* edge-to-edge 下导航键（□○◁）区域是透明的，App 根视图延伸到它后面；
-          外层 View 垫满全屏，内层 margin 掉导航条高度并裁剪——页面内容/弹层画不进
-          导航键区域，那一条显示纯色底。⚠垫色必须用背景渐变的【末端色】而不是主题底色：
-          它是渐变正下方的一整条，颜色不一致时会在底部显出一条贯穿全宽的"长方横条"
-          （日间淡紫 vs 近白最明显，夜间深蓝 vs 近黑偶尔可见） */}
-      <View style={{ flex: 1, backgroundColor: colors.bgGradientTo }}>
-      <View style={{ flex: 1, marginBottom: insets.bottom, overflow: 'hidden' }}>
+      {/* T06 G1：全 App 页面底 = 纯色 semantic.bg（旧的薰衣草渐变退役；Hero 卡的紫色渐变
+          是 HomeScreen 自己的事，不在这里）；屏幕容器透明，这一层就是全局底色画布。
+          T07：根视图不再 marginBottom: insets.bottom + overflow: hidden 裁剪 ——
+          抽屉 / 弹层可以正常贴到屏幕底边，页面内容也能画进导航条区域（edge-to-edge 正常行为） */}
+      <View style={{ flex: 1, backgroundColor: semantic.bg }}>
       <NavigationContainer
         theme={navTheme}
         // 任何导航变化（切 Tab、push、pop）都让栏回到可见——
         // 新页面从顶部开始，收着栏会让人迷失
         onStateChange={tabAutoHide.reset}
       >
-        {/* 应用底色打底：淡紫渐变（夜间等效纯色）。TabShell 预留的悬空条带、
-            浮空栏圆角的缺口都由它上色；屏幕容器是透明的，渐变从这里透出来 */}
-        <LinearGradient
-          colors={[colors.bgGradientFrom, colors.bgGradientTo]}
-          style={{ flex: 1, backgroundColor: colors.bg }}
-        >
         <Tab.Navigator
           initialRouteName="首页"
           // 注意：tabBar 必须挂在 Navigator 本身（v7 经 ...rest 传进 BottomTabView），
@@ -653,46 +399,61 @@ function AppContent() {
           tabBar={SlidingTabBar}
           screenOptions={({ route }) => ({
             headerShown: false,
-            tabBarActiveTintColor: colors.homeIconColor,
-            // 未选中 = 同色 45% 透明（处方 4；homeIconColor 是 6 位 hex，拼 '73' = alpha 0.45）
-            tabBarInactiveTintColor: colors.homeIconColor + '73',
-            // 显示名随语言切换（"记一笔"Tab 在下面单独覆盖为无文字的凸起圆按钮）
-            tabBarLabel: tabLabels[route.name] ?? route.name,
-            tabBarLabelStyle: { fontSize: 13, fontWeight: '600' },
-            // 只放视觉样式：几何（absolute/左右缩进/距底）由 SlidingTabBar 外壳负责，
-            // 内部 BottomTabBar 会把它自己的 absolute-bottom 锚在外壳里
+            // 选中 = 实心图标 + accent；未选中 = 线框图标 + 次要文字色（T06 G2）
+            tabBarActiveTintColor: semantic.accent,
+            tabBarInactiveTintColor: semantic.textSecondary,
+            // 无障碍读屏名（标签改成函数式渲染后，库不再自动拼「x, tab, n of m」，显式给名字）
+            tabBarAccessibilityLabel: tabLabels[route.name] ?? route.name,
+            // 标签走统一文字组件：令牌字号 caption2 = 11pt（旧的 13pt 让英文「Settings」
+            // 贴住选中托的边缘）+ 系统大字上限 1.3 + 英文自动 Inter
+            tabBarLabel: ({ color, position }: { color: string; position: 'beside-icon' | 'below-icon' }) => (
+              <AppText
+                variant="caption2"
+                color={color}
+                numberOfLines={1}
+                style={position === 'beside-icon' ? { marginStart: spacing.xs } : undefined}
+              >
+                {tabLabels[route.name] ?? route.name}
+              </AppText>
+            ),
+            // 栏身材质（T06 G2）：不透明语义表面 + 发丝线 + 浮层阴影；
+            // 旧的多层描边 rim / 水滴托盘 / 列表渐隐遮罩已随 SlidingTabBar 重做退役。
+            // 几何（左右缩进 / 距底 / 圆角外的定位）由 SlidingTabBar 外壳负责
             tabBarStyle: {
-              height: 54,
+              height: TAB_BAR_HEIGHT,
               // 关键:覆盖 BottomTabBar 内部默认的 paddingBottom: insets.bottom——
-              // 外壳已经用 bottom: insets.bottom+2 避开过安全区,库内部再 pad 一次
-              // 会把 54px 栏高的内容区压到 ~30px,导致 Tab 文字下半截被挤出卡片
+              // 外壳已经用 bottom: TAB_BAR_GAP + insets.bottom 避开过安全区，库内部再 pad 一次
+              // 会把 54px 栏高的内容区压到 ~30px，导致 Tab 文字下半截被挤出卡片
               paddingBottom: 0,
-              // 底色/圆角/投影全部下放到外壳的 tabBase（毛玻璃渐变垫底），这里透明即可
-              backgroundColor: 'transparent',
-              borderTopWidth: 0,
+              backgroundColor: semantic.surfaceElevated,
+              // 发丝线：整圈 hairline（顶边就是列表与栏之间那道分隔线）
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: semantic.hairline,
+              borderRadius: BAR_RADIUS,
+              // 圆角要裁掉内容（历史上按渐变出血的装饰层会漏出来出直角）
+              overflow: 'hidden',
+              // 浮层阴影统一用跨平台 boxShadow（iOS / Android 一致），不再用 elevation
+              boxShadow: elevation.level2.boxShadow,
               // ⚠库的 BottomTabBar 自带 styles.bottom.elevation: 8（安卓默认"黑"阴影）——
-              // 栏身透明后这条阴影直接透出来，成一条横贯全宽的中性暗带（=用户一直追的
-              // "白条"对比里的暗半；Web 不渲染 elevation，所以只有手机看得出来）。清零，
-              // 阴影统一交给外壳/球/水滴自己画
+              // 半透明/浅色栏身上会透出一条中性暗带（=用户追过的"白条"暗半）；清零，
+              // 阴影统一交给这里的 boxShadow
               elevation: 0,
-              overflow: 'visible',
             },
-            // 自定义 tab 按钮：去掉 Android 默认的灰色水波纹（和紫色水滴叠在一起很脏），
-            // 按压反馈改为轻微透明度
-            // 严格静态的 tab 按钮：无波纹、无按压遮罩/高亮，点击只切换选中状态
+            // 自定义 tab 按钮：去掉 Android 默认的灰色水波纹（和紫色水滴叠在一起很脏）。
+            // 铁律：底部 Tab 按钮不加任何按压视觉反馈、不发生布局位移（保留震动）
             tabBarButton: (props: any) => (
               <PlatformPressable
                 {...props}
                 pressColor="transparent"
                 android_ripple={undefined}
-                style={props.style}
+                // 水平内边距收到 4：给 11pt 英文标签（Settings 等）多留一点排版余量
+                style={[props.style, { paddingHorizontal: 4 }]}
               />
             ),
             tabBarIcon: ({ color, focused }) => {
               const icon = TAB_ICONS[route.name];
               if (!icon) return null;
-              // 层次感：选中图标从描线切换为实底（Ionicons -outline ↔ 实底名），
-              // 避免再叠一层芯片底与水滴指示器叠出"好几层"的脏效果
+              // 层次感：选中图标从描线切换为实底（Ionicons -outline ↔ 实底名）
               let name: keyof typeof Ionicons.glyphMap = icon;
               if (focused && icon.endsWith('-outline')) {
                 const solid = icon.replace('-outline', '') as keyof typeof Ionicons.glyphMap;
@@ -705,42 +466,34 @@ function AppContent() {
           <Tab.Screen
             name="首页"
             component={HomeStack}
-            options={{ tabBarLabel: t('tabs.home') }}
             listeners={resetToRootOnTabPress('首页')}
           />
           <Tab.Screen
             name="资产"
             component={AssetStack}
-            options={{ tabBarLabel: t('tabs.assets') }}
             listeners={resetToRootOnTabPress('资产')}
           />
           <Tab.Screen
             name="记一笔"
             component={AddTransactionStack}
             options={{
+              // 中央凸起圆钮由 SlidingTabBar 外壳自己画（这里让库只保留槽位，不渲染按钮/文字），
+              // 圆钮横向居中对齐五个槽位的中缝
               tabBarLabel: () => null,
-              tabBarButton: (props) => (
-                <CenterTabButton onPress={props.onPress as any} style={props.style} />
-              ),
+              tabBarButton: () => null,
             }}
             listeners={resetToRootOnTabPress('记一笔')}
           />
-          <Tab.Screen
-            name="统计"
-            options={{ tabBarLabel: t('tabs.stats') }}
-          >
+          <Tab.Screen name="统计">
             {() => <ReportScreen />}
           </Tab.Screen>
           <Tab.Screen
             name="设置项"
             component={ProfileStack}
-            options={{ tabBarLabel: t('tabs.settings') }}
             listeners={resetToRootOnTabPress('设置项')}
           />
         </Tab.Navigator>
-        </LinearGradient>
       </NavigationContainer>
-      </View>
       </View>
       </TabBarAutoHideProvider>
       {/* 'auto' 只跟随系统外观，不认用户在设置里选的"始终亮色/暗色"；
@@ -811,112 +564,41 @@ export default function App() {
   );
 }
 
-const CORE_SIZE = 56;
-const RING_OUTER_SIZE = CORE_SIZE + 24;
-// 球外光晕画布：比球径 56 大一圈（104），容纳两层径向渐变的衰减尾巴（光晕已收小）
-const AURA_SIZE = 104;
-
 const styles = StyleSheet.create({
   // 浮空 Tab 栏外壳：只负责几何定位 + 承载收起/展开的 transform。
-  // 中间凸起的 + 按钮上半部分在外面，overflow 必须 visible。
-  // 左右 12px：比 16 略窄，让每个 tab 的点击槽位更宽
-  floatingTabShell: {
+  // 高度 / 距底 / 圆钮槽位在外壳内联给（都要读 insets 与令牌常量）。
+  // 中央圆钮凸出栏顶的部分也落在这个外壳里（高度 = TAB_BAR_SHELL_HEIGHT），
+  // 这样 Android 才会把圆的上半截的触摸判给圆钮；overflow 必须 visible（圆钮投影画到外壳之外）。
+  // 左右 12px：比 16 略窄，让每个 tab 的点击槽位更宽（与 Hero 卡右缘一致）
+  tabShell: {
     position: 'absolute',
     left: 12,
     right: 12,
-    height: 54,
     overflow: 'visible',
   },
-  // 内部 BottomTabBar：去掉自带背景/描边/投影，视觉由 tabBarStyle 提供；
-  // 关键:显式清零库默认的 insets 安全区 padding——外壳已经用 bottom: insets.bottom+2 避开过
-  // 安全区,内部再 padding 一次会把 54px 栏高里的内容区压到 ~30px,导致 Tab 文字下半截被裁
-  innerTabBar: {
-    backgroundColor: 'transparent',
-    borderTopWidth: 0,
-    paddingBottom: 0,
-    paddingTop: 0,
-    // 同上：清掉库默认 elevation: 8 的安卓阴影（否则透明栏身上会浮出一条暗带）
-    elevation: 0,
-    overflow: 'visible',
-  },
-  // 栏底渐变层（2026-10-09 修正 24）：不透明竖向渐变 + 自己裁圆角（圆角 = Hero 卡 20）；
-  // 投影在 JSX 内联给（深紫、向下 8、柔和扩散、elevation 8 —— 填充不透明才允许走 elevation）
-  tabBaseFill: {
+  // 内层栏的内容区（54pt）：紧贴外壳下缘，上缘留给凸出的圆钮
+  tabBarRow: {
     position: 'absolute',
     left: 0,
     right: 0,
-    top: 0,
-    height: 54,
-    borderRadius: BAR_RADIUS,
+    top: TAB_BAR_SHELL_HEIGHT - TAB_BAR_HEIGHT,
+    height: TAB_BAR_HEIGHT,
   },
-  // 列表渐隐遮罩（2026-10-09 修正 24 处方 2）：栏上方 48dp；左右 -12 出血到屏幕边
-  tabFadeMask: {
-    position: 'absolute',
-    left: -12,
-    right: -12,
-    bottom: 54,
-    height: TAB_FADE_H,
-  },
-  // 栏缘覆盖层（白细边 + 9 层顶缘柔光）：铺满外壳（54 高），画在栏体之上、选中托/内容之下
-  tabRim: {
+  // 中央圆钮槽：整圆都在槽内（槽高 = 圆径），横向居中 → 圆钮对准五个槽位的中缝
+  centerButtonSlot: {
     position: 'absolute',
     left: 0,
     right: 0,
-    top: 0,
-    height: 54,
-  },
-  // 选中托（修正 24 处方 3）：圆角方小托，圆角 15 与顶部玻璃按钮一致；54×46 垂直居中
-  tabBlob: {
-    position: 'absolute',
-    top: (54 - BLOB_H) / 2,
-    left: 0,
-    borderRadius: BLOB_RADIUS,
-  },
-  // 记一笔按钮根节点：接住 react-navigation 给按钮的容器 style（其余 4 个 tab 同款，
-  // 其中带 alignItems:'center'）；再清掉图标按钮的 5px 内边距——球体包壳 80 宽比槽位
-  // 宽，本来靠左会右偏 ~6px（缺口就对不中），这层居中后球心=槽心=胶囊中心
-  centerButtonPress: {
-    padding: 0,
+    bottom: TAB_CENTER_BUTTON_BOTTOM,
+    height: TAB_CENTER_BUTTON_SIZE,
     alignItems: 'center',
   },
-  centerButtonWrap: {
-    // 往上抬出 tab bar（保持原有凸出高度,再抬高 3px）
-    top: -25,
-    width: RING_OUTER_SIZE,
-    height: RING_OUTER_SIZE,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  // 光晕画布定位：口径取整让画布中心对准球心（圆心坐标见组件内 circle 的 cx/cy）
-  centerAura: {
-    position: 'absolute',
-    left: (RING_OUTER_SIZE - AURA_SIZE) / 2,
-    top: (RING_OUTER_SIZE - AURA_SIZE) / 2 - 2.6,
-  },
-  ripple: {
-    position: 'absolute',
-    width: CORE_SIZE,
-    height: CORE_SIZE,
-    borderRadius: CORE_SIZE / 2,
-  },
-  centerButtonShadow: {
-    width: CORE_SIZE,
-    height: CORE_SIZE,
-    borderRadius: CORE_SIZE / 2,
-    shadowOpacity: 0.35,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 8,
-  },
-  // 描边/裁剪拆层的老规矩不变：这层只负责裁出圆形渐变面，描边改由球内 SVG 画
+  // 中央圆钮本体：56pt 纯色圆（accent 底 + level2 阴影 + 白色「+」在 JSX 内联给）
   centerButton: {
-    flex: 1,
-    borderRadius: CORE_SIZE / 2,
-    overflow: 'hidden',
-  },
-  centerButtonFace: {
-    flex: 1,
-    justifyContent: 'center',
+    width: TAB_CENTER_BUTTON_SIZE,
+    height: TAB_CENTER_BUTTON_SIZE,
+    borderRadius: TAB_CENTER_BUTTON_SIZE / 2,
     alignItems: 'center',
+    justifyContent: 'center',
   },
 });
