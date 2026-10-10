@@ -60,9 +60,9 @@ src/
 │  ├─ HeroMetalSheen.tsx    # Hero 金额笔画内流光 + 卡面扫光（MaskedView + 陀螺仪/自动循环，同一光源、同一 sweepPos）
 │  ├─ ReceiptCameraModal.tsx    # 拍小票
 │  └─ ui/                   # ★ 设计系统组件（统一出口 ui/index.ts）：AppText / MoneyText / Button / Card / ListRow / …
-│     ├─ HeroGradient.tsx   # UI V2 页面顶渐变（160° 主渐变 + 2 光斑 + 可选 26dp 网格 + 底部淡出到 bg）——HeroGradient
-│     ├─ GlassView.tsx      # UI V2 玻璃（半透明 + 1px 亮边 + 顶部内高光；iOS/Web 叠 BlurView，Android 退纯 rgba）——GlassView
-│     └─ IconCircle.tsx     # UI V2 圆形图标托（42 列表 / 48 记一笔格；夜 15% 淡底、日同色系压实；selected 两层外圈）——IconCircle
+│     ├─ HeroGradient.tsx   # UI V2.1 页面渐变（165° 主渐变 + 3 光斑 + 可选 26dp 网格）；fill=铺满整页 / height=顶部块 + 淡出到 bg ——HeroGradient
+│     ├─ GlassView.tsx      # UI V2.1 唯一玻璃（半透明 + 1px 亮边 + 顶部内高光；iOS/Web 叠 BlurView，Android 退纯 rgba；web 的 BlurView 会叠 30% 白 → WEB_BLUR_CAP 压到 60）——GlassView
+│     └─ IconCircle.tsx     # UI V2.1 立体光泽球（42 列表 / 48 记一笔格；亮档与基色都按白图标 ≥3:1 压深、顶部高光条不压到图标；selected 两层外圈）——IconCircle
 ├─ screens/                 # 18 个屏幕（见下文导航树）
 ├─ theme/
 │  ├─ theme.ts              # ★ 设计令牌：旧颜色层（兼容期保留）+ 语义层（颜色 / typography / spacing / radius / elevation，UI V2 新增 surfaceSunken·keypadPanel·tabBar·tabActive·tabInactive + gradients 品牌渐变 + glass 玻璃 + gradientAxis 角度换算）+ 字体层（Geist 四档 / fontFamilyByWeight / canUseLatinText）

@@ -1,8 +1,8 @@
 // MonthCalendarCard.tsx
-// 首页「日历视图」的月历卡内容（原型 prototype/calendar-switch-proto.html 拍板形态）：
-// - ‹ 月份 › 导航（IconButton）+ 周日排首的 6 行月格（周末不再单独上色）
-// - 有账的日期下方金额药丸：MoneyText 紧凑格式（−1.5k / +6.8k / 172.72，11pt），
-//   支出中性− / 收入绿+ / 净额按正负取收入/支出色
+// 首页「日历视图」的月历卡内容（UI V2.1 按 .zcode/design/mockups/v21/P_Calendar.dc.html 重做）：
+// - ‹ 月份 › 导航 = 36 圆钮 + chip 淡底（触控区 44）+ 周日排首的 6 行月格（周末不再单独上色）
+// - 日期数字 = 26 圆：今天 = 选中色实心圆，选中日 = 同色描边圈（普通日隐形描边）
+// - 有账的日期下方金额药丸 = chip 淡底胶囊 + textPrimary 紧凑金额（−1.5k / +6.8k，11pt）
 // - [支出|收入|总额] SegmentedControl 切换药丸显示的指标
 // - 底部当月合计行：总额 / 收入 / 支出
 // 配色统一走 useTheme().semantic 令牌层、字号统一走 AppText / MoneyText 档位（UI_RULES 第 1/2/7 节）。
@@ -15,7 +15,6 @@ import PressableScale from './PressableScale';
 import SegmentedControl from './SegmentedControl';
 import AppText from './ui/AppText';
 import MoneyText from './ui/MoneyText';
-import { IconButton } from './ui/IconButton';
 import { IconCircle } from './ui/IconCircle';
 import { Ionicons } from '@expo/vector-icons';
 import { withAlpha } from './ui/color';
@@ -68,6 +67,47 @@ interface Props {
 
 const MONTH_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
+/** chip 淡底（P_Calendar 稿 --chip）：夜 = textPrimary 12%，日 = accent 10%（令牌 + withAlpha 派生） */
+function chipFillOf(semantic: SemanticColors, isDark: boolean) {
+  return isDark ? withAlpha(semantic.textPrimary, 0.12) : withAlpha(semantic.accent, 0.1);
+}
+
+/** 月份翻页圆钮（P_Calendar 稿）：36 视觉圆 + chip 淡底 + 16 图标；触控区 44（外层兜住）。
+ *  为什么不再用 ui/IconButton：稿里这两颗是「chip 淡底圆钮」，IconButton 只有 plain/soft/solid
+ *  三档平涂（共享组件不在此车道可改范围），所以按稿的规格页内组合一次，颜色全取令牌。 */
+function MonthNavButton({
+  icon,
+  accessibilityLabel,
+  onPress,
+}: {
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  accessibilityLabel: string;
+  onPress: () => void;
+}) {
+  const { semantic, isDark } = useTheme();
+  const chipFill = chipFillOf(semantic, isDark);
+  return (
+    <PressableScale
+      onPress={onPress}
+      activeScale={0.9}
+      hitSlop={0}
+      style={navStyles.touch}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+    >
+      <View style={[navStyles.circle, { backgroundColor: chipFill }]}>
+        <Ionicons name={icon} size={16} color={semantic.textPrimary} />
+      </View>
+    </PressableScale>
+  );
+}
+
+/** 翻页圆钮的纯图形几何（36 视觉 / 44 触控，来自 P_Calendar 稿与 UI_RULES 第 4 节） */
+const navStyles = StyleSheet.create({
+  touch: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  circle: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+});
+
 /** 明细行（UI V2）：42 圆图标 + 标题（备注）+ 副标题（类别 · 账户）+ 右金额。
  *  几何与首页账单行同规格（见 HomeScreen 的 TxRow），点整行 = 进编辑。 */
 function CalendarDetailRow({
@@ -119,19 +159,25 @@ function makeDetailRowStyles(semantic: SemanticColors, spacing: Spacing, layout:
   });
 }
 
-/** 药丸淡底透明度（UI_RULES 第 1 节：语义色 12% 淡底，与类别图标方块 / Badge 同比例） */
-const PILL_TINT_ALPHA = 0.12;
-
 // 药丸 / 合计金额此前有一套自造的中文缩写阶梯（万→百万→千万…，多轮真机截断 bug 修补：
 // 505.3M、50.6亿、万亿兜底…）。T12 起统一交给 MoneyText / formatMoney 的紧凑格式
 // （1.5k / 1.2M / 3.4B），本文件的 compactAmount / scaledNum / bigEnUnit / totalsText
 // 一并删除 —— formatMoney 头注释里「迁移要单独派任务」指的就是本任务（仅限本文件）。
 
 export default function MonthCalendarCard({ year, month, days, monthExpense, monthIncome, onPrevMonth, onNextMonth, onPressItem }: Props) {
-  const { semantic, spacing, radius } = useTheme();
+  const { semantic, spacing, radius, isDark, glassPill } = useTheme();
   const t = useT();
   const { langMode } = useLanguage();
-  const styles = useMemo(() => makeStyles(semantic, spacing, radius), [semantic, spacing, radius]);
+  // 「今天 / 选中」的实心色档（P_Calendar 稿 --sel / --selt）：夜 = 白圆 + 深字 #1A1040，
+  // 日 = 紫圆 + 白字 —— 直接复用分段控件选中块的令牌（useTheme 已按主题解析好），不另造色
+  const sel = glassPill;
+  // 金额小胶囊 / 月份翻页圆钮的淡底（稿 --chip）：夜 = textPrimary 12%，日 = accent 10%
+  // （令牌 + withAlpha 派生，不写死色值）
+  const chipFill = chipFillOf(semantic, isDark);
+  const styles = useMemo(
+    () => makeStyles(semantic, spacing, radius, chipFill, sel.fill),
+    [semantic, spacing, radius, chipFill, sel.fill]
+  );
   const [segKey, setSegKey] = useState<SegKey>('expense');
   // 点选的日期（YYYY-MM-DD）：再点一次同日收起；翻月自动清空（月格 key 重挂不清 state，需显式清）
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -200,25 +246,22 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
 
   return (
     <View>
-      {/* 月份导航：IconButton（44pt 触控区 + 必填读屏标签；标签语义=「上个月/下个月」，
-          旧实现借 report.rangeMonth（'月'）语义不对）。图标色保持次要文字色，别抢标题 */}
+      {/* 月份导航（P_Calendar 稿）：36 圆钮 + chip 淡底 + textPrimary 图标 16；
+          触控区仍 ≥44（按 v2 稿的 .gb 规格做 44 外框兜住 36 视觉件，与 ui/Chip 同一手法）。
+          图标色走 textPrimary（§3：玻璃上的图标文字都用主文字色） */}
       <View style={styles.calHeader}>
-        <IconButton
+        <MonthNavButton
           icon="chevron-back"
-          size={20}
-          color={semantic.textSecondary}
-          onPress={onPrevMonth}
           accessibilityLabel={t('home.prevMonth')}
+          onPress={onPrevMonth}
         />
         <AppText variant="headline" style={styles.calTitle} numberOfLines={1}>
           {title}
         </AppText>
-        <IconButton
+        <MonthNavButton
           icon="chevron-forward"
-          size={20}
-          color={semantic.textSecondary}
-          onPress={onNextMonth}
           accessibilityLabel={t('home.nextMonth')}
+          onPress={onNextMonth}
         />
       </View>
 
@@ -258,8 +301,6 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
               else if (net < 0) pill = { value: net, kind: 'expense' };
             }
           }
-          // 药丸底色 = 语义色 12% 淡底（字色/符号由 MoneyText 按 kind 自动取：支出中性−、收入绿+）
-          const pillTone = pill && pill.kind === 'income' ? semantic.amountIncome : semantic.amountExpense;
           return (
             // 外层 View 托管 14.28% 列宽——⚠ 不能把百分比宽度直接挂 PressableScale：
             // 它的 style 在内层 Animated.View 上，外层 Pressable 无宽度约束时
@@ -278,17 +319,21 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
                 // 读屏读出「已选中」（UI_RULES 第 8 节：选中态必须可读）
                 accessibilityState={isSelected ? { selected: true } : undefined}
               >
-                {/* 选中标记 = 数字外的圆环。⚠ 实现铁律：三层圆从挂载起就**常驻实底**、几何不变，
-                    选中 / 今天只「换色」——绝不出现 无填充 View 翻入 border/bg（Fabric Android
-                    重建背景 drawable 丢圆角 → 方形，真机 bug）或条件挂载新圆（同样丢圆角）。
-                    三态（验收退回第 4 条，不得出现黑 / 白圈）：
-                      普通 = 外/中/内全卡色（隐形）
-                      今天 = 内 accent 实心圆 + onAccent 字
-                      选中 = 外 accent（2pt 描边圈）+ 内卡色 + accentText 字
-                      今天且选中 = accent 实心圆 + 2pt 间隙（中圈卡色）+ accent 外圈 */}
-                <View style={[styles.dayRingOuter, isSelected && styles.dayRingOuterSel]}>
-                  <View style={styles.dayRingMid}>
-                    <View style={[styles.dayRingInner, isToday && styles.dayRingInnerToday]}>
+                {/* 日期数字的圆标（P_Calendar 稿）：26 圆、描边 1.5 常驻，三态只「换色」——
+                    ⚠ 沿用真机铁律（Fabric Android）：几何从挂载起不变、边框常驻，绝不出现
+                    「无填充 View 翻入 border/bg」（重建背景 drawable 丢圆角 → 方形）。
+                      普通    = 描边透明 + 底透明（隐形）
+                      今天    = sel.fill 实心圆（夜白字深字 / 日紫字白字）
+                      选中    = sel.fill 描边圈 + textPrimary 字
+                      今天+选中 = 实心圆 + 1.5 描边（外圈再套一圈同色描边圈做区分） */}
+                <View style={[styles.dayOuter, isToday && isSelected && styles.dayOuterBoth]}>
+                  <View
+                    style={[
+                      styles.dayCircle,
+                      isToday && { backgroundColor: sel.fill, borderColor: sel.fill },
+                      isSelected && !isToday && styles.dayCircleSelected,
+                    ]}
+                  >
                     <AppText
                       variant="footnote"
                       // 今天 / 选中加粗走 AppText 的 weight 分流（不能写 style.fontWeight：
@@ -297,24 +342,32 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
                       style={[
                         styles.dayText,
                         cell.muted && styles.dayTextMuted,
-                        isToday && styles.dayTextToday,
-                        isSelected && !isToday && styles.dayTextSelected,
+                        isToday && { color: sel.text },
                       ]}
                     >
                       {cell.day}
                     </AppText>
-                    </View>
                   </View>
                 </View>
                 {pill && (
-                  // 药丸外形保留（小胶囊 + 同色淡底）；文字用 MoneyText（紧凑格式、永不换行），
+                  // 药丸（P_Calendar 稿 .chip）：chip 淡底胶囊 + 11pt 等宽数字。
+                  // 字色统一 textPrimary（稿里药丸文字就是 --cgt），正负号仍由 MoneyText 的 kind 给
+                  // —— 稿里 42 格药丸全是中性色，收入/支出的区分交给上方分段筛选与 +/− 号。
                   // roll 关掉：一次切段 42 个药丸同时滚数字是白烧性能。
                   // ⚠ compactFallback={false} 必须关：日期格本身是 button，MoneyText 的
                   // 「放不下 → 包 Pressable 长按看全文」会在里面再套一个 button
                   // （Web 控制台报 <button> 不能嵌套 + 读屏重复播报）；药丸已有
                   // maxWidth 100% + overflow hidden，11pt 紧凑文本不会溢出
-                  <View style={[styles.pill, { backgroundColor: withAlpha(pillTone, PILL_TINT_ALPHA) }]}>
-                    <MoneyText value={pill.value} kind={pill.kind} variant="caption2" compact compactFallback={false} roll={false} />
+                  <View style={styles.pill}>
+                    <MoneyText
+                      value={pill.value}
+                      kind={pill.kind}
+                      color={semantic.textPrimary}
+                      variant="caption2"
+                      compact
+                      compactFallback={false}
+                      roll={false}
+                    />
                   </View>
                 )}
               </PressableScale>
@@ -380,7 +433,7 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
 }
 
 /** 令牌进、StyleSheet 出（UI_RULES 第 1/3/7 节：禁止写死色值 / 字号 / 圆角 / 间距） */
-function makeStyles(semantic: SemanticColors, spacing: Spacing, radius: Radius) {
+function makeStyles(semantic: SemanticColors, spacing: Spacing, radius: Radius, chipFill: string, selFill: string) {
   return StyleSheet.create({
     calHeader: {
       flexDirection: 'row',
@@ -426,50 +479,42 @@ function makeStyles(semantic: SemanticColors, spacing: Spacing, radius: Radius) 
     dayDetailTitle: { flex: 1, marginRight: spacing.sm },
     // 明细金额（MoneyText）：只留左边距；flexShrink 由 MoneyText 自带（金额永不被挤压）
     dayDetailAmount: { marginLeft: spacing.sm },
-    // 三层圆（外 32 / 中 28 / 内 24）：选中 → 外翻 accent（2pt 描边圈）；
-    // 今天 → 内翻 accent 实心圆；中圈恒卡色 = 今天+选中时天然形成「2pt 间隙」。
-    // ⚠ 三层从挂载起常驻实底、几何不变，只换色（见 JSX 注释的真机铁律）
-    dayRingOuter: {
+    // 日期圆标（P_Calendar 稿）：外托 32（今天+选中时给一圈同色描边，做区分）+ 内圆 26。
+    // ⚠ 描边宽度 1.5 从挂载起常驻、几何不变，三态只换色（见 JSX 注释的真机铁律）
+    dayOuter: {
       width: 32,
       height: 32,
       borderRadius: 16,
+      borderWidth: 1.5,
+      borderColor: 'transparent',
       alignItems: 'center',
       justifyContent: 'center',
-      backgroundColor: semantic.surface,
     },
-    dayRingOuterSel: { backgroundColor: semantic.accent },
-    dayRingMid: {
-      width: 28,
-      height: 28,
-      borderRadius: 14,
+    dayOuterBoth: { borderColor: selFill },
+    dayCircle: {
+      width: 26,
+      height: 26,
+      borderRadius: 13,
+      borderWidth: 1.5,
+      borderColor: 'transparent',
       alignItems: 'center',
       justifyContent: 'center',
-      backgroundColor: semantic.surface,
     },
-    dayRingInner: {
-      width: 24,
-      height: 24,
-      borderRadius: 12,
-      alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: semantic.surface,
-    },
-    dayRingInnerToday: { backgroundColor: semantic.accent },
-    // 日期数字（footnote 档，加粗由 JSX 的 weight 给）：四态颜色互斥——
-    // 普通 / 周末 textPrimary、灰显 textTertiary、今天 onAccent、选中非今天 accentText
+    dayCircleSelected: { borderColor: selFill },
+    // 日期数字（footnote 档，加粗由 JSX 的 weight 给）：普通 textPrimary，灰显整档压暗
+    // （P_Calendar 稿 opacity .35，且不进交互）；今天字色 = sel.text（JSX 里给）
     dayText: { color: semantic.textPrimary },
-    dayTextMuted: { color: semantic.textTertiary, opacity: 0.45 },
-    dayTextSelected: { color: semantic.accentText },
-    dayTextToday: { color: semantic.onAccent },
-    // 金额药丸（与 Badge 同规格：radius.xs + caption2 文字 + 语义色 12% 淡底，底色在
-    // JSX 里 withAlpha 派生）。maxWidth 100% + overflow hidden：再长也只裁尾不溢出格
+    dayTextMuted: { opacity: 0.35 },
+    // 金额药丸（P_Calendar 稿 .chip：10.5pt / 内衬 1×5 / 全圆角 / chip 淡底 + textPrimary 字）。
+    // maxWidth 100% + overflow hidden：再长也只裁尾不溢出格
     pill: {
-      marginTop: spacing.xs,
+      marginTop: 3,
       maxWidth: '100%',
       overflow: 'hidden',
-      paddingHorizontal: spacing.xs,
-      paddingVertical: spacing.xs,
-      borderRadius: radius.xs,
+      paddingHorizontal: 5,
+      paddingVertical: 1,
+      borderRadius: radius.full,
+      backgroundColor: chipFill,
       alignItems: 'center',
     },
     segWrap: { paddingVertical: spacing.sm },

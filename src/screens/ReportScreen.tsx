@@ -85,9 +85,6 @@ function donutCenterSize(text: string): number {
   return DONUT_CENTER_SIZES[2];
 }
 
-/** 页面顶部品牌渐变高度（UI V2 定稿统计 460 @844 高屏；矮屏 ×0.9） */
-const HERO_HEIGHT = 460;
-
 /** 占比细条高度（UI V2 定稿 4pt）—— 纯几何常量（与资产页额度使用率细条同一规格） */
 const SHARE_BAR_HEIGHT = 4;
 /** 排行行圆形图标直径（IconCircle 默认 42，与资产页账户行同规格） */
@@ -160,7 +157,7 @@ function CategoryIcon({ color, icon }: { color: string; icon: IconName }) {
  * 渐变上的玻璃圆钮（UI V2 稿：统计页周期行「‹ ›」/ 日历钮，36 圆 + 16 图标）。
  * 为什么不用共享 IconButton：IconButton 是「透明触控区 + 语义色图标」——落在渐变上就没有
  * 承托材质了；稿里这三颗都是玻璃圆钮（.gl + 36 圆），所以按 GlassView 的规格页内组合一次
- * （材质 / 圆角 / 尺寸取 GlassView 与令牌，图标色取 onAccent，不写死）。
+ * （材质 / 圆角 / 尺寸取 GlassView 与令牌，图标色取 textPrimary（§3），不写死）。
  */
 function GlassRoundButton({
   icon,
@@ -197,7 +194,7 @@ function GlassRoundButton({
           opacity: disabled ? 0.45 : 1,
         }}
       >
-        <Ionicons name={icon} size={16} color={semantic.onAccent} />
+        <Ionicons name={icon} size={16} color={semantic.textPrimary} />
       </GlassView>
     </PressableScale>
   );
@@ -327,9 +324,7 @@ function RankRow({
 export default function ReportScreen() {
   const { transactions, categories, getAssetById, currency, activeLedgerId } = useApp();
   const { semantic, spacing, layout, radius, isDark, glass } = useTheme();
-  const { pagePadding, contentMaxWidth, isShort } = useLayout();
-  // 渐变高度：844 高屏 460，矮屏 ×0.9（UI V2 第 1 节）
-  const heroHeight = Math.round(HERO_HEIGHT * (isShort ? 0.9 : 1));
+  const { pagePadding, contentMaxWidth } = useLayout();
   const insets = useSafeAreaInsets();
   const tr = useT();
   const { langMode } = useLanguage();
@@ -691,8 +686,8 @@ export default function ReportScreen() {
   return (
     // 全出血（同首页 / 资产页）：渐变通到屏幕顶，内容自己用 insets.top 让开状态栏
     <SafeAreaView style={styles.container} edges={[]}>
-      {/* UI V2 第 4 节统计：顶部品牌渐变 460（矮屏 ×0.9），绝对定位压在滚动内容下面 */}
-      <HeroGradient height={heroHeight} />
+      {/* UI V2.1 §1：品牌渐变铺满整页（fill），卡片 / 列表直接浮在渐变上 */}
+      <HeroGradient fill />
       <ScrollView
         onScroll={onTabScroll ?? undefined}
         scrollEventThrottle={16}
@@ -701,13 +696,13 @@ export default function ReportScreen() {
         }
         contentContainerStyle={{ paddingBottom: tabClearance }}
       >
-        {/* R1 页头（UI V2 稿）：大标题 30/600 白色 + 右侧周期行「‹ 2026年10月 ›」玻璃圆钮；
-            日历入口（日期区间选择器）保持在周期钮右侧 —— 入口 / 行为一点未变 */}
+        {/* R1 页头（UI V2 稿）：大标题 30/600（text.primary，§3：渐变上不再用白字）
+            + 右侧周期行「‹ 2026年10月 ›」玻璃圆钮；日历入口保持在周期钮右侧 —— 入口 / 行为不变 */}
         <View style={[styles.headerRow, { paddingHorizontal: pagePadding, paddingTop: insets.top + 14 }]}>
           <AppText
             variant="title1"
             weight="600"
-            color={semantic.onAccent}
+            color={semantic.textPrimary}
             style={styles.heroTitle}
             testID="report-header"
           >
@@ -721,7 +716,7 @@ export default function ReportScreen() {
               disabled={rangeType === 'custom'}
               testID="report-prev"
             />
-            <AppText variant="subhead" weight="500" color={semantic.onAccent} style={styles.periodLabel}>
+            <AppText variant="subhead" weight="500" color={semantic.textPrimary} style={styles.periodLabel}>
               {range.label}
             </AppText>
             <GlassRoundButton
@@ -743,21 +738,25 @@ export default function ReportScreen() {
         {/* R1 + R6 两个分段控件同一行（验收退回第 3 条）：左边周期（周/月/年）、右边类型（支出/收入）；
             V2 换成玻璃槽（落在渐变上）；窄屏一行放不下时右侧整块掉到第二行（UI_RULES 第 6 节 ②） */}
         <View style={[styles.segRow, { paddingHorizontal: pagePadding }]}>
-          <SegmentedControl
-            appearance="glass"
-            options={rangeOptions}
-            selected={rangeType}
-            onSelect={handleRangeSelect}
-          />
-          <SegmentedControl
-            appearance="glass"
-            options={[
-              { value: 'expense', label: tr('report.expense') },
-              { value: 'income', label: tr('report.income') },
-            ]}
-            selected={type}
-            onSelect={(v) => setType(v as TransactionType)}
-          />
+          <View style={styles.segTray}>
+            <SegmentedControl
+              appearance="glass"
+              options={rangeOptions}
+              selected={rangeType}
+              onSelect={handleRangeSelect}
+            />
+          </View>
+          <View style={styles.segTray}>
+            <SegmentedControl
+              appearance="glass"
+              options={[
+                { value: 'expense', label: tr('report.expense') },
+                { value: 'income', label: tr('report.income') },
+              ]}
+              selected={type}
+              onSelect={(v) => setType(v as TransactionType)}
+            />
+          </View>
         </View>
 
         {/* 多币种切换：这段时间里出现不止一种货币时才显示（排序与行为照旧，只换成标准 Chip） */}
@@ -922,6 +921,11 @@ function makeStyles(semantic: SemanticColors, spacing: Spacing, layout: Layout, 
       rowGap: spacing.sm,
       marginTop: spacing.sm,
     },
+    // 分段控件的槽底托盘（UI V2.1 §4）：玻璃槽里的未选中标签是 13pt 小字（要 4.5:1），
+    // 单层玻璃压在渐变最亮的一段上只有 3.8-4.1:1。托盘必须是**实底**（surfaceSunken，全 App
+    // 「凹底」档）—— 半透明 scrim 会被玻璃槽自己的 backdrop 模糊从上下的亮渐变里回拉，压不下去。
+    // 与槽同圆角、零内衬（视觉上就是「槽更深一档」，不再多一层描边）
+    segTray: { borderRadius: radius.full, backgroundColor: semantic.surfaceSunken },
     periodNav: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flexShrink: 1 },
     // 日期标签允许换行变高（不截断、不用省略号）；宽度由内容决定，挤不到就整行换下去
     periodLabel: { flexShrink: 1, textAlign: 'center', marginHorizontal: spacing.xs },

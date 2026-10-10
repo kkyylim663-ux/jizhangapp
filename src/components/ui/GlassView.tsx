@@ -44,6 +44,15 @@ export function GlassView({
 }: GlassViewProps) {
   const { glass } = useTheme();
   const blurSupported = Platform.OS === 'ios' || Platform.OS === 'web';
+  // ⚠ web 的 BlurView 把 tint 当「白色叠层」用（expo-blur getBackgroundColor：
+  //    'default' = rgba(255,255,255, (intensity/100) × 0.3)）—— intensity 100 就是 30% 白，
+  //    把夜间玻璃整体提亮一档：实测浮空 Tab 栏内底被抬到 rgb(112,104,120)、玻璃槽抬到
+  //    rgb(90,89,105)，上面的 11-13pt 次要字全掉到 4.2:1 以下（§4 要 4.5）。
+  //    原生端 intensity 100 才是「最厚材质」的正确档位，所以只压 web：
+  //    12px 模糊 + 18% 白，夜间玻璃回到「填色令牌说了算」的深色（与稿里的夜间玻璃对得上）。
+  const WEB_BLUR_CAP = 60;
+  const requested = intensity ?? glass.blurIntensity;
+  const resolvedIntensity = Platform.OS === 'web' ? Math.min(requested, WEB_BLUR_CAP) : requested;
 
   return (
     <View
@@ -61,11 +70,11 @@ export function GlassView({
       ]}
     >
       {/* 模糊垫底：只铺在内容下面，不吃触摸。
-          tint 固定 'default'（web = rgba(255,255,255,.09) / iOS = 系统默认材质）：
+          tint 固定 'default'（iOS = 系统默认材质；web = 白色叠层，见上面 WEB_BLUR_CAP 的说明）：
           颜色由令牌的 fill 决定，模糊层不再二次染色（'dark' 会把夜间玻璃压暗一档） */}
       {blurSupported ? (
         <BlurView
-          intensity={intensity ?? glass.blurIntensity}
+          intensity={resolvedIntensity}
           tint="default"
           style={StyleSheet.absoluteFill}
           pointerEvents="none"

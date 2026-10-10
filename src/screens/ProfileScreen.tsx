@@ -39,23 +39,23 @@ import { AppText, Badge, Card, GlassView, HeroGradient, IconCircle, Switch } fro
 
 /**
  * 设置各行的图标基色（UI V2 稿取样的行首圆色）。
- * 这些是设置页的装饰色，不是类别 / 账户数据色 —— 统一交给 IconCircle：
- * 底色 = 基色 15%（夜）/ 基色混白 86%（日），图标色由它按主题推导，页面不写死两套色值。
- * 未列出的行（订阅）不传基色 = IconCircle 的中性圆（夜 surfaceSunken + 次要字色）。
+ * 这些是设置页的装饰色，不是类别 / 账户数据色 —— 统一交给 IconCircle（立体光泽球）。
+ * ⚠ 基色深浅是硬指标（UI V2.1 §5）：白图标与球 ≥3:1，本页按 §4 的小字口径取 4.5:1 ——
+ *   language / finance / subscribe 三颗是按测量结果加深过的，别再调亮回去。
+ * 未列出的行不传基色 = IconCircle 的中性圆。
  */
 const ICON_TINTS = {
   darkMode: '#9B5BD6',
-  language: '#4F8BFF',
-  finance: '#5FD99A',
+  language: '#4379E8',
+  finance: '#4ECB8C',
+  subscribe: '#7E7A95',
   help: '#FFB06A',
   about: '#C29BFF',
 } as const;
 
 export default function ProfileScreen({ navigation }: any) {
-  const { semantic, spacing, layout, glassPill, glass } = useTheme();
-  const { pagePadding, contentMaxWidth, rowMinHeight, isShort } = useLayout();
-  // 渐变高度：844 高屏 360，矮屏 ×0.9（UI V2 第 1 节）
-  const heroHeight = Math.round(360 * (isShort ? 0.9 : 1));
+  const { semantic, spacing, layout, glass } = useTheme();
+  const { pagePadding, contentMaxWidth, rowMinHeight } = useLayout();
   const insets = useSafeAreaInsets();
   const tabClearance = useTabClearance();
   const onTabScroll = useTabBarScrollHandler();
@@ -149,8 +149,8 @@ export default function ProfileScreen({ navigation }: any) {
   return (
     // 全出血（同首页 / 资产页 / 统计页）：渐变通到屏幕顶，内容自己用 insets.top 让开状态栏
     <SafeAreaView style={styles.container} edges={[]}>
-      {/* UI V2 第 4 节设置：顶部品牌渐变 360（矮屏 ×0.9），绝对定位压在滚动内容下面 */}
-      <HeroGradient height={heroHeight} />
+      {/* UI V2.1 §1：品牌渐变铺满整页（fill），卡片 / 列表直接浮在渐变上 */}
+      <HeroGradient fill />
       <ScrollView
         onScroll={onTabScroll ?? undefined}
         scrollEventThrottle={16}
@@ -162,11 +162,12 @@ export default function ProfileScreen({ navigation }: any) {
         contentContainerStyle={{ paddingBottom: tabClearance + spacing.huge }}
       >
         <View style={{ paddingHorizontal: pagePadding, paddingTop: insets.top + 14 }}>
-          {/* P1 页头（UI V2 稿）：大标题 30/600 白色（无返回键 —— 根页不该有返回） */}
+          {/* P1 页头（UI V2 稿）：大标题 30/600（text.primary，§3：渐变上不再用白字；
+              无返回键 —— 根页不该有返回） */}
           <AppText
             variant="title1"
             weight="600"
-            color={semantic.onAccent}
+            color={semantic.textPrimary}
             style={styles.heroTitle}
             testID="profile-header"
           >
@@ -193,15 +194,15 @@ export default function ProfileScreen({ navigation }: any) {
           >
             <GlassView radius={24} style={styles.accountCard}>
               <View style={[styles.avatar, { backgroundColor: glass.fill }]}>
-                <Ionicons name="person" size={24} color={semantic.onAccent} />
+                <Ionicons name="person" size={24} color={semantic.textPrimary} />
               </View>
               <View style={styles.accountTextBlock}>
-                <AppText variant="headline" color={semantic.onAccent} numberOfLines={2}>
+                <AppText variant="headline" color={semantic.textPrimary} numberOfLines={2}>
                   {authInitializing ? tr('auth.busy') : user ? user.email : tr('auth.signInOrUp')}
                 </AppText>
                 {/* 副行：登录后是同步状态一句话；未登录是登录说明。说明文字随内容换行（不截断） */}
                 {!authInitializing && (
-                  <AppText variant="footnote" color={glassPill.muted} style={styles.accountSub}>
+                  <AppText variant="footnote" color={semantic.textPrimary} style={styles.accountSub}>
                     {user ? syncText : tr('auth.subtitle')}
                   </AppText>
                 )}
@@ -209,7 +210,7 @@ export default function ProfileScreen({ navigation }: any) {
               <Ionicons
                 name="chevron-forward"
                 size={18}
-                color={semantic.onAccent}
+                color={semantic.textPrimary}
                 style={styles.accountChevron}
               />
             </GlassView>
@@ -289,6 +290,7 @@ export default function ProfileScreen({ navigation }: any) {
             />
             <SettingsRow
               icon="star-outline"
+              iconColor={ICON_TINTS.subscribe}
               title={tr('profile.subscribe')}
               trailing={<Badge label={tr('profile.subscribeSub')} />}
               disabled
@@ -314,8 +316,9 @@ export default function ProfileScreen({ navigation }: any) {
             />
           </SettingsSection>
 
-          {/* P4 页脚版本号：caption 档、居中（中文写「版本 1.0.0」，英文 Version 1.0.0） */}
-          <AppText variant="caption" color={semantic.textTertiary} align="center" style={styles.footer}>
+          {/* P4 页脚版本号：caption 档、居中（中文写「版本 1.0.0」，英文 Version 1.0.0）；
+              色走 textSecondary —— §3 规定 textTertiary 只给 ≥13pt，caption 12pt 用它只有 4.35:1 */}
+          <AppText variant="caption" color={semantic.textSecondary} align="center" style={styles.footer}>
             {tr('profile.version', { version: appVersion })}
           </AppText>
         </View>
@@ -553,8 +556,11 @@ function SettingsSection({
   );
 }
 
-/** 设置行左侧圆形图标直径（稿：34 圆 + 17 图标） */
-const ROW_ICON_SIZE = 34;
+/** 设置行左侧圆形图标直径（稿：34 圆 + 17 图标）。
+ *  ⚠ 直径与图标尺寸是硬指标（UI V2.1 §4/§5）：球面是高光球，图标正好压在最亮的一档上 ——
+ *  34 圆只派生 16pt 图标，白图标对球面的最亮档量出来 3.8–4.4 < 4.5；38 圆派生 18pt 图标，
+ *  按 §4 的「大字 3:1」口径达标。改小回去就会让设置行的三个球重新不达标。 */
+const ROW_ICON_SIZE = 38;
 
 /**
  * 设置行（UI V2 稿）：左侧 34 圆图标 + 标题 15 + 行尾控件 / chevron。

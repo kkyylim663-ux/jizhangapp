@@ -67,12 +67,6 @@ import { useDialog } from '../components/AppDialog';
 
 type IconName = keyof typeof Ionicons.glyphMap;
 
-/** 渐变上的白字档（UI V2 稿 / ComponentGallery 同一约定：不在主题色板内，直接字面量） */
-const V2_ON_GRADIENT = '#FFFFFF';
-/** 渐变上的次要白（chevron 等辅助图标） */
-const V2_ON_GRADIENT_DIM = 'rgba(255,255,255,0.85)';
-/** 记一笔 Hero 渐变高度（UI V2 定稿 400；矮屏 ×0.9） */
-const HERO_GRADIENT_HEIGHT = 400;
 
 // iOS 风格"左侧边缘右滑返回"：从屏幕左边缘(40px内)横向右滑超过阈值就返回。
 // manualActivation 手动接管：只有"起点贴近左边缘且横向位移占主导"才激活手势，
@@ -201,6 +195,12 @@ function HeroAmountText({
   // 光标在整串中的「前面有几个字符」位置（0 = 最前）
   const cursorIdx = Math.max(0, Math.min(display.length, display.length - cursorFromEnd));
   const cursorInInt = cursorIdx <= intLen;
+  // UI V2.1 §3：渐变上的金额 / 小数 / 光标统一 text.primary（日间不能再有白字压浅色渐变）；
+  // 小数与光标沿用稿里的降透明度（本就是大字档，§4 按 3:1 口径）
+  const { semantic } = useTheme();
+  const onHero = semantic.textPrimary;
+  const onHeroDim = withAlpha(semantic.textPrimary, 0.7);
+  const onHeroCursor = withAlpha(semantic.textPrimary, 0.9);
 
   const intSize = fontSize;
   const decSize = Math.round(fontSize * HERO_INT_RATIO_DEC);
@@ -209,20 +209,20 @@ function HeroAmountText({
     lineHeight: Math.round(intSize * HERO_LINE_RATIO),
     fontWeight: '500' as const,
     letterSpacing: Math.round(fontSize * HERO_LETTER_RATIO * 10) / 10,
-    color: '#FFFFFF',
+    color: onHero,
   };
   const decStyle = {
     fontSize: decSize,
     lineHeight: Math.round(decSize * HERO_LINE_RATIO),
     fontWeight: '300' as const,
     // 稿：小数部分降透明度
-    color: 'rgba(255,255,255,0.7)',
+    color: onHeroDim,
   };
   // 光标：白色细竖条（稿里是 2×44 渐变条；这里沿用文字光标字形，尺寸跟着片段字号）
   const cursorStyle = {
     fontSize: Math.round(intSize * 0.68),
     fontWeight: '300' as const,
-    color: 'rgba(255,255,255,0.9)',
+    color: onHeroCursor,
     marginLeft: 2,
   };
 
@@ -1383,7 +1383,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
       onTouchStart={() => { Keyboard.dismiss(); }}>
         <View style={{ flex: 1 }}>
         {/* UI V2：最底层品牌渐变（与支出/收入同一档：400 / 矮屏 ×0.9） */}
-        <HeroGradient height={isShort ? Math.round(HERO_GRADIENT_HEIGHT * 0.9) : HERO_GRADIENT_HEIGHT} grid={false} />
+        <HeroGradient fill />
         {/* 页头两行（T14）：返回 + 标题 + 扫票 / 类型分段独占一行；转账·兑换不做扫票识别 */}
         <TransactionTypeHeader
           uiType={uiType}
@@ -2122,7 +2122,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
       onTouchStart={() => { Keyboard.dismiss(); }}>
       <View style={{ flex: 1 }}>
       {/* UI V2：最底层品牌渐变（400 / 矮屏 ×0.9，底部自动淡出到 bg）；内容全部压在它上面 */}
-      <HeroGradient height={isShort ? Math.round(HERO_GRADIENT_HEIGHT * 0.9) : HERO_GRADIENT_HEIGHT} grid={false} />
+      <HeroGradient fill />
       {/* TASK-011 五轮（用户定版尝试）：外层不再可滚——普通 View 替代 ScrollView。
           页面不能滚 → 内容不可能被滚到键盘底下；T15 起类别网格自己可滚（catGridScroll），
           flex 布局把键盘面板高度从容器里扣除，网格天然停在键盘上沿。
@@ -2163,18 +2163,19 @@ export default function AddTransactionScreen({ navigation, route }: any) {
             accessibilityLabel={t('addTx.selectCurrency')}
           >
             <GlassView radius={999} style={styles.currencyPill}>
-              <AppText variant="caption2" weight="500" color={V2_ON_GRADIENT}>
+              <AppText variant="caption2" weight="500" color={semantic.textPrimary}>
                 {amountCurrencyCode}
               </AppText>
-              <Ionicons name="chevron-down" size={12} color={V2_ON_GRADIENT_DIM} />
+              <Ionicons name="chevron-down" size={12} color={semantic.textPrimary} />
             </GlassView>
           </PressableScale>
 
-          {/* 算式行：多项（有 +/− 运算符）时才出现；稿里是 14pt 降透明白 */}
+          {/* 算式行：多项（有 +/− 运算符）时才出现；稿里是降透明白 →
+              UI V2.1 §3 改 text.primary（13pt 小字需 4.5:1，降透明浅字在浅色渐变上不达标） */}
           {amountExpr.isMulti && (
             <AppText
               variant="footnote"
-              color="rgba(255,255,255,0.8)"
+              color={semantic.textPrimary}
               align="center"
               numberOfLines={1}
               style={styles.heroExpr}

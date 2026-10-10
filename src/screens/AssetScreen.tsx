@@ -97,8 +97,6 @@ const ASSET_ORDER_KEY = '@jizhang/assetOrder';
 const USAGE_BAR_HEIGHT = 3;
 /** 细条的横向品牌渐变（accent 渐变的 start/end 是给方块用的对角；细条要横着走） */
 const USAGE_BAR_GRADIENT = { start: { x: 0, y: 0.5 }, end: { x: 1, y: 0.5 } } as const;
-/** 页面顶部品牌渐变高度（UI V2 定稿资产 440 @844 高屏；矮屏 ×0.9） */
-const HERO_HEIGHT = 440;
 /** 额度使用率预警点（与预算条同一套语义：≥80% warning、≥100% danger） */
 const USAGE_WARN_PCT = 80;
 const USAGE_FULL_PCT = 100;
@@ -123,9 +121,10 @@ function AccountIcon({ color, icon }: { color: string; icon: IconName }) {
 /**
  * 渐变上的玻璃胶囊按钮（UI V2 稿：资产页右上「+ 添加账户」/ 排序模式「完成」）。
  * 为什么不用共享 Button：Button 只有 primary / secondary / destructive / ghost 四档，
- * 都是「实底 / 描边」材质，没有玻璃档；这里要的是 GlassView 材质 + 胶囊 + 白字，
+ * 都是「实底 / 描边」材质，没有玻璃档；这里要的是 GlassView 材质 + 胶囊，
  * 所以按 GlassView 的规格页内组合一次（颜色 / 圆角 / 字号全部取令牌，不写死）。
- * 材质与规格照稿：高 40、左右内衬 14、radius.full、14/500 白字、图标 16、图标与文字间距 6。
+ * 文字 / 图标 = text.primary（UI V2.1 §3：玻璃上的文字一律主文字色，日间不再有白字压浅色）。
+ * 材质与规格照稿：高 40、左右内衬 14、radius.full、15/500、图标 16、图标与文字间距 6。
  */
 function GlassPillButton({
   label,
@@ -158,8 +157,8 @@ function GlassPillButton({
           paddingHorizontal: 14,
         }}
       >
-        {!!icon && <Ionicons name={icon} size={16} color={semantic.onAccent} />}
-        <AppText variant="subhead" weight="500" color={semantic.onAccent}>
+        {!!icon && <Ionicons name={icon} size={16} color={semantic.textPrimary} />}
+        <AppText variant="subhead" weight="500" color={semantic.textPrimary}>
           {label}
         </AppText>
       </GlassView>
@@ -180,7 +179,7 @@ function NetWorthCard({
 }: {
   summaryByCurrency: [string, { assets: number; liabilities: number }][];
 }) {
-  const { semantic, spacing, isDark, glass, glassPill, layout } = useTheme();
+  const { semantic, spacing, isDark, glass, layout } = useTheme();
   const { pagePadding } = useLayout();
   const t = useT();
 
@@ -201,7 +200,7 @@ function NetWorthCard({
         padding: 18,
       }}
     >
-      <AppText variant="footnote" color={glassPill.muted}>
+      <AppText variant="footnote" color={semantic.textPrimary}>
         {`${t('asset.summaryNet')} · ${code}`}
       </AppText>
       <MoneyText
@@ -210,7 +209,7 @@ function NetWorthCard({
         value={net}
         currency={code}
         showCurrency
-        color={semantic.onAccent}
+        color={semantic.textPrimary}
         style={{ marginTop: spacing.xs }}
       />
       <View style={{ flexDirection: 'row', gap: 10, marginTop: spacing.lg }}>
@@ -224,13 +223,13 @@ function NetWorthCard({
             key={label}
             style={{ flex: 1, borderRadius: 16, backgroundColor: cellBg, paddingHorizontal: spacing.md, paddingVertical: 10 }}
           >
-            <AppText variant="caption" color={glassPill.muted}>
+            <AppText variant="caption" color={semantic.textPrimary}>
               {label}
             </AppText>
             <MoneyText
               value={value}
               variant="headline"
-              color={semantic.onAccent}
+              color={semantic.textPrimary}
               style={{ marginTop: 2 }}
             />
           </View>
@@ -247,7 +246,7 @@ function NetWorthCard({
             marginTop: spacing.md,
           }}
         >
-          <AppText variant="footnote" color={glassPill.muted}>
+          <AppText variant="footnote" color={semantic.textPrimary}>
             {`${otherCode} ${t('asset.summaryNet')}`}
           </AppText>
           <MoneyText
@@ -255,7 +254,7 @@ function NetWorthCard({
             variant="footnote"
             currency={otherCode}
             showCurrency
-            color={semantic.onAccent}
+            color={semantic.textPrimary}
           />
         </View>
       ))}
@@ -565,10 +564,8 @@ function computeAssetFlowStats(
 export default function AssetScreen() {
   const { assets, transactions, getAssetBalance, deleteAsset, setDefaultAsset, updateAsset } = useApp();
   type AssetItem = (typeof assets)[number];
-  const { semantic, typography, spacing, radius, layout, glassPill } = useTheme();
-  const { pagePadding, contentMaxWidth, isShort } = useLayout();
-  // 渐变高度：844 高屏 440，矮屏 ×0.9（UI V2 第 1 节）
-  const heroHeight = Math.round(HERO_HEIGHT * (isShort ? 0.9 : 1));
+  const { semantic, typography, spacing, radius, layout } = useTheme();
+  const { pagePadding, contentMaxWidth } = useLayout();
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const tabClearance = useTabClearance();
@@ -960,8 +957,8 @@ export default function AssetScreen() {
   return (
     // 全出血（同首页）：SafeAreaView 不让位，渐变一路通到屏幕顶；内容自己用 insets.top 让开状态栏
     <SafeAreaView style={styles.container} edges={[]}>
-      {/* UI V2 第 4 节资产：顶部品牌渐变 440（矮屏 ×0.9），绝对定位压在滚动内容下面 */}
-      <HeroGradient height={heroHeight} />
+      {/* UI V2.1 §1：品牌渐变铺满整页（fill），卡片 / 列表直接浮在渐变上 */}
+      <HeroGradient fill />
       <ScrollView
         onScroll={onTabScroll ?? undefined}
         scrollEventThrottle={16}
@@ -970,14 +967,14 @@ export default function AssetScreen() {
         }
         contentContainerStyle={{ paddingBottom: tabClearance }}
       >
-        {/* 页头（G5）：大标题 30/600 白色（渐变上）+ 右侧玻璃胶囊动作；排序模式换成「完成」
-            （长按账户行进入）。空状态时页头不放按钮，动作只留空状态卡里那一个（验收退回第 2 条） */}
+        {/* 页头（G5）：大标题 30/600（text.primary，§3：渐变上不再用白字）+ 右侧玻璃胶囊动作；
+            排序模式换成「完成」（长按账户行进入）。空状态时页头不放按钮，动作只留空状态卡里那一个 */}
         <View style={{ paddingHorizontal: pagePadding, paddingTop: insets.top + 14 }}>
           <View style={styles.headerRow}>
             <AppText
               variant="title1"
               weight="600"
-              color={semantic.onAccent}
+              color={semantic.textPrimary}
               style={styles.heroTitle}
               testID="asset-header"
             >

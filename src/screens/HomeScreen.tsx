@@ -25,7 +25,7 @@ import { formatDate } from '../utils/formatDate';
 import type { Ledger, Transaction } from '../types';
 import { UNCATEGORIZED_ICON, UNCATEGORIZED_NAME, UNCATEGORIZED_COLOR } from '../constants/uncategorized';
 import PressableScale from '../components/PressableScale';
-import { AppText, BottomSheet, Button, Card, EmptyState, GlassView, HeroGradient, IconButton, IconCircle, ListSection, MoneyText } from '../components/ui';
+import { AppText, BottomSheet, Button, EmptyState, GlassView, HeroGradient, IconButton, IconCircle, ListSection, MoneyText } from '../components/ui';
 import { withAlpha } from '../components/ui/color';
 // HeroMetalSheen / AuroraFlowShader 文件与色 token 原样保留（可恢复）；V2 定稿里没有
 // 紫色金属卡与流光，所以这里不再 import —— 陀螺仪（useHeroSheen）也就不会启动，省电。
@@ -50,8 +50,6 @@ const DEFAULT_LEDGER_COLOR = '#4C9AFF';
 const FLASH_ROW_MS = 500;
 
 // ── UI V2 首页版型常量（数值取自 .zcode/design/mockups/G_HomeDark|Light.dc.html 的内联样式）──
-/** 页面底层品牌渐变高度（844 高屏 580；实际渲染再叠加顶部安全区，见 heroGradientHeight） */
-const HERO_GRADIENT_HEIGHT = 580;
 /** Hero 净资产整数段字号（V2 稿：58 / 500；RM 24 / 小数 28 由 MoneyText 按比例派生） */
 const HERO_AMOUNT_SIZE = 58;
 /** 大金额行盒高（V2 稿 line-height 64；隐藏态的 •••••• 也用它，显隐切换时行高不跳） */
@@ -100,12 +98,14 @@ function todayStr() {
 /**
  * 渐变上大金额的投影（V2 稿：0 2px 20px，比旧版的大而柔）。
  * 色取品牌深紫令牌（heroDark 起点色）按主题配透明度 —— 不在页面里写死色值。
+ * UI V2.1 §3：投影只在夜间给（浅字压深紫渐变）；日间文字是深色压浅色渐变，投影只会糊字。
  */
 function heroTextShadowStyle(darkestGradientColor: string, isDark: boolean): TextStyle {
+  if (!isDark) return {};
   return {
-    textShadowColor: withAlpha(darkestGradientColor, isDark ? 0.35 : 0.3),
+    textShadowColor: withAlpha(darkestGradientColor, 0.35),
     textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: isDark ? 20 : 18,
+    textShadowRadius: 20,
   };
 }
 
@@ -440,7 +440,8 @@ function makeTxRowStyles(semantic: SemanticColors, spacing: Spacing, layout: Lay
   });
 }
 
-// ── V2 渐变上的 44 玻璃圆钮（铃铛 / 日历）：GlassView 玻璃材质 + 白色图标；
+// ── V2 渐变上的 44 玻璃圆钮（铃铛 / 日历）：GlassView 玻璃材质 + text.primary 图标
+//    （UI V2.1 §3：日间不再有白图标压在浅色玻璃上）；
 //    按压反馈挂在**外层** PressableScale 上（玻璃整块缩才看得见）。
 //    44 = V2 稿的 .gb 规格（也是全 App 最小触控区），图标 20 与 IconButton 同档。
 const GLASS_ROUND = 44;
@@ -471,7 +472,7 @@ function GlassRoundButton({
       testID={testID}
     >
       <GlassView radius="full" style={glassRoundStyles.glass}>
-        <Ionicons name={icon} size={20} color={semantic.onAccent} />
+        <Ionicons name={icon} size={20} color={semantic.textPrimary} />
       </GlassView>
     </PressableScale>
   );
@@ -565,7 +566,7 @@ export default function HomeScreen({ navigation }: any) {
     getAssetById,
   } = useApp();
 
-  const { colors, isDark, semantic, spacing, layout, radius, elevation, glass, glassPill, gradients, motion } = useTheme();
+  const { colors, isDark, semantic, spacing, layout, radius, elevation, glass, gradients, motion } = useTheme();
   const t = useT();
   const { langMode: homeLang } = useLanguage();
   const insets = useSafeAreaInsets();
@@ -579,17 +580,18 @@ export default function HomeScreen({ navigation }: any) {
     () => makeStyles(colors, isDark, semantic, spacing, radius, layout, elevation),
     [colors, isDark, semantic, spacing, radius, layout, elevation]
   );
-  // 渐变上的白字档（V2 第 1 节玻璃族）：主文字/图标 = onAccent（纯白），次级 = glassPill.muted；
-  // 金额投影色取品牌深紫令牌（heroDark 起点），不写死色值
-  const onGradientText = semantic.onAccent;
-  const onGradientMuted = glassPill.muted;
+  // 渐变 / 玻璃上的文字（UI V2.1 §3）：日夜统一 text.primary —— 夜间不再用暗灰，
+  // 日间不再有白字压在浅色渐变上。⚠ 不能退回 onAccent（白）/ glassPill.muted（夜 0.70 透明）：
+  // 夜间 hero 渐变是亮紫（实测底色 ~rgb(100,83,160)），半透明浅字只有 3.7:1，不达 §4 的 4.5；
+  // 层级改由字号 / 字重承担（金额 display、标签 footnote/caption 本身分档）
+  const onGradientText = semantic.textPrimary;
+  const onGradientMuted = semantic.textPrimary;
   const heroShadow = useMemo(
     () => heroTextShadowStyle(gradients.heroDark.colors[0], isDark),
     [gradients, isDark]
   );
-  // 页面底层渐变高度：内容整体让位 insets.top，渐变同比加高（844 高屏 = 580，与 V2 稿逐像素对齐；
-  // 矮屏不缩 —— 预算卡与第一行账单在 640 高屏上也必须压在渐变上，见任务验收）
-  const heroGradientHeight = HERO_GRADIENT_HEIGHT + insets.top;
+  // 吸顶日期头的判据仍是「头部区实测高度」（heroHeightRef，见 onLayout）；
+  // 渐变高度不再参与计算 —— UI V2.1 §1 的 fill 模式铺满整页
   const [balanceHidden, setBalanceHidden] = useState(false);
   // 隐藏净资产持久化：退出 App 下次进来仍保留隐藏，点眼睛才恢复
   const BALANCE_HIDDEN_KEY = '@jizhang/balanceHidden';
@@ -1138,9 +1140,9 @@ export default function HomeScreen({ navigation }: any) {
     <SafeAreaView style={styles.container} edges={[]}
       onTouchStart={() => { Keyboard.dismiss(); }}
     >
-      {/* 页面最底层 = 品牌渐变（V2 第 1 节）：指到页面第一个子节点、绝对定位、pointerEvents none；
-          高度 580（844 高屏）+ 顶部安全区；底部在渐变高度 ~50% 处开始淡出到页面底色 */}
-      <HeroGradient height={heroGradientHeight} grid />
+      {/* 页面最底层 = 品牌渐变（UI V2.1 §1）：铺满整页（fill）、不再淡出成纯色底，
+          卡片 / 列表 / 弹层全部浮在渐变上；网格线只在首页保留 */}
+      <HeroGradient fill grid />
       {/* 首页主体 = 一个 SectionList（T09 / H4 / H6）：
           头部（Hero 区 + 日历卡）走 ListHeaderComponent，账单按天分组渲染（吸顶日期头 + 圆形图标行）；
           滚动事件继续透传给 Tab 栏自动隐藏（T07 联动）。
@@ -1418,12 +1420,12 @@ export default function HomeScreen({ navigation }: any) {
           </PressableScale>
         </Reanimated.View>
         {/* 日历视图卡（只在日历模式渲染，与旧行为一致——切回详情即卸载）；
-            卡面 = 标准 Card（surface 底 + level1，圆角拉到与账单列表卡一致的 26）——
-            日期格的「常驻卡色」圆环靠它与 surface 同色才隐形（T12 交接事项） */}
+            卡面 = GlassView（UI V2.1 §2：全 App 唯一毛玻璃材质，P_Calendar 稿整张日历就是一块玻璃）
+            + 圆角 26 / 内衬 12·10·10（与账单列表卡同一张卡的观感） */}
         {viewMode === 'calendar' && (
           <Reanimated.View entering={FadeInDown.duration(240)}>
             <View style={styles.calendarWrap}>
-              <Card style={styles.calendarCard}>
+              <GlassView radius={26} style={styles.calendarCard}>
                 <MonthCalendarCard
                   year={viewMonth.year}
                   month={viewMonth.month}
@@ -1438,7 +1440,7 @@ export default function HomeScreen({ navigation }: any) {
                     if (tx) navigation.navigate(ROUTES.ADD_TX, { editTransaction: tx });
                   }}
                 />
-              </Card>
+              </GlassView>
             </View>
           </Reanimated.View>
         )}
@@ -1859,8 +1861,8 @@ function makeStyles(
     },
     // 日历卡外层：页面左右边距（与头部区的间距由 heroBlock 的 paddingBottom 给，见其注释）
     calendarWrap: { paddingHorizontal: layout.page },
-    // 圆角拉到与账单列表卡一致的 26（两种视图同一张卡的观感）
-    calendarCard: { borderRadius: LIST_CARD_RADIUS },
+    // 玻璃圆角 26（半径由 GlassView 的 radius 给，这里补稿的内衬 12/10/10）
+    calendarCard: { paddingTop: 12, paddingHorizontal: 10, paddingBottom: 10 },
     // ── 以下旧的「账单卡 / 空状态 / 账单行（图标托 + 类别(备注)）」样式已按 T09 删除 ──
     // （H4：连续分组列表；H5：行统一走 ui/TransactionRow；H7：空状态统一走 ui/EmptyState）
     ledgerModalOverlay: {
