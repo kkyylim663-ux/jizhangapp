@@ -23,6 +23,9 @@ import {
   Card,
   Chip,
   EmptyState,
+  GlassView,
+  HeroGradient,
+  IconCircle,
   IconButton,
   ListRow,
   ListSection,
@@ -34,14 +37,16 @@ import {
 import PressableScale from '../../components/PressableScale';
 import SegmentedControl from '../../components/SegmentedControl';
 import { useDialog } from '../../components/AppDialog';
+import { Ionicons } from '@expo/vector-icons';
 
-type PageKey = 'p1' | 'p2' | 'p3' | 'p4';
+type PageKey = 'p1' | 'p2' | 'p3' | 'p4' | 'p5';
 
 const PAGES: { key: PageKey; label: string }[] = [
   { key: 'p1', label: 'P1 页头' },
   { key: 'p2', label: 'P2 金额' },
   { key: 'p3', label: 'P3 列表' },
   { key: 'p4', label: 'P4 交互' },
+  { key: 'p5', label: 'P5 地基' },
 ];
 
 const noop = () => {};
@@ -123,6 +128,7 @@ export default function ComponentGallery() {
             lastAction={lastAction}
           />
         ) : null}
+        {page === 'p5' ? <PageFoundation seg3={seg3} setSeg3={setSeg3} /> : null}
       </ScrollView>
 
       <BottomSheet
@@ -531,6 +537,202 @@ function PageInteractions({
   );
 }
 
+/* ------------------------------------------------------------------ P5 */
+
+/**
+ * UI V2 地基件（2026-10-10）：HeroGradient / GlassView / IconCircle /
+ * 分段控件的玻璃与 accent 变体 / MoneyText hero 样式。
+ * 顶部渐变块按首页稿排了一屏（全出血、可日夜切换）方便对照。
+ */
+function PageFoundation({ seg3, setSeg3 }: { seg3: string; setSeg3: (v: string) => void }) {
+  const { spacing, semantic } = useTheme();
+  const [segMonth, setSegMonth] = useState('month');
+  const [segIncome, setSegIncome] = useState('expense');
+
+  return (
+    <>
+      <Section title="HeroGradient · 160° 主渐变 + 2 光斑 + 网格 + 底部淡出（跟随日/夜）" testID="g-herogradient">
+        <View style={styles.heroDemo}>
+          <HeroGradient height={560} grid />
+          {/* 顶部：账本玻璃胶囊 + 右两个 44 玻璃圆钮（首页稿排法） */}
+          <View style={styles.heroRow}>
+            <GlassView radius={999} style={styles.heroPill}>
+              <AppText variant="subhead" weight="500" color="#FFFFFF">
+                默认账本
+              </AppText>
+              <Ionicons name="chevron-down" size={16} color="rgba(255,255,255,0.7)" />
+            </GlassView>
+            <View style={[styles.heroRow, styles.heroRowRight]}>
+              <GlassView radius={999} style={styles.heroRound}>
+                <Ionicons name="notifications-outline" size={20} color="#FFFFFF" />
+              </GlassView>
+              <GlassView radius={999} style={styles.heroRound}>
+                <Ionicons name="calendar-outline" size={20} color="#FFFFFF" />
+              </GlassView>
+            </View>
+          </View>
+
+          {/* 净资产 + MYR 玻璃小胶囊 + Hero 金额（MoneyText hero 58） */}
+          <View style={styles.heroNetRow}>
+            <AppText variant="footnote" color="rgba(255,255,255,0.8)">
+              净资产
+            </AppText>
+            <GlassView radius={999} style={styles.heroCurrencyPill}>
+              <AppText variant="caption2" weight="500" color="#FFFFFF">
+                MYR
+              </AppText>
+              <Ionicons name="swap-vertical" size={12} color="#FFFFFF" />
+            </GlassView>
+          </View>
+          <View style={styles.heroAmountRow}>
+            <MoneyText
+              value={17061.15}
+              hero
+              heroSize={58}
+              currency="MYR"
+              showCurrency
+              kind="transfer"
+              color="#FFFFFF"
+              roll={false}
+            />
+            {/* 「隐藏金额」眼睛 = 36 圆钮（稿）；金额可用宽由布局自动扣掉它 + 间距 10，组件内不再扣第二次 */}
+            <PressableScale style={styles.heroEyeBtn}>
+              <Ionicons name="eye-outline" size={20} color="rgba(255,255,255,0.75)" />
+            </PressableScale>
+          </View>
+
+          {/* 预算玻璃卡 + 8dp 白色进度条 */}
+          <GlassView radius={24} style={styles.heroBudget}>
+            <View style={styles.heroBudgetTop}>
+              <AppText variant="footnote" weight="500" color="#FFFFFF">
+                本月预算
+              </AppText>
+              <AppText variant="footnote" color="rgba(255,255,255,0.9)">
+                剩余 2,338.60
+              </AppText>
+            </View>
+            <View style={styles.heroBudgetTrack}>
+              <View style={styles.heroBudgetFill} />
+            </View>
+            <View style={styles.heroBudgetFoot}>
+              <AppText variant="caption" color="rgba(255,255,255,0.8)">
+                已用 1,161.40 / 3,500.00
+              </AppText>
+              <AppText variant="caption" color="rgba(255,255,255,0.8)">
+                33%
+              </AppText>
+            </View>
+          </GlassView>
+
+          {/* 账单卡（surface 从渐变下沿接上）+ 42 圆图标行 */}
+          <View style={[styles.heroListCard, { backgroundColor: semantic.surface }]}>
+            <View style={styles.heroListRow}>
+              <IconCircle color="#FF7A59" icon="restaurant-outline" />
+              <View style={{ flex: 1 }}>
+                <AppText variant="subhead" weight="500">Nasi lemak 早餐</AppText>
+                <AppText variant="caption" color={semantic.textSecondary}>餐饮 · CIMB Visa</AppText>
+              </View>
+              <MoneyText value={8.5} kind="expense" variant="subhead" roll={false} />
+            </View>
+            <View style={[styles.heroListRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: semantic.hairline }]}>
+              <IconCircle color="#4F8BFF" icon="car-outline" />
+              <View style={{ flex: 1 }}>
+                <AppText variant="subhead" weight="500">Grab 去公司</AppText>
+                <AppText variant="caption" color={semantic.textSecondary}>交通 · Maybank 储蓄</AppText>
+              </View>
+              <MoneyText value={15.2} kind="expense" variant="subhead" roll={false} />
+            </View>
+          </View>
+        </View>
+      </Section>
+
+      <Section title="GlassView · 玻璃（填充 + 1px 亮边 + 顶部内高光；iOS/Web 叠模糊）" testID="g-glassview">
+        <View style={styles.heroDemoMini}>
+          <HeroGradient height={220} />
+          <View style={styles.glassDemoRow}>
+            <GlassView radius={999} style={styles.heroPill}>
+              <AppText variant="subhead" weight="500" color="#FFFFFF">默认账本</AppText>
+              <Ionicons name="chevron-down" size={16} color="rgba(255,255,255,0.7)" />
+            </GlassView>
+            <GlassView radius={999} style={styles.heroRound}>
+              <Ionicons name="calendar-outline" size={20} color="#FFFFFF" />
+            </GlassView>
+            <GlassView radius={24} style={{ padding: 16, width: 120 }}>
+              <AppText variant="caption" color="#FFFFFF">圆角 24 玻璃卡</AppText>
+            </GlassView>
+          </View>
+        </View>
+      </Section>
+
+      <Section title="IconCircle · 42 圆（有色 / 中性）/ 48 圆选中（两层外圈）" testID="g-iconcircle">
+        <Card>
+          <View style={styles.actions}>
+            <IconCircle color="#FF7A59" icon="restaurant-outline" />
+            <IconCircle color="#4F8BFF" icon="car-outline" />
+            <IconCircle color="#35C27A" icon="cash-outline" />
+            <IconCircle color="#B07CFF" icon="pricetag-outline" />
+            <IconCircle color="#FFB020" icon="cafe-outline" />
+            <IconCircle icon="grid-outline" />
+            <IconCircle size={48} color="#FF7A59" icon="restaurant-outline" selected />
+          </View>
+        </Card>
+      </Section>
+
+      <Section title="SegmentedControl · 玻璃底 + 白胶囊（运动/收支）/ accent 渐变（深色模式）" testID="g-seg-glass">
+        <View style={styles.heroDemoMini}>
+          <HeroGradient height={160} />
+          <View style={{ padding: spacing.lg, gap: spacing.md }}>
+            <SegmentedControl
+              options={[
+                { label: '年', value: 'year' },
+                { label: '月', value: 'month' },
+                { label: '周', value: 'week' },
+              ]}
+              selected={segMonth}
+              onSelect={setSegMonth}
+              appearance="glass"
+            />
+            <SegmentedControl
+              options={[
+                { label: '支出', value: 'expense' },
+                { label: '收入', value: 'income' },
+              ]}
+              selected={segIncome}
+              onSelect={setSegIncome}
+              appearance="glass"
+            />
+            <SegmentedControl
+              options={[
+                { label: '跟随系统', value: 'system' },
+                { label: '日间', value: 'light' },
+                { label: '夜间', value: 'dark' },
+              ]}
+              selected={seg3}
+              onSelect={setSeg3}
+              appearance="glass"
+              thumb="accent"
+            />
+          </View>
+        </View>
+      </Section>
+
+      <Section title="MoneyText · hero 样式（整数 500 大、RM 与小数为 300 且淡）：58 / 42 / 64" testID="g-money-hero">
+        <View style={styles.heroDemoMini}>
+          <HeroGradient height={240} />
+          <View style={{ padding: spacing.lg, gap: spacing.md }}>
+            <MoneyText value={17061.15} hero heroSize={58} currency="MYR" showCurrency kind="transfer" color="#FFFFFF" roll={false} />
+            <MoneyText value={28797.59} hero heroSize={42} currency="MYR" showCurrency kind="transfer" color="#FFFFFF" roll={false} />
+            <MoneyText value={1234567.89} hero heroSize={64} currency="MYR" showCurrency kind="transfer" color="#FFFFFF" roll={false} />
+            {/* 降级阶梯演示：58 放不下时依次 50 → 42 → 34，四档全放不下才用紧凑格式 */}
+            <MoneyText value={1234567.89} hero heroSize={58} currency="MYR" showCurrency kind="transfer" color="#FFFFFF" roll={false} />
+            <MoneyText value={123456789.12} hero heroSize={58} currency="MYR" showCurrency kind="transfer" color="#FFFFFF" roll={false} />
+          </View>
+        </View>
+      </Section>
+    </>
+  );
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1 },
   console: { paddingVertical: 8, gap: 6, borderBottomWidth: StyleSheet.hairlineWidth },
@@ -540,4 +742,31 @@ const styles = StyleSheet.create({
   moneyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   actions: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
   tapBox: { minHeight: 56, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 },
+  // ── P5 地基演示：全出血渐变块（-16 抵消 ScrollView 的 padding，像真实页面一样通栏）──
+  heroDemo: {
+    marginHorizontal: -16,
+    height: 560,
+    overflow: 'hidden',
+  },
+  heroDemoMini: {
+    marginHorizontal: -16,
+    overflow: 'hidden',
+  },
+  heroRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 14, paddingHorizontal: 16 },
+  heroRowRight: { marginLeft: 'auto', paddingTop: 0, paddingHorizontal: 0 },
+  heroPill: { height: 44, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  heroRound: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  heroNetRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 34, paddingHorizontal: 16 },
+  heroCurrencyPill: { height: 26, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 3 },
+  heroAmountRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4, paddingHorizontal: 16, minHeight: 64 },
+  // 「隐藏金额」眼睛圆钮（稿：36 × 36 透明底、20 号图标）
+  heroEyeBtn: { width: 36, height: 36, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
+  heroBudget: { marginTop: 22, marginHorizontal: 16, borderRadius: 24, padding: 16 },
+  heroBudgetTop: { flexDirection: 'row', justifyContent: 'space-between' },
+  heroBudgetTrack: { marginTop: 10, height: 8, borderRadius: 99, backgroundColor: 'rgba(255,255,255,0.22)', overflow: 'hidden' },
+  heroBudgetFill: { width: '33%', height: '100%', borderRadius: 99, backgroundColor: '#FFFFFF' },
+  heroBudgetFoot: { marginTop: 8, flexDirection: 'row', justifyContent: 'space-between' },
+  heroListCard: { marginTop: 16, borderRadius: 26, paddingVertical: 4 },
+  heroListRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 11, minHeight: 60 },
+  glassDemoRow: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 16, flexWrap: 'wrap' },
 });

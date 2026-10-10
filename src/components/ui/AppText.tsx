@@ -3,9 +3,9 @@
 //
 // 职责
 // - variant 对应 typography 11 档：字号 / 行高 / 字重 / 字距 / 系统缩放上限全部取令牌；
-// - 字体自动分流：整段是数字 / 拉丁（含 RM、逗号、减号这类拉丁符号）→ 走打包的 Inter，
-//   跨机型宽度一致；只要含中文 / 日文 / emoji → 回退系统字体（Inter 没有这些字形，
-//   强套会渲染成方框，见 theme.ts 的 canUseInterText）；
+// - 字体自动分流：整段是数字 / 拉丁（含 RM、逗号、减号这类拉丁符号）→ 走打包的 Geist，
+//   跨机型宽度一致；只要含中文 / 日文 / emoji → 回退系统字体（Geist 没有这些字形，
+//   强套会渲染成方框，见 theme.ts 的 canUseLatinText）；
 // - Android 统一 includeFontPadding:false（计划 8.2 第 4 条），配合令牌里的明确 lineHeight，
 //   不同品牌安卓机上的垂直位置才一致；
 // - 字距：令牌里的负字距只对数字 / 拉丁有意义，中文 / 混合文本一律按 0 处理（UI_RULES 第 2 节）；
@@ -21,7 +21,7 @@
 import React, { useMemo } from 'react';
 import { StyleProp, Text, TextProps, TextStyle } from 'react-native';
 import {
-  canUseInterText,
+  canUseLatinText,
   FontWeightKey,
   TypographyVariant,
 } from '../../theme/theme';
@@ -82,15 +82,15 @@ export function AppText({
   const { typography, semantic, fontFamilyByWeight } = useTheme();
   const token = typography[variant];
 
-  // Inter 只覆盖数字 / 拉丁字形：含中文、emoji 的文本必须回退系统字体
+  // Geist 只覆盖数字 / 拉丁字形：含中文、emoji 的文本必须回退系统字体
   const rawText = useMemo(() => flattenText(children), [children]);
-  const useLatinFont = font === 'auto' && rawText !== null && canUseInterText(rawText);
+  const useLatinFont = font === 'auto' && rawText !== null && canUseLatinText(rawText);
   const resolvedWeight = (weight ?? String(token.fontWeight)) as FontWeightKey;
 
   const textStyle: TextStyle = {
     fontSize: token.fontSize,
     lineHeight: token.lineHeight,
-    // Inter 静态字体按字重分家族（Inter-SemiBold 等），不能再给 fontWeight，
+    // Geist 静态字体按字重分家族（Geist-SemiBold 等），不能再给 fontWeight，
     // 否则安卓会去合成加粗 / iOS 会二次加粗（T01b 的约定：家族名即字重）
     fontWeight: useLatinFont ? 'normal' : token.fontWeight,
     fontFamily: useLatinFont ? fontFamilyByWeight[resolvedWeight] : undefined,
