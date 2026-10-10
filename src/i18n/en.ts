@@ -454,6 +454,8 @@ export const en = {
     typeEwallet: 'E-Wallet',
     typeInvestment: 'Investment',
     typeOther: 'Other',
+    // Default marker in the account-row subtitle ("Bank Card · Default")
+    defaultTag: 'Default',
     deleteAssetTitle: 'Delete asset "%{name}"?',
     deleteAssetMsg: 'Related transfer records are kept, but the asset balance can no longer be viewed',
     liabilityLabel: 'Liabilities (credit card debt)',
@@ -513,6 +515,8 @@ export const en = {
     support: 'Support',
     help: 'Help & Feedback',
     about: 'About',
+    // Footer version line (Chinese reads「版本 1.0.0」)
+    version: 'Version %{version}',
   },
   theme: {
     system: 'System default',

@@ -55,6 +55,11 @@ export interface DonutChartProps {
   dimOpacity?: number;
   /** 是否播放 600ms 进场绘制（默认 true；减弱动态效果时自动跳过） */
   animateIn?: boolean;
+  /**
+   * 底环颜色（UI V2 稿：扇区之间的缝里能看到一圈浅色底环；不传 = 不画底环）。
+   * 颜色由调用方按主题给（本组件只负责画，不读令牌）。
+   */
+  trackColor?: string;
 }
 
 /** 一段弧：几何（起点 / 弧长 / 半径）由父组件按真实占比算好，这里只管画与动 */
@@ -122,6 +127,7 @@ export default function DonutChart({
   selectedIndex = null,
   dimOpacity = DIM_OPACITY,
   animateIn = true,
+  trackColor,
 }: DonutChartProps) {
   const { motion } = useTheme();
 
@@ -168,6 +174,17 @@ export default function DonutChart({
   return (
     <View style={{ width: size, height: size }}>
       <Svg width={size} height={size}>
+        {/* 底环（可选）：只铺在扇区下面，扇区之间的缝里露出的就是它（UI V2 稿的浅色底环） */}
+        {trackColor ? (
+          <Circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            stroke={trackColor}
+            strokeWidth={strokeWidth}
+            fill="transparent"
+          />
+        ) : null}
         <G transform={`rotate(${-90 + rotation} ${size / 2} ${size / 2})`}>
           {segments.map((s, i) => (
             <SliceArc

@@ -14,7 +14,7 @@
 
 import React, { useEffect, useMemo, useRef } from 'react';
 import { ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { Swipeable } from 'react-native-gesture-handler';
@@ -35,21 +35,23 @@ import {
   AppText,
   Badge,
   type BadgeTone,
-  Button,
   Card,
   EmptyState,
+  GlassView,
+  HeroGradient,
+  IconCircle,
   ListSection,
   MoneyText,
-  ScreenHeader,
 } from '../components/ui';
-import { withAlpha } from '../components/ui/color';
 
 type IconName = keyof typeof Ionicons.glyphMap;
 
-/** 行内图标方块边长（UI_RULES 第 7 节：全 App 同一种 40 方块 + radius.md）—— 纯图形常量 */
-const ICON_BOX_SIZE = 40;
-/** 方块内图标尺寸（图标只有 20 / 24 两档，行内取小档）—— 纯图形常量 */
+/** 行内圆形图标直径（UI V2 第 1 节：账户 / 类别 / 列表图标统一圆形，列表行 42） */
+const ICON_BOX_SIZE = 42;
+/** 圆内图标尺寸（图标只有 20 / 24 两档，行内取小档）—— 纯图形常量 */
 const ICON_SIZE = 20;
+/** 页面顶部品牌渐变高度（本页没有定稿图，按 V2 同一套元素取 360，矮屏 ×0.9） */
+const HERO_HEIGHT = 360;
 /** 类别色淡底透明度（UI_RULES 第 1 节：类别色 12% 底 + 100% 图标） */
 const CATEGORY_TINT_ALPHA = 0.12;
 /** 左滑露出的删除底宽度（iOS 习惯：一个方块宽）—— 纯几何常量 */
@@ -64,7 +66,10 @@ const SWIPE_PRESS_GUARD_MS = 400;
 export default function FinancialPlanningScreen({ navigation }: any) {
   const { paymentPlans, deletePaymentPlan, activeLedgerId, categories } = useApp();
   const { semantic, spacing, layout, radius } = useTheme();
-  const { pagePadding, contentMaxWidth, rowMinHeight } = useLayout();
+  const { pagePadding, contentMaxWidth, rowMinHeight, isShort } = useLayout();
+  // 渐变高度（本页没有定稿图，按 V2 同一套元素）：844 高屏 360，矮屏 ×0.9
+  const heroHeight = Math.round(HERO_HEIGHT * (isShort ? 0.9 : 1));
+  const insets = useSafeAreaInsets();
   const tr = useT();
   const { langMode } = useLanguage();
   const dialog = useDialog(); // 主题化弹窗（替代系统 Alert）
@@ -139,26 +144,41 @@ export default function FinancialPlanningScreen({ navigation }: any) {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      {/* 页头（5.7）：二级页紧凑页头 —— 返回键 + 居中标题 + 右侧「添加规划」动作位 */}
-      <ScreenHeader
-        variant="compact"
-        title={tr('finance.title')}
-        onBack={() => navigation.goBack()}
-        backAccessibilityLabel={tr('common.back')}
-        right={
-          <Button
-            title={tr('finance.addPlan')}
-            variant="secondary"
-            size="sm"
-            icon="add"
-            fullWidth={false}
-            onPress={() => navigation.navigate(ROUTES.FINANCE_PLAN_EDIT)}
-            testID="finance-add-button"
-          />
-        }
-        testID="finance-header"
-      />
+    <SafeAreaView style={styles.container} edges={[]}>
+      {/* 顶部品牌渐变（无定稿图：按同一套 V2 元素 360 / 矮屏 ×0.9），绝对定位压在内容下面 */}
+      <HeroGradient height={heroHeight} />
+      {/* 页头（V2）：玻璃圆返回键 + 白色标题 + 玻璃胶囊「添加规划」；入口与跳转一字未动 */}
+      <View style={[styles.headerRow, { paddingHorizontal: pagePadding, paddingTop: insets.top + 14 }]}>
+        <PressableScale
+          onPress={() => navigation.goBack()}
+          activeScale={0.94}
+          hitSlop={0}
+          accessibilityRole="button"
+          accessibilityLabel={tr('common.back')}
+        >
+          <GlassView radius={radius.full} style={styles.backButton}>
+            <Ionicons name="chevron-back" size={18} color={semantic.onAccent} />
+          </GlassView>
+        </PressableScale>
+        <AppText variant="title3" weight="600" color={semantic.onAccent} style={styles.heroTitle}>
+          {tr('finance.title')}
+        </AppText>
+        <PressableScale
+          onPress={() => navigation.navigate(ROUTES.FINANCE_PLAN_EDIT)}
+          activeScale={0.97}
+          hitSlop={0}
+          accessibilityRole="button"
+          accessibilityLabel={tr('finance.addPlan')}
+          testID="finance-add-button"
+        >
+          <GlassView radius={radius.full} style={styles.addPill}>
+            <Ionicons name="add" size={16} color={semantic.onAccent} />
+            <AppText variant="subhead" weight="500" color={semantic.onAccent}>
+              {tr('finance.addPlan')}
+            </AppText>
+          </GlassView>
+        </PressableScale>
+      </View>
 
       <ScrollView
         style={[
@@ -191,14 +211,17 @@ export default function FinancialPlanningScreen({ navigation }: any) {
 
           {plans.length === 0 ? (
             // 空状态（计划 10.1 / F4）：统一 EmptyState（大图标 + 一句话 + 一个按钮）
-            <EmptyState
-              icon="calendar-outline"
-              title={tr('finance.noPlans')}
-              description={tr('finance.noPlansHint')}
-              actionLabel={tr('finance.addPlan')}
-              onAction={() => navigation.navigate(ROUTES.FINANCE_PLAN_EDIT)}
-              testID="finance-empty"
-            />
+            // V2：空状态也给一张 surface 卡（与资产 / 统计页空状态同一套呈现）
+            <Card padded={false} style={{ borderRadius: 26 }}>
+              <EmptyState
+                icon="calendar-outline"
+                title={tr('finance.noPlans')}
+                description={tr('finance.noPlansHint')}
+                actionLabel={tr('finance.addPlan')}
+                onAction={() => navigation.navigate(ROUTES.FINANCE_PLAN_EDIT)}
+                testID="finance-empty"
+              />
+            </Card>
           ) : (
             /* 计划列表：一张卡里的分组行（ListSection 插发丝分割线），
                cardStyle.overflow:hidden 把左滑时的行与删除底裁在卡内（圆角不外漏） */
@@ -289,10 +312,8 @@ function PlanRow({
       onPress={onPress}
       testID={`finance-plan-row-${plan.id}`}
     >
-      {/* 左：类别图标方块（40，与 TransactionRow 同一规格） */}
-      <View style={[styles.iconBox, { backgroundColor: withAlpha(tint, CATEGORY_TINT_ALPHA) }]}>
-        <Ionicons name={icon} size={ICON_SIZE} color={tint} />
-      </View>
+      {/* 左：类别圆形图标（UI V2：42 圆，底色由 IconCircle 按主题从类别色推导） */}
+      <IconCircle size={ICON_BOX_SIZE} color={tint} icon={icon} />
 
       {/* 中：标题 + 徽章一行，副标题一行；文字块 flex:1 吃掉剩余宽度，把金额顶到行尾 */}
       <View style={styles.textBlock}>
@@ -324,13 +345,38 @@ function makeStyles(
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: semantic.bg },
 
+    // 页头（V2）：玻璃圆返回键 + 白色标题 + 玻璃胶囊动作；一行放不下时动作整块换行
+    headerRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      columnGap: spacing.md,
+      rowGap: spacing.sm,
+      marginBottom: 14,
+    },
+    backButton: {
+      width: 36,
+      height: 36,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    heroTitle: { flexGrow: 1, flexShrink: 1, minWidth: 0 },
+    addPill: {
+      height: 40,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 14,
+    },
+
     // 两张汇总卡并排各半（间距用 spacing.md，窄屏英文也不换行）
     summaryRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.lg },
-    summaryCard: { flex: 1, minWidth: 0 },
+    // 卡圆角按 V2 稿 26（Card 默认 radius.lg 20）
+    summaryCard: { flex: 1, minWidth: 0, borderRadius: 26 },
     summaryAmount: { marginTop: spacing.xs },
 
-    // 计划列表卡：裁掉左滑时滑出的内容（圆角不外漏）
-    plansCard: { overflow: 'hidden' },
+    // 计划列表卡：裁掉左滑时滑出的内容（圆角不外漏）+ V2 圆角 26
+    plansCard: { overflow: 'hidden', borderRadius: 26 },
 
     // 左滑删除底：danger 实底 + 白图标白字；alignSelf stretch = 高度与行完全一致
     swipeDelete: {
@@ -354,14 +400,6 @@ function makeStyles(
     },
     // 已暂停：整体变灰（仍可点进编辑，所以不用 ListRow 的 disabled）
     planRowPaused: { opacity: PAUSED_OPACITY },
-    iconBox: {
-      width: ICON_BOX_SIZE,
-      height: ICON_BOX_SIZE,
-      borderRadius: radius.md,
-      alignItems: 'center',
-      justifyContent: 'center',
-      flexShrink: 0,
-    },
     textBlock: { flex: 1, minWidth: 0 },
     // 标题与徽章并排：标题可换行可被挤窄，徽章不许被压
     titleRow: { flexDirection: 'row', alignItems: 'center', columnGap: spacing.sm },

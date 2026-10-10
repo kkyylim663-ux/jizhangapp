@@ -456,6 +456,8 @@ export const zh = {
     typeEwallet: '电子钱包',
     typeInvestment: '投资',
     typeOther: '其他',
+    // 账户行副行里的默认标记（「银行卡 · 默认」）
+    defaultTag: '默认',
     deleteAssetTitle: '删除资产"%{name}"？',
     deleteAssetMsg: '与该资产相关的转账记录仍会保留，但资产余额将无法再查看',
     liabilityLabel: '负债（信用卡欠款）',
@@ -516,6 +518,8 @@ export const zh = {
     support: '支持',
     help: '帮助与反馈',
     about: '关于应用',
+    // 页脚版本号（中文按用户定版写「版本 1.0.0」）
+    version: '版本 %{version}',
   },
   theme: {
     system: '跟随系统',
