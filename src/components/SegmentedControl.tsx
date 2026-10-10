@@ -1,6 +1,11 @@
 // SegmentedControl.tsx
 // 分段开关（T05 升级 / 计划 4.5）：灰底胶囊槽 + 实底滑块（accent 底 + onAccent 字）。
 //
+// UI V2（2026-10-10）新增两个变体，旧调用点不改也照常：
+// - appearance="glass"：玻璃底胶囊（落在品牌渐变上，如统计页 年/月/周、支出/收入）；
+// - thumb="white"（默认）：选中块 = 白色胶囊（夜字 #0A0A0F / 日字 #2A1678）；
+//   thumb="accent"：选中块 = accent 渐变 + 白字（设置页「深色模式」三选一）。
+//
 // 本版升级点
 // - 高度 36（触控区用外层 padding + 段 hitSlop 补到 44，见 TOUCH_HEIGHT）；
 // - 滑块改 Reanimated 弹簧（motion.spring.default）：位移与宽度一起弹，切换是「滑过去」不是「跳过去」；
@@ -16,11 +21,13 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { LayoutChangeEvent, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { useTheme } from '../theme/useTheme';
 import { Radius, SemanticColors } from '../theme/theme';
 import { hapticSelection } from '../utils/haptics';
 import AppText from './ui/AppText';
+import GlassView from './ui/GlassView';
 
 export interface SegmentOption {
   label: string;
@@ -33,6 +40,10 @@ interface Props {
   selected: string;
   /** 点选项立即生效（含重复点已选中项，由调用方决定行为） */
   onSelect: (value: string) => void;
+  /** 槽身材质：'solid'（默认，灰底）/ 'glass'（UI V2：玻璃底，落在渐变上） */
+  appearance?: 'solid' | 'glass';
+  /** 选中块：'white'（默认，白色胶囊）/ 'accent'（accent 渐变 + 白字，设置页深色模式用） */
+  thumb?: 'white' | 'accent';
 }
 
 /** 槽高（视觉高度） */
@@ -46,9 +57,16 @@ const SEGMENT_MIN_WIDTH = 52;
 /** 每段上下各补多少触控：轨道 36 + 外侧留白 → 整块 44 */
 const SEGMENT_HIT_SLOP = (TOUCH_HEIGHT - TRACK_HEIGHT) / 2 + TRACK_PADDING;
 
-export default function SegmentedControl({ options, selected, onSelect }: Props) {
-  const { semantic, radius, motion } = useTheme();
+export default function SegmentedControl({
+  options,
+  selected,
+  onSelect,
+  appearance = 'solid',
+  thumb = 'white',
+}: Props) {
+  const { semantic, radius, motion, gradients, glassPill } = useTheme();
   const styles = useMemo(() => makeStyles(semantic, radius), [semantic, radius]);
+  const isGlass = appearance === 'glass';
 
   // 每段的实测几何：key=value，x 为段左缘在槽坐标系里的位置。
   // 逐段 onLayout 上报 —— 各段文字宽度不同也各自准确（不许改成等分推算）
@@ -93,65 +111,109 @@ export default function SegmentedControl({ options, selected, onSelect }: Props)
     transform: [{ translateX: thumbX.value }],
   }));
 
+  /** 选中字色（三套变体各不同） */
+  const activeTextColor = isGlass
+    ? thumb === 'accent'
+      ? semantic.onAccent
+      : glassPill.text
+    : semantic.onAccent;
+  /** 未选中字色：玻璃上是稿取样 muted，灰底槽上是次要字色 */
+  const idleTextColor = isGlass ? glassPill.muted : semantic.textSecondary;
+
+  /** 滑块底色：solid=accent 实底 / glass+white=白胶囊 / glass+accent=null（渐变子层自绘） */
+  const thumbBgStyle = !isGlass
+    ? { backgroundColor: semantic.accent }
+    : thumb === 'white'
+      ? { backgroundColor: glassPill.fill }
+      : null;
+
+  const rows = (
+    <>
+      <Animated.View style={[styles.thumb, thumbBgStyle, thumbStyle]}>
+        {thumb === 'accent' ? (
+          <LinearGradient
+            colors={gradients.accent.colors}
+            locations={gradients.accent.locations as [number, number, ...number[]]}
+            start={gradients.accent.start}
+            end={gradients.accent.end}
+            style={StyleSheet.absoluteFill}
+            pointerEvents="none"
+          />
+        ) : null}
+      </Animated.View>
+      {options.map((opt) => {
+        const isActive = opt.value === selected;
+        return (
+          <TouchableOpacity
+            key={opt.value}
+            style={styles.segment}
+            activeOpacity={0.75}
+            onLayout={onSegmentLayout(opt.value)}
+            hitSlop={{ top: SEGMENT_HIT_SLOP, bottom: SEGMENT_HIT_SLOP, left: 0, right: 0 }}
+            onPress={() => {
+              if (!isActive) hapticSelection();
+              onSelect(opt.value);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={opt.label}
+            accessibilityState={{ selected: isActive }}
+          >
+            {/* 分段压在滑块上（透明底），缩放反馈看不见 → 沿用按下降透明度的反馈 */}
+            <AppText
+              variant="footnote"
+              weight={isActive ? '600' : '400'}
+              color={isActive ? activeTextColor : idleTextColor}
+              numberOfLines={1}
+            >
+              {opt.label}
+            </AppText>
+          </TouchableOpacity>
+        );
+      })}
+    </>
+  );
+
   return (
     <View style={styles.touchWrap}>
-      <View style={styles.track}>
-        <Animated.View style={[styles.thumb, thumbStyle]} />
-        {options.map((opt) => {
-          const isActive = opt.value === selected;
-          return (
-            <TouchableOpacity
-              key={opt.value}
-              style={styles.segment}
-              activeOpacity={0.75}
-              onLayout={onSegmentLayout(opt.value)}
-              hitSlop={{ top: SEGMENT_HIT_SLOP, bottom: SEGMENT_HIT_SLOP, left: 0, right: 0 }}
-              onPress={() => {
-                if (!isActive) hapticSelection();
-                onSelect(opt.value);
-              }}
-              accessibilityRole="button"
-              accessibilityLabel={opt.label}
-              accessibilityState={{ selected: isActive }}
-            >
-              {/* 分段压在滑块上（透明底），缩放反馈看不见 → 沿用按下降透明度的反馈 */}
-              <AppText
-                variant="footnote"
-                weight={isActive ? '600' : '400'}
-                color={isActive ? semantic.onAccent : semantic.textSecondary}
-                numberOfLines={1}
-              >
-                {opt.label}
-              </AppText>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+      {isGlass ? (
+        // 玻璃槽（UI V2）：半透明 + 1px 亮边 + 顶部内高光（GlassView 自带模糊回退）
+        <GlassView radius={radius.full} style={styles.trackBase}>
+          {rows}
+        </GlassView>
+      ) : (
+        <View style={styles.track}>{rows}</View>
+      )}
     </View>
   );
 }
 
 function makeStyles(semantic: SemanticColors, radius: Radius) {
+  // 槽的布局部分：灰底槽与玻璃槽共用（玻璃槽的底 / 边 / 高光由 GlassView 提供，不覆盖它）
+  const trackBase = {
+    flexDirection: 'row' as const,
+    borderRadius: radius.full,
+    padding: TRACK_PADDING,
+    minHeight: TRACK_HEIGHT,
+    alignItems: 'center' as const,
+  };
   return StyleSheet.create({
     // 外侧留白：把触控区从 36 撑到 44，视觉轨道仍是 36
     touchWrap: { paddingVertical: (TOUCH_HEIGHT - TRACK_HEIGHT) / 2, alignSelf: 'flex-start' },
+    trackBase,
     // 槽：中性灰底（hairline 在日夜两套里都是"浅一档的底"），minHeight 而非固定高度
     track: {
-      flexDirection: 'row',
+      ...trackBase,
       backgroundColor: semantic.hairline,
-      borderRadius: radius.full,
-      padding: TRACK_PADDING,
-      minHeight: TRACK_HEIGHT,
-      alignItems: 'center',
     },
     // 滑块：贴槽内缘，水平位置完全由 translateX（实测段 x）驱动；宽度随段弹
+    // （底色按变体在 JSX 里给：solid=accent / white=白胶囊 / accent=渐变子层）
     thumb: {
       position: 'absolute',
       top: TRACK_PADDING,
       bottom: TRACK_PADDING,
       left: 0,
       borderRadius: radius.full,
-      backgroundColor: semantic.accent,
+      overflow: 'hidden',
     },
     segment: {
       minWidth: SEGMENT_MIN_WIDTH,

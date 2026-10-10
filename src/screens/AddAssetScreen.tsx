@@ -3,31 +3,32 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
   TextInput,
   ScrollView,
   Pressable,
   Keyboard,
+  KeyboardAvoidingView,
+  Platform,
   BackHandler,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useIsFocused } from '@react-navigation/native';
-import Reanimated, { useSharedValue, useAnimatedStyle, useAnimatedScrollHandler, withTiming, runOnJS } from 'react-native-reanimated';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
 import { useApp } from '../context/AppContext';
-import { CURRENCY_OPTIONS, WORLD_CURRENCY_OPTIONS, getCurrencyFlag, currencyDisplayName, getEnglishCurrencyName } from '../utils/currencies';
+import { CURRENCY_OPTIONS, WORLD_CURRENCY_OPTIONS, currencyDisplayName, getEnglishCurrencyName } from '../utils/currencies';
 import { useLanguage } from '../i18n/LanguageContext';
 import { AssetType } from '../types';
 import { useTheme } from '../theme/useTheme';
-import { ThemeColors } from '../theme/theme';
+import { useLayout } from '../theme/useLayout';
+import type { SemanticColors, Spacing, ThemeColors, Typography } from '../theme/theme';
 import { AmountCalculatorKeypad } from '../components/AmountCalculatorKeypad';
 import { CursorAmountText } from '../components/CursorAmountText';
 import PressableScale from '../components/PressableScale';
 import { useAmountExpression } from '../hooks/useAmountExpression';
 import { useTabBarForceHide } from '../context/TabBarAutoHideContext';
 import { hapticSuccess } from '../utils/haptics';
+import { AppText, BottomSheet, Button, ListRow, ScreenHeader } from '../components/ui';
 
 type IconName = keyof typeof Ionicons.glyphMap;
 
@@ -36,23 +37,35 @@ const TYPE_OPTIONS: { type: AssetType; label: string; icon: IconName; color: str
   { type: 'bank', label: 'asset.typeBank', icon: 'card-outline', color: '#4C9AFF' },
   { type: 'credit', label: 'asset.typeCredit', icon: 'wallet-outline', color: '#EF5350' },
   { type: 'ewallet', label: 'asset.typeEwallet', icon: 'phone-portrait-outline', color: '#26C6DA' },
+  // 投资 / 其他：AssetType 本来就有这两档（老数据里也存在这类账户，列表照常显示图标），
+  // 旧选择器只是没把它们暴露出来 —— 验收退回要求 6 档都能选到，这里补上（列表变长，抽屉内可滚动）
+  { type: 'investment', label: 'asset.typeInvestment', icon: 'trending-up-outline', color: '#D97706' },
+  { type: 'other', label: 'asset.typeOther', icon: 'cube-outline', color: '#8E8E9A' },
 ];
 
 // 计算器键盘当前在给哪个金额字段打字；null = 键盘收起
 // （信用卡模式下这个字段就是"信用额度"，现金/银行卡是"起始余额"）
 type AmountField = 'balance';
 
-// 底部上拉菜单当前选的是哪一项；null = 收起（type 已改为行下内联下拉，仅 currency 走弹层）
+// 底部抽屉当前打开的是哪一个；null = 都收起（类型 / 货币都走统一 BottomSheet）
 type SheetKind = 'type' | 'currency' | null;
+
+/** 抽屉内列表占屏高的上限：抽屉本身最高 85% 屏，扣掉标题行与底部留白后给列表 0.7 屏 */
+const SHEET_LIST_MAX_RATIO = 0.7;
 
 export default function AddAssetScreen({ route }: any) {
   const { addAsset, updateAsset, getAssetById, currency } = useApp();
-  const { colors } = useTheme();
+  const { colors, semantic, typography, spacing, motion } = useTheme();
+  const { pagePadding } = useLayout();
+  const { height: windowHeight } = useWindowDimensions();
   const navigation = useNavigation<any>();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const setTabBarForceHidden = useTabBarForceHide();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const styles = useMemo(
+    () => makeStyles(colors, semantic, typography, spacing),
+    [colors, semantic, typography, spacing]
+  );
   const { t, langMode } = useLanguage();
 
   // 编辑模式：route.params.assetId 有值时预填原账户（与新增共用同一表单，保存走 updateAsset）
@@ -136,64 +149,26 @@ export default function AddAssetScreen({ route }: any) {
     return () => setTabBarForceHidden(false);
   }, [isFocused, setTabBarForceHidden]);
 
-  // —— 币种弹层下滑收起手势：与记一笔账户弹层完全同款（manualActivation Pan + sharedValue 动画）——
-  // 列表滚到顶部时往下拖 → 接管手势，整块面板跟手下移，松手超 120px / 快速甩动就收起
-  const currencySheetPanY = useSharedValue(0);
-  const currencySheetScrim = useSharedValue(0);
-  const currencyListOffset = useSharedValue(0);
-  const currencyListScrollHandler = useAnimatedScrollHandler((e) => {
-    currencyListOffset.value = e.contentOffset.y;
-  });
-  const currencyDragStart = useSharedValue({ x: 0, y: 0 });
-  const currencyClosingSV = useSharedValue(false);
+  // 币种抽屉关闭后把「强制隐藏 Tab 栏」按回来。
+  // ⚠ BottomSheet 的强制隐藏用的是**单个共享布尔量**（不是引用计数）：它退场卸载时会把标记复位，
+  //   连本页的强制隐藏一起清掉 —— 不复位的话本页会冒出 Tab 栏并压在计算器键盘上
+  //   （本页全程隐藏 Tab 栏是原有行为，替换弹层后必须补这一下）。
+  //   延时取抽屉退场弹簧时长（motion.spring.sheet.duration）+ 余量，保证排在它卸载之后。
+  useEffect(() => {
+    if (!isFocused || sheetOpen === 'currency') return;
+    const timer = setTimeout(() => setTabBarForceHidden(true), motion.spring.sheet.duration + 100);
+    return () => clearTimeout(timer);
+  }, [isFocused, sheetOpen, setTabBarForceHidden, motion]);
+
+  // 币种选择改用全 App 统一的 BottomSheet（T05 组件）：遮罩 / 把手 / 下拉收起 / 弹簧 / 安全区
+  // 全部交给它，页面不再自己维护一套下滑手势与进场动画
   const closeCurrencySheet = () => {
     setSheetOpen(null);
     setCurrencySearch('');
   };
-  const currencySheetGesture = Gesture.Pan()
-    .manualActivation(true)
-    .onTouchesDown((e) => {
-      const t = e.allTouches[0];
-      currencyDragStart.value = { x: t?.absoluteX ?? 0, y: t?.absoluteY ?? 0 };
-    })
-    .onTouchesMove((e, stateManager) => {
-      const t = e.allTouches[0];
-      if (!t) return;
-      if (currencyListOffset.value > 0) return; // 列表不在顶部：不接管，让它正常滚
-      const dy = t.absoluteY - currencyDragStart.value.y;
-      const dx = t.absoluteX - currencyDragStart.value.x;
-      if (dy > 12 && Math.abs(dy) > Math.abs(dx) * 1.2) stateManager.activate();
-    })
-    .onUpdate((e) => {
-      currencySheetPanY.value = Math.max(0, e.translationY);
-      currencySheetScrim.value = Math.min(0.4, Math.max(0, e.translationY) / 500 + 0.15);
-    })
-    .onEnd((e) => {
-      if (e.translationY > 120 || e.velocityY > 800) {
-        if (currencyClosingSV.value) return;
-        currencyClosingSV.value = true;
-        currencySheetScrim.value = withTiming(0, { duration: 180 });
-        currencySheetPanY.value = withTiming(900, { duration: 220 }, (finished) => {
-          if (finished) runOnJS(closeCurrencySheet)();
-        });
-      } else {
-        currencySheetPanY.value = withTiming(0, { duration: 180 });
-        currencySheetScrim.value = withTiming(0.4, { duration: 150 });
-      }
-    });
-  const currencySheetAnimStyle = useAnimatedStyle(() => ({ transform: [{ translateY: currencySheetPanY.value }] }), []);
-  const currencySheetScrimStyle = useAnimatedStyle(() => ({ opacity: currencySheetScrim.value }), []);
-  // 入场：面板滑入 + 遮罩淡入；列表滚动偏移清零
-  useEffect(() => {
-    if (sheetOpen === 'currency') {
-      currencyClosingSV.value = false;
-      currencySheetPanY.value = 900;
-      currencySheetScrim.value = 0;
-      currencyListOffset.value = 0;
-      currencySheetPanY.value = withTiming(0, { duration: 260 });
-      currencySheetScrim.value = withTiming(0.4, { duration: 260 });
-    }
-  }, [sheetOpen, currencySheetPanY, currencySheetScrim, currencyListOffset]);
+  // 抽屉最高 0.85 屏（BottomSheet 默认）：扣掉标题行与底部「安全区 + 16」后，列表最多占 0.7 屏
+  // —— 6 个账户类型在 360×640 一屏放得下，~150 种货币则靠抽屉内滚动到底（验收退回要求）
+  const sheetListMaxHeight = Math.round(windowHeight * SHEET_LIST_MAX_RATIO);
 
   // 硬件返回键：币种弹层开着 → 先关弹层（拦截，不退出整页——否则填一半的表单全丢）；
   // 没开弹层时撤掉金额模式（自绘键盘不再随 keyboardDidHide 回弹）再放行返回。
@@ -299,21 +274,18 @@ export default function AddAssetScreen({ route }: any) {
         nameInputRef.current?.blur();
       }}
     >
-      {/* 顶栏：返回键（回到资产页）+ 标题，颜色全部跟随明暗主题 */}
-      <View style={styles.header}>
-        <PressableScale
-          style={styles.backBtn}
-          activeScale={0.92}
-          onPress={() => navigation.goBack()}
-        >
-          <Ionicons name="chevron-back" size={22} color={colors.icon} />
-        </PressableScale>
-        <Text style={styles.headerTitle}>{t(isEdit ? 'addTx.editAssetTitle' : 'addTx.addAssetTitle')}</Text>
-        {isEdit ? (
-          // 编辑模式：右上角"保存"。计算器键盘开着时先求值再提交，未确认的算式不丢失
-          <PressableScale
-            style={styles.headerSaveBtn}
-            activeScale={0.95}
+      {/* 顶栏：统一二级页页头（ScreenHeader compact = 返回 + 居中标题 + 右侧动作） */}
+      <ScreenHeader
+        variant="compact"
+        title={t(isEdit ? 'addTx.editAssetTitle' : 'addTx.addAssetTitle')}
+        onBack={() => navigation.goBack()}
+        right={
+          // 创建 / 编辑都显示"保存"（计划 5.8）。计算器键盘开着时先求值再提交，未确认的算式不丢失
+          <Button
+            title={t('common.save')}
+            variant="ghost"
+            size="sm"
+            fullWidth={false}
             onPress={() => {
               if (amountField) {
                 const bal = balanceExpr.confirm();
@@ -324,23 +296,25 @@ export default function AddAssetScreen({ route }: any) {
                 handleSave();
               }
             }}
-          >
-            <Text style={styles.headerSaveBtnText}>{t('common.save')}</Text>
-          </PressableScale>
-        ) : (
-          <View style={styles.headerSpacer} />
-        )}
-      </View>
-
-      {/* 整页表单：所有字段一屏放下；金额框贴着顶栏 */}
-      <View style={{ flex: 1, paddingHorizontal: 20, paddingBottom: 24 }}>
-        {/* 类型下拉展开时:全屏透明层垫在下方,点击空白任意处收起下拉 */}
-        {sheetOpen === 'type' && (
-          <Pressable
-            style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 5 }}
-            onPress={() => setSheetOpen(null)}
+            testID="add-asset-save"
           />
-        )}
+        }
+      />
+
+      {/* 表单：加 KeyboardAvoidingView + 可滚动容器 —— 系统键盘（账户名称）弹出时不遮挡正在输入的框；
+          矮屏 + 键盘同时出现时也能滚到"保存" */}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          style={{ flex: 1 }}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{
+            paddingHorizontal: pagePadding,
+            paddingBottom: spacing.xxl,
+          }}
+        >
         {/* 起始金额：第一焦点。整张卡片都是点按热区（标签、留白也包含在内），
             点一下调出计算器键盘；键盘已开着时再点不会清掉未提交的算式（见 openAmountField 守卫） */}
         <PressableScale
@@ -352,10 +326,8 @@ export default function AddAssetScreen({ route }: any) {
             {selectedType === 'credit' ? t('addTx.creditLimitLabel') : t('addTx.balanceLabel')}
           </Text>
           <View style={styles.amountRow}>
-            {/* 货币代码:12 号、固定在 Hero 框最左侧;位置固定不参与压缩 */}
-            <Text style={styles.amountCurrency}>{selectedCurrency}</Text>
-            {/* 金额可定位光标：金额模式开着时点按/长按拖动可把光标放到任意字符缝隙；
-                未开启时点按整格调起计算器键盘（回落 openAmountField） */}
+            {/* 金额是主角（计划 A1 / 验收退回第 6 条）：amountEntry 档、右对齐、位数多时按档位降级；
+                币种只在下方"选择货币"框上显示，金额这里不再重复写一遍 */}
             <CursorAmountText
               containerStyle={styles.amountTextContainer}
               style={[styles.amountText, ...(balanceIsMulti ? [styles.amountTextSmall] : [])]}
@@ -372,9 +344,12 @@ export default function AddAssetScreen({ route }: any) {
         {/* 账户名称 / 账户类型：左右 60% / 40%，类型是下拉选择框 */}
         <View style={styles.nameTypeRow}>
           <View style={styles.nameColumn}>
-            <Text style={styles.pickerLabel}>
-              {t('addTx.accountName')} <Text style={styles.requiredMark}>*</Text>
-            </Text>
+            <AppText variant="footnote" color={semantic.textSecondary} weight="600" style={styles.pickerLabel}>
+              {t('addTx.accountName')}{' '}
+              <AppText variant="footnote" color={semantic.danger} weight="600">
+                *
+              </AppText>
+            </AppText>
             <TextInput
               ref={nameInputRef}
               style={[styles.input, errors.name && styles.inputError]}
@@ -392,59 +367,54 @@ export default function AddAssetScreen({ route }: any) {
                 clearError('name');
               }}
               placeholder={t('addTx.accountNamePlaceholder')}
-              placeholderTextColor={colors.textTertiary}
-              selectionColor={colors.link}
+              placeholderTextColor={semantic.textTertiary}
+              selectionColor={semantic.accent}
               returnKeyType="done"
             />
-            {/* 错误提示：出现时只在名称列下方占一格，不影响右侧"账户类型"下拉框大小 */}
-            {!!errors.name && <Text style={styles.errorText}>{errors.name}</Text>}
+            {/* 错误提示：就地亮在字段下方（不弹窗、不位移其它字段） */}
+            {!!errors.name && (
+              <AppText variant="footnote" color={semantic.danger} style={styles.errorText}>
+                {errors.name}
+              </AppText>
+            )}
           </View>
 
           <View style={styles.typeColumn}>
-            <Text style={styles.pickerLabel}>{t('addTx.accountType')}</Text>
+            <AppText variant="footnote" color={semantic.textSecondary} weight="600" style={styles.pickerLabel}>
+              {t('addTx.accountType')}
+            </AppText>
+            {/* 类型选择：与货币同一种弹层（计划 10.1「弹出层只有 2 种」——
+                选择器一律走 BottomSheet，不再自造行下内联下拉） */}
             <PressableScale
-              style={[styles.selectBox, sheetOpen === 'type' && { borderColor: colors.link }]}
+              style={[styles.selectBox, sheetOpen === 'type' && { borderColor: semantic.accentText }]}
               activeScale={0.98}
-              onPress={() => setSheetOpen((prev) => (prev === 'type' ? null : 'type'))}
+              onPress={() => {
+                // 同一时间只保留一个输入焦点：收系统键盘 + 名称框失焦
+                Keyboard.dismiss();
+                nameInputRef.current?.blur();
+                setSheetOpen('type');
+              }}
+              testID="add-asset-type-field"
             >
-              <Ionicons name={selectedTypeInfo?.icon ?? 'wallet-outline'} size={16} color={colors.link} />
-              <Text style={styles.selectBoxText} numberOfLines={1}>
+              <Ionicons name={selectedTypeInfo?.icon ?? 'wallet-outline'} size={16} color={semantic.accentText} />
+              <AppText variant="footnote" weight="600" numberOfLines={1} style={styles.selectBoxText}>
                 {selectedTypeInfo ? t(selectedTypeInfo.label) : selectedType}
-              </Text>
-              <Ionicons name={sheetOpen === 'type' ? 'chevron-up' : 'chevron-down'} size={14} color={colors.textTertiary} />
+              </AppText>
+              <Ionicons name="chevron-down" size={14} color={semantic.textTertiary} />
             </PressableScale>
-            {/* 行下内联下拉：点选择框展开，选完即收起（不再用底部上滑弹层） */}
-            {sheetOpen === 'type' && (
-              <View style={[styles.inlineDropdown, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-                {TYPE_OPTIONS.map((opt) => {
-                  const active = selectedType === opt.type;
-                  return (
-                    <PressableScale
-                      key={opt.type}
-                      style={styles.inlineDropdownRow}
-                      activeScale={0.97}
-                      onPress={() => {
-                        setSelectedType(opt.type);
-                        setSheetOpen(null);
-                      }}
-                    >
-                      <Ionicons name={opt.icon} size={16} color={opt.color} />
-                      <Text style={[styles.inlineDropdownText, active && { fontWeight: '700', color: colors.link }]}>
-                        {t(opt.label)}
-                      </Text>
-                      {active && <Ionicons name="checkmark" size={16} color={colors.link} />}
-                    </PressableScale>
-                  );
-                })}
-              </View>
-            )}
           </View>
         </View>
 
-        {/* 货币：下拉选择框 + 底部上拉菜单（框格比名称/类型行的 40 更矮一档） */}
-        <Text style={styles.pickerLabel}>{t('addTx.selectCurrency')}</Text>
+        {/* 货币：选择框 + 统一 BottomSheet（世界货币表 ~150 种 + 搜索框，不用国旗 emoji） */}
+        <AppText variant="footnote" color={semantic.textSecondary} weight="600" style={styles.pickerLabel}>
+          {t('addTx.selectCurrency')}
+        </AppText>
         <PressableScale
-          style={[styles.selectBox, styles.currencySelectBox, sheetOpen === 'currency' && { borderColor: colors.link }]}
+          style={[
+            styles.selectBox,
+            styles.currencySelectBox,
+            sheetOpen === 'currency' && { borderColor: semantic.accentText },
+          ]}
           activeScale={0.98}
           onPress={() => {
             // 同一时间只保留一个输入焦点：收系统键盘 + 名称框失焦（金额模式保留，键盘会自动回位）
@@ -453,98 +423,19 @@ export default function AddAssetScreen({ route }: any) {
             setCurrencySearch('');
             setSheetOpen('currency');
           }}
+          testID="add-asset-currency-field"
         >
-          {getCurrencyFlag(selectedCurrency) && <Text style={styles.selectBoxFlag}>{getCurrencyFlag(selectedCurrency)}</Text>}
-          <Text style={styles.selectBoxText}>
+          <AppText variant="footnote" weight="600" numberOfLines={1} style={styles.selectBoxText}>
             {selectedCurrencyInfo
               ? langMode === 'zh'
                 ? `${currencyDisplayName(selectedCurrencyInfo)}（${selectedCurrencyInfo.code}）`
                 : `${currencyDisplayName(selectedCurrencyInfo)} (${selectedCurrencyInfo.code})`
               : selectedCurrency}
-          </Text>
-          <Ionicons name="chevron-down" size={14} color={colors.textTertiary} />
+          </AppText>
+          <Ionicons name="chevron-down" size={14} color={semantic.textTertiary} />
         </PressableScale>
-
-        {/* 底部上拉菜单：货币选择（世界货币表 ~150 种 + 顶部搜索框）。
-            树内覆盖层（不用 RN Modal——接不了下滑手势）：遮罩 + GestureDetector 下滑收起，与记一笔账户弹层同款 */}
-        {sheetOpen === 'currency' && (
-          <View style={[StyleSheet.absoluteFill, { zIndex: 90, elevation: 90 }]}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={closeCurrencySheet}>
-              <Reanimated.View style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }, currencySheetScrimStyle]} />
-            </Pressable>
-            <GestureDetector gesture={currencySheetGesture}>
-              <Reanimated.View style={[styles.sheetCard, currencySheetAnimStyle, { backgroundColor: colors.card, height: '75%' }]}>
-              {/* 把手条：下滑收起的视觉提示（点击无功能） */}
-              <View style={styles.sheetGrabber} />
-              {/* 右上角 ✕ 关闭键 */}
-              <PressableScale
-                style={styles.sheetClose}
-                activeScale={0.90}
-                hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
-                onPress={closeCurrencySheet}
-              >
-                <Ionicons name="close" size={20} color={colors.textSecondary} />
-              </PressableScale>
-              <Text style={styles.sheetTitle}>{t('addTx.selectCurrency')}</Text>
-              {/* 搜索框：样式参考记一笔"选择账户"的搜索框 */}
-              <View style={[styles.currencySearchBox, { backgroundColor: colors.bg, borderColor: colors.cardBorder }]}>
-                <Ionicons name="search-outline" size={16} color={colors.textTertiary} />
-                <TextInput
-                  style={[styles.currencySearchInput, { color: colors.textPrimary }]}
-                  value={currencySearch}
-                  onChangeText={setCurrencySearch}
-                  placeholder={t('addTx.searchCurrency')}
-                  placeholderTextColor={colors.textTertiary}
-                  autoCorrect={false}
-                />
-                {!!currencySearch && (
-                  <PressableScale onPress={() => setCurrencySearch('')} hitSlop={6} activeScale={0.90}>
-                    <Ionicons name="close-circle" size={16} color={colors.textTertiary} />
-                  </PressableScale>
-                )}
-              </View>
-              {/* 弹性列表：填满 3/4 卡片剩余空间（配合底部安全区内边距） */}
-              <View style={{ flex: 1 }}>
-                <Reanimated.ScrollView
-                  onScroll={currencyListScrollHandler}
-                  style={{ flex: 1 }}
-                  keyboardShouldPersistTaps="handled"
-                >
-                  {filteredCurrencies.map((c) => {
-                    const active = selectedCurrency === c.code;
-                    const flag = getCurrencyFlag(c.code);
-                    return (
-                      <PressableScale
-                        key={c.code}
-                        style={[styles.sheetRow, active && { backgroundColor: colors.link + '14' }]}
-                        activeScale={0.97}
-                        onPress={() => {
-                          setSelectedCurrency(c.code);
-                          closeCurrencySheet();
-                        }}
-                      >
-                        <Text style={styles.sheetRowName}>
-                          {flag ? `${flag} ${currencyDisplayName(c)}` : currencyDisplayName(c)}
-                        </Text>
-                        <Text style={[styles.sheetRowCode, active && { color: colors.link }]}>{c.code}</Text>
-                        {active && <Ionicons name="checkmark" size={18} color={colors.link} />}
-                      </PressableScale>
-                    );
-                  })}
-                  {filteredCurrencies.length === 0 && (
-                    <Text style={[styles.sheetRowName, { textAlign: 'center', paddingVertical: 24, color: colors.textTertiary }]}>
-                      {currencySearch ? t('addTx.noMatchingCurrency') : ''}
-                    </Text>
-                  )}
-                </Reanimated.ScrollView>
-              </View>
-              {/* 底部安全区留白：手势条不挡列表最后一行 */}
-              <View style={{ height: Math.max(insets.bottom, 8) }} />
-              </Reanimated.View>
-            </GestureDetector>
-          </View>
-        )}
-      </View>
+      </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* 计算器键盘：只在点了金额字段时出现；底部用与"记一笔"相同的 stickyFooter 包裹，
           垫高到底部安全区之上，键盘位置/高度与那边完全一致。「完成」＝直接保存。
@@ -568,36 +459,134 @@ export default function AddAssetScreen({ route }: any) {
           />
         </View>
       )}
+
+      {/* 币种抽屉：统一 BottomSheet（把手 + 遮罩 + 下拉收起 + 安全区都由组件负责）。
+          ⚠ 挂在页面根（SafeAreaView）的最后一个子节点上，不能放进 ScrollView —— 组件按 absoluteFill
+          铺满父容器，放进滚动容器里会跟着内容滚走 */}
+      {/* 类型抽屉：高度随内容自适应（BottomSheet 最高 85% 屏），列表超长时在抽屉内滚动，
+          底部留「安全区 + 16」——6 档在 360×640 也能全部选到（验收退回 · 严重项） */}
+      <BottomSheet
+        visible={sheetOpen === 'type'}
+        onClose={() => setSheetOpen(null)}
+        title={t('addTx.accountType')}
+        accessibilityLabel={t('addTx.accountType')}
+        testID="add-asset-type-sheet"
+      >
+        <ScrollView
+          style={{ maxHeight: sheetListMaxHeight }}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {TYPE_OPTIONS.map((opt, index) => {
+            const active = selectedType === opt.type;
+            return (
+              <ListRow
+                key={opt.type}
+                icon={opt.icon}
+                iconColor={opt.color}
+                title={t(opt.label)}
+                trailing={
+                  active ? <Ionicons name="checkmark" size={20} color={semantic.accentText} /> : undefined
+                }
+                onPress={() => {
+                  setSelectedType(opt.type);
+                  setSheetOpen(null);
+                }}
+                separator={index < TYPE_OPTIONS.length - 1}
+                testID={`add-asset-type-${opt.type}`}
+              />
+            );
+          })}
+        </ScrollView>
+      </BottomSheet>
+
+      <BottomSheet
+        visible={sheetOpen === 'currency'}
+        onClose={closeCurrencySheet}
+        title={t('addTx.selectCurrency')}
+        accessibilityLabel={t('addTx.selectCurrency')}
+        testID="add-asset-currency-sheet"
+      >
+        {/* 搜索框：按代码 / 中文名 / 界面语言显示名过滤 */}
+        <View
+          style={[
+            styles.currencySearchBox,
+            { backgroundColor: semantic.bg, borderColor: semantic.hairline, marginHorizontal: spacing.lg },
+          ]}
+        >
+          <Ionicons name="search-outline" size={20} color={semantic.textTertiary} />
+          <TextInput
+            style={[styles.currencySearchInput, { color: semantic.textPrimary }]}
+            value={currencySearch}
+            onChangeText={setCurrencySearch}
+            placeholder={t('addTx.searchCurrency')}
+            placeholderTextColor={semantic.textTertiary}
+            autoCorrect={false}
+          />
+          {!!currencySearch && (
+            <PressableScale onPress={() => setCurrencySearch('')} hitSlop={6} activeScale={0.9}>
+              <Ionicons name="close-circle" size={20} color={semantic.textTertiary} />
+            </PressableScale>
+          )}
+        </View>
+        {/* 列表：贴边行（抽屉里不套卡片），最大高按窗口高算（不写死像素） */}
+        <ScrollView
+          style={{ maxHeight: sheetListMaxHeight }}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {filteredCurrencies.map((c, index) => {
+            const active = selectedCurrency === c.code;
+            return (
+              <ListRow
+                key={c.code}
+                title={currencyDisplayName(c)}
+                value={
+                  active ? undefined : (
+                    <AppText variant="body" color={semantic.textSecondary}>
+                      {c.code}
+                    </AppText>
+                  )
+                }
+                trailing={
+                  active ? (
+                    <View style={styles.currencyActiveMark}>
+                      <AppText variant="body" color={semantic.accentText}>
+                        {c.code}
+                      </AppText>
+                      <Ionicons name="checkmark" size={20} color={semantic.accentText} />
+                    </View>
+                  ) : undefined
+                }
+                onPress={() => {
+                  setSelectedCurrency(c.code);
+                  closeCurrencySheet();
+                }}
+                  separator={index < filteredCurrencies.length - 1}
+                  testID={`add-asset-currency-${c.code}`}
+              />
+            );
+          })}
+          {filteredCurrencies.length === 0 && (
+            <AppText variant="subhead" color={semantic.textTertiary} align="center" style={styles.sheetEmpty}>
+              {currencySearch ? t('addTx.noMatchingCurrency') : ''}
+            </AppText>
+          )}
+        </ScrollView>
+      </BottomSheet>
     </SafeAreaView>
   );
 }
 
-function makeStyles(colors: ThemeColors) {
+/** 令牌进、StyleSheet 出（禁止写死色值 / 字号；几何常量只留纯图形尺寸） */
+function makeStyles(
+  colors: ThemeColors,
+  semantic: SemanticColors,
+  typography: Typography,
+  spacing: Spacing
+) {
   return StyleSheet.create({
-    container: { flex: 1, backgroundColor: colors.bg },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: 16,
-      paddingVertical: 4,
-    },
-    // 返回键：与其他页面顶栏返回键同款（40×40 圆环）
-    backBtn: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
-      borderWidth: 1.5,
-      borderColor: colors.link,
-      backgroundColor: colors.card,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    headerTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary },
-    headerSpacer: { width: 40 },
-    // 编辑模式右上角的"保存"文字按钮（40 宽占位与返回键对称，保持标题居中）
-    headerSaveBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-    headerSaveBtnText: { fontSize: 14, fontWeight: '700', color: colors.link },
+    container: { flex: 1, backgroundColor: semantic.bg },
     amountHero: {
       backgroundColor: colors.card,
       borderRadius: 18,
@@ -608,7 +597,7 @@ function makeStyles(colors: ThemeColors) {
       paddingHorizontal: 20,
       marginBottom: 14,
     },
-    amountHeroActive: { borderColor: colors.link },
+    amountHeroActive: { borderColor: semantic.accent },
     amountLabel: {
       fontSize: 14,
       fontWeight: '700',
@@ -619,172 +608,85 @@ function makeStyles(colors: ThemeColors) {
     // 金额行固定高度 56：大金额触发等比缩字（minimumFontScale）时行高不变，
     // 整个 Hero 框的尺寸也就恒定——不会随金额位数增减而变高变矮
     amountRow: { flexDirection: 'row', alignItems: 'center', width: '100%', height: 56 },
-    // 货币代码:28 号,固定在 Hero 框最左侧;位置固定不参与压缩
-    amountCurrency: {
-      fontSize: 28,
-      fontWeight: '700',
-      color: colors.textSecondary,
-      marginRight: 8,
-    },
-    // 金额:右对齐占据货币右侧的全部活动空间,位数超宽等比例缩小(minimumFontScale 0.4),
-    // 压缩只发生在金额自己身上,货币的位置/大小永不被挤压
+    // 金额：主角档（计划 A1 的 amountEntry = 44/52/600），右对齐占满整行宽度；
+    // 位数超宽按档位降一级（amountTextSmall），不做连续压缩
     amountText: {
       flex: 1,
-      fontSize: 40,
-      fontWeight: '700',
-      color: colors.textPrimary,
+      fontSize: typography.amountEntry.fontSize,
+      lineHeight: typography.amountEntry.lineHeight,
+      fontWeight: typography.amountEntry.fontWeight,
+      color: semantic.textPrimary,
       fontVariant: ['tabular-nums'],
       textAlign: 'right',
     },
-    // 金额文字容器（CursorAmountText 外壳）：占货币右侧全部空间、内容右对齐
+    // 金额文字容器（CursorAmountText 外壳）：内容右对齐，占满整个 Hero 行宽
     amountTextContainer: { flex: 1, alignItems: 'flex-end' },
-    amountTextSmall: { fontSize: 28 },
-    // 金额输入光标(内置键盘开着时显示在金额末尾)
-    amountCursor: { fontSize: 34, fontWeight: '300', color: colors.link, marginLeft: 2 },
+    // 多项算式（15.00+20.00 这类）时长一档：title1 = 28
+    amountTextSmall: { fontSize: typography.title1.fontSize, lineHeight: typography.title1.lineHeight },
+    // 金额输入光标（内置键盘开着时显示在金额末尾）：高度跟着金额档位走
+    amountCursor: {
+      fontSize: typography.amountEntry.fontSize,
+      fontWeight: '300',
+      color: semantic.accentText,
+      marginLeft: 2,
+    },
     // 账户名称 / 账户类型：左右 55% / 45%
-    nameTypeRow: { flexDirection: 'row', gap: 10, marginBottom: 12, zIndex: 10, elevation: 10 },
+    nameTypeRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md, zIndex: 10, elevation: 10 },
     nameColumn: { flex: 55 },
     // zIndex:类型下拉展开时高于全屏透明遮罩层,下拉行不会被遮罩盖住
     typeColumn: { flex: 45, zIndex: 10, elevation: 10 },
     input: {
-      backgroundColor: colors.card,
+      backgroundColor: semantic.surface,
       borderRadius: 10,
       borderWidth: 1,
-      borderColor: colors.cardBorder,
+      borderColor: semantic.hairline,
       height: 40,
       paddingVertical: 7,
-      paddingHorizontal: 12,
-      fontSize: 13,
-      color: colors.textPrimary,
+      paddingHorizontal: spacing.md,
+      fontSize: typography.footnote.fontSize,
+      lineHeight: typography.footnote.lineHeight,
+      color: semantic.textPrimary,
     },
-    inputError: { borderColor: colors.expense, borderWidth: 1.5 },
-    requiredMark: { color: colors.expense, fontWeight: '700' },
-    // 固定高度：报错文案出现时名称列变高，也不会把类型下拉框拉高（单行固定）
-    errorText: { fontSize: 11, color: colors.expense, marginTop: 4, height: 15, lineHeight: 15 },
-    pickerLabel: { fontSize: 13, fontWeight: '600', color: colors.textSecondary, marginBottom: 6 },
+    // 出错：只换描边色（不在出错时改宽度，避免 0.5px 布局跳动）
+    inputError: { borderColor: semantic.danger },
+    pickerLabel: { marginBottom: 6 },
+    // 出错提示：就地落在字段下方，不写死高度（字号 / 行高走 typography 令牌）
+    errorText: { marginTop: spacing.xs },
     // 下拉选择框（账户类型/货币）：固定高度、不参与纵向伸缩——名称列出现报错行时，
     // 右侧类型下拉框保持原尺寸不变（之前带 flex:1 会被拉高变形）
     selectBox: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 8,
-      backgroundColor: colors.card,
+      gap: spacing.sm,
+      backgroundColor: semantic.surface,
       borderRadius: 10,
       borderWidth: 1,
-      borderColor: colors.cardBorder,
+      borderColor: semantic.hairline,
       height: 40, // 与"账户名称"输入框同高，视觉对齐
-      paddingHorizontal: 12,
+      paddingHorizontal: spacing.md,
     },
-    selectBoxFlag: { fontSize: 16 },
-    selectBoxText: {
-      flex: 1,
-      fontSize: 13,
-      color: colors.textPrimary,
-      fontWeight: '600',
-    },
+    selectBoxText: { flex: 1 },
     // 币种选择框：比名称/类型行的 40 再矮一档。
     // flexGrow:0 + flexShrink:0 + alignSelf:stretch —— 之前继承 selectBox 的 flex:1，在页面
     // 纵列里被纵向拉伸成一个大空框（触发框显得超高）；这里显式关掉拉伸、横向撑满。
     // 注意不能用 flex:0 简写：react-native-web 会原样透传成 CSS flex:0（= 0 1 0%），
     // flex-basis:0% 覆盖 height:40 导致框塌陷成只剩边框（原生 Yoga 的 flex:0 无此问题）。
     currencySelectBox: { flexGrow: 0, flexShrink: 0, alignSelf: 'stretch', height: 40 },
-    // 账户类型:行下内联下拉（替代原底部上滑弹层）
-    // 类型下拉:覆盖式浮层——绝对定位悬浮在选择框正下方,盖住下方的货币栏位,
-    // 不把货币栏往下挤(展开时页面其他行纹丝不动);zIndex 高于相邻内容
-    inlineDropdown: {
-      position: 'absolute',
-      // 选择框正下方:标签行 ~24px + 选择框 40px,所以 68 起步(贴着框底,不压住框)
-      top: 68,
-      left: 0,
-      right: 0,
-      borderRadius: 10,
-      borderWidth: 1,
-      overflow: 'hidden',
-      zIndex: 30,
-      elevation: 30,
-    },
-    inlineDropdownRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-      paddingVertical: 11,
-      paddingHorizontal: 10,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: colors.dividerHair,
-    },
-    inlineDropdownText: { flex: 1, fontSize: 13, color: colors.textPrimary },
-    // 货币搜索框:样式参考记一笔"选择账户"的搜索框
+    // 币种搜索框（抽屉内）：记一笔"选择账户"同款
     currencySearchBox: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 8,
+      gap: spacing.sm,
       height: 40,
       borderRadius: 10,
       borderWidth: 1,
       paddingHorizontal: 10,
-      marginBottom: 8,
+      marginBottom: spacing.sm,
     },
-    currencySearchInput: { flex: 1, fontSize: 14 },
-    // 底部弹层右上角的 ✕ 关闭键
-    sheetClose: {
-      position: 'absolute',
-      top: 8,
-      right: 10,
-      width: 30,
-      height: 30,
-      borderRadius: 15,
-      backgroundColor: colors.bg,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    // 「+」/选择器共用的底部上拉菜单（与设置页底部弹层同款视觉）
-    sheetOverlay: {
-      flex: 1,
-      // 比 colors.overlay 更深：避免弹层上方露出页面里的框格轮廓，看着像被"挡住"
-      backgroundColor: 'rgba(0,0,0,0.72)',
-      justifyContent: 'flex-end',
-    },
-    sheetCard: {
-      position: 'absolute',
-      bottom: 0,
-      left: 0,
-      right: 0,
-      // 高度固定 75% 屏（JSX 内联传入），打开即全览 ~150 种货币
-      borderTopLeftRadius: 26,
-      borderTopRightRadius: 26,
-      borderWidth: 1,
-      borderColor: colors.dividerHair,
-      paddingTop: 12,
-      paddingBottom: 8,
-      paddingHorizontal: 16,
-    },
-    sheetGrabber: {
-      alignSelf: 'center',
-      width: 44,
-      height: 5,
-      borderRadius: 3,
-      backgroundColor: colors.divider,
-      marginBottom: 10,
-    },
-    sheetTitle: {
-      fontSize: 15,
-      fontWeight: '700',
-      color: colors.textPrimary,
-      textAlign: 'center',
-      marginBottom: 8,
-      paddingVertical: 8,
-    },
-    sheetRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 10,
-      paddingVertical: 12,
-      paddingHorizontal: 4,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: colors.dividerHair,
-    },
-    sheetRowCode: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
-    sheetRowName: { flex: 1, fontSize: 14, color: colors.textPrimary, marginRight: 12 },
+    currencySearchInput: { flex: 1, fontSize: typography.subhead.fontSize, color: semantic.textPrimary },
+    // 抽屉里当前选中币种：代码 + 勾（并排在行尾）
+    currencyActiveMark: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+    sheetEmpty: { paddingVertical: spacing.xxl },
     // 键盘底座：与"记一笔"的 stickyFooter 同规格（左右留白 + 顶部分隔线），
     // 底部安全区 padding 在 JSX 里用 insets 算
     keypadFooter: {

@@ -58,10 +58,14 @@ src/
 │  ├─ DonutChart.tsx        # SVG 环形图
 │  ├─ PressableScale.tsx    # 按压缩放反馈
 │  ├─ HeroMetalSheen.tsx    # Hero 金额笔画内流光 + 卡面扫光（MaskedView + 陀螺仪/自动循环，同一光源、同一 sweepPos）
-│  └─ ReceiptCameraModal.tsx    # 拍小票
+│  ├─ ReceiptCameraModal.tsx    # 拍小票
+│  └─ ui/                   # ★ 设计系统组件（统一出口 ui/index.ts）：AppText / MoneyText / Button / Card / ListRow / …
+│     ├─ HeroGradient.tsx   # UI V2 页面顶渐变（160° 主渐变 + 2 光斑 + 可选 26dp 网格 + 底部淡出到 bg）——HeroGradient
+│     ├─ GlassView.tsx      # UI V2 玻璃（半透明 + 1px 亮边 + 顶部内高光；iOS/Web 叠 BlurView，Android 退纯 rgba）——GlassView
+│     └─ IconCircle.tsx     # UI V2 圆形图标托（42 列表 / 48 记一笔格；夜 15% 淡底、日同色系压实；selected 两层外圈）——IconCircle
 ├─ screens/                 # 18 个屏幕（见下文导航树）
 ├─ theme/
-│  ├─ theme.ts              # ★ 设计令牌：上半部旧颜色层（lightColors/darkColors，兼容期保留）+ 下半部语义层（semantic 颜色 / typography 字号 / spacing / radius / elevation）+ 字体层（fontFamily / fontFamilyByWeight / canUseInterText）
+│  ├─ theme.ts              # ★ 设计令牌：旧颜色层（兼容期保留）+ 语义层（颜色 / typography / spacing / radius / elevation，UI V2 新增 surfaceSunken·keypadPanel·tabBar·tabActive·tabInactive + gradients 品牌渐变 + glass 玻璃 + gradientAxis 角度换算）+ 字体层（Geist 四档 / fontFamilyByWeight / canUseLatinText）
 │  ├─ motion.ts             # 动效令牌：spring 350/400/180 · fade 150 · 数字滚动 600 · 减弱动态效果降级档
 │  ├─ useLayout.ts          # 版型分级：宽 compact/regular/large + 矮屏 short + 平板 560 收窄（页边距/键高/类别列数/Hero 字号/行高）
 │  ├─ useSystemColorScheme.ts  # ★ 实时系统外观：自订阅 Appearance + web matchMedia + 回前台重读（RN 自带 useColorScheme 在 web 上不跟随系统变化，勿用）
@@ -145,7 +149,7 @@ push 进的是**当前所在 Stack** 自己的栈，`goBack()` 天然回到正�
 | AI 小票扫描 | `scanReceipt.ts` `ReceiptCameraModal` | `aiConfig.ts`、`AddTransactionScreen` 回填表单 |
 | AI 语音记账 | `voiceAccounting.ts` `AIScreen` | `aiConfig.ts` |
 | 计算器合集 | `CalculatorHubScreen` → `LoanCalculatorScreen` / `CompoundInterestScreen` | 双注册问题：目前只挂 HomeStack |
-| TabBar 样式 / 凸起按钮 / 自动收起 | `App.tsx`（`CenterTabButton`、自定义 TabBar） | `TabBarAutoHideContext` `useTabClearance` |
+| TabBar 样式 / 悬浮胶囊 / 中央「+」/ 自动收起 | `App.tsx`（`CenterTabButton` 54 圆内嵌胶囊、`SlidingTabBar`） | `TabBarAutoHideContext` `useTabClearance`（几何常量唯一来源：栏 68 / 距底 18 / 圆 54） |
 | 设置项列表 | `SettingsScreen` | 各子页面（货币/周期/类别/账本） |
 
 ---

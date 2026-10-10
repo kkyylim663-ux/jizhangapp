@@ -7,6 +7,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { BottomTabBar } from '@react-navigation/bottom-tabs';
 import { PlatformPressable } from '@react-navigation/elements';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { LinearGradient } from 'expo-linear-gradient';
 import type {
   MainTabParamList,
   HomeStackParamList,
@@ -41,12 +42,11 @@ import { useSystemColorScheme } from './src/theme/useSystemColorScheme';
 import {
   TAB_BAR_HEIGHT,
   TAB_BAR_GAP,
-  TAB_BAR_RAISE,
   TAB_BAR_SHELL_HEIGHT,
   TAB_CENTER_BUTTON_SIZE,
   TAB_CENTER_BUTTON_BOTTOM,
 } from './src/hooks/useTabClearance';
-// 标签文字走统一文字组件（令牌字号 caption2 = 11pt；英文自动走 Inter）
+// 标签文字走统一文字组件（令牌字号 caption2 = 11pt；英文自动走打包 Geist）
 import { AppText } from './src/components/ui';
 // 启动占位页只需要"现有主题底色"这一个令牌：此时 ThemeModeProvider 还没挂载，
 // useTheme() 用不了（它会抛错），只能直接引 token
@@ -203,14 +203,12 @@ function AddTransactionStack() {
   );
 }
 
-// 中央「记一笔」圆钮（T06 G3，2026-10-10）：
-// 56pt 纯 accent 圆 + 单层柔和阴影 + 白色「+」。旧的 8 段渐变光球 / 球面高光 / 描边 /
-// 外光晕 / 水波纹整组退役（用户：简化到纯色）。
-// 触摸区：整圆都落在 SlidingTabBar 外壳里（旧版用 top:-25 把大半截露在父容器外，
-// Android 收不到父容器外的触摸 → 球的上半截点不中）。
+// 中央「记一笔」圆钮（UI V2 §3.4，2026-10-10）：
+// 54pt 圆 + accent 渐变（135°）+ 顶部内高光 + 柔和粉紫投影，**收进悬浮胶囊内部**（不再凸出栏顶）。
+// 触摸区：整圆都在胶囊里，Android 判得中。
 // 铁律：不加任何按压视觉反馈（无缩放 / 无位移 / 无水波），只保留点击震动。
 function CenterTabButton({ onPress }: { onPress?: () => void }) {
-  const { semantic, elevation } = useTheme();
+  const { semantic, gradients, centerButtonShadow } = useTheme();
   const t = useT();
 
   return (
@@ -219,31 +217,32 @@ function CenterTabButton({ onPress }: { onPress?: () => void }) {
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={t('nav.add')}
-      style={[
-        styles.centerButton,
-        // 不透明填充 → 阴影可以用 boxShadow（跨平台一致；elevation 令牌的浮层档）
-        { backgroundColor: semantic.accent, boxShadow: elevation.level2.boxShadow },
-      ]}
+      style={[styles.centerButton, { boxShadow: centerButtonShadow }]}
     >
+      {/* 根元素是普通 View（圆角 + overflow 裁切），渐变画在子层 —— 半透明/渐变卡片的铁律写法 */}
+      <LinearGradient
+        colors={gradients.accent.colors}
+        locations={gradients.accent.locations as [number, number, ...number[]]}
+        start={gradients.accent.start}
+        end={gradients.accent.end}
+        style={StyleSheet.absoluteFill}
+        pointerEvents="none"
+      />
+      {/* 顶部内高光（1dp 亮线，稿里 inset 0 1px 0 rgba(255,255,255,.35)） */}
+      <View pointerEvents="none" style={styles.centerButtonHighlight} />
       <Ionicons name="add" size={24} color={semantic.onAccent} />
     </Pressable>
   );
 }
 
-// 浮空 Tab 栏外壳：几何定位（absolute / 左右缩进 / 距底 / 圆角）与收起展开的 transform 在这里，
-// 材质全部交给内层栏自己的 tabBarStyle（不透明 semantic.surfaceElevated + 顶/四周发丝线
-// semantic.hairline + elevation.level2 阴影）——旧的多层描边 rim、水滴/托盘指示器、
-// 列表渐隐遮罩全部退役（T06 G2 简化）。
-// 外壳还负责一件事：**把中央圆钮整个包进可点区域**——外壳高度 = 栏身 + 圆钮凸起 + 触摸余量，
-// 这样圆上缘（凸出栏顶的部分）在 Android 上也判得中。
+// 浮空 Tab 栏外壳（UI V2 §3.4）：几何定位（absolute / 左右 16 / 距底 18 / 全圆角胶囊）与
+// 收起展开的 transform 在这里；材质（栏身色 / 阴影）交给内层栏自己的 tabBarStyle。
+// 中央「+」54 圆收进胶囊内部（不再凸出栏顶）—— 外壳高度 = 栏身高度。
 // 注意：v7 会以普通函数方式调用 tabBar（tabBar(props) 而非 <tabBar/>），
 // 所以这层不能放 hooks——hooks 全部在 SlidingTabBarInner 组件里。
 function SlidingTabBar(props: any) {
   return <SlidingTabBarInner {...props} />;
 }
-
-// 栏圆角（与首页 Hero 卡一致：radius.lg = 20）
-const BAR_RADIUS = 20;
 
 function SlidingTabBarInner(props: any) {
   const insets = useSafeAreaInsets();
@@ -330,7 +329,7 @@ function resetToRootOnTabPress(tabName: string) {
 // App() 自己不行——ThemeModeProvider 是 App() 渲染出来的，
 // useTheme() 得在它渲染出的子孙组件里调用才能读到值。
 function AppContent() {
-  const { isDark, colors, semantic, spacing, elevation } = useTheme();
+  const { isDark, colors, semantic, spacing, radius, tabBarShadow } = useTheme();
   const t = useT();
   const tabAutoHide = useCreateTabBarAutoHide();
 
@@ -399,9 +398,9 @@ function AppContent() {
           tabBar={SlidingTabBar}
           screenOptions={({ route }) => ({
             headerShown: false,
-            // 选中 = 实心图标 + accent；未选中 = 线框图标 + 次要文字色（T06 G2）
-            tabBarActiveTintColor: semantic.accent,
-            tabBarInactiveTintColor: semantic.textSecondary,
+            // 选中 = 实心图标 + tabActive（夜白 / 日紫）；未选中 = 线框图标 + tabInactive（UI V2 §1）
+            tabBarActiveTintColor: semantic.tabActive,
+            tabBarInactiveTintColor: semantic.tabInactive,
             // 无障碍读屏名（标签改成函数式渲染后，库不再自动拼「x, tab, n of m」，显式给名字）
             tabBarAccessibilityLabel: tabLabels[route.name] ?? route.name,
             // 标签走统一文字组件：令牌字号 caption2 = 11pt（旧的 13pt 让英文「Settings」
@@ -416,24 +415,21 @@ function AppContent() {
                 {tabLabels[route.name] ?? route.name}
               </AppText>
             ),
-            // 栏身材质（T06 G2）：不透明语义表面 + 发丝线 + 浮层阴影；
-            // 旧的多层描边 rim / 水滴托盘 / 列表渐隐遮罩已随 SlidingTabBar 重做退役。
-            // 几何（左右缩进 / 距底 / 圆角外的定位）由 SlidingTabBar 外壳负责
+            // 栏身材质（UI V2 §3.4）：悬浮胶囊（全圆角）+ 栏身色（夜 #1A1A22 / 日 白 94%）+ 稿里的投影；
+            // 几何（左右 16 / 距底 18）由 SlidingTabBar 外壳负责
             tabBarStyle: {
               height: TAB_BAR_HEIGHT,
               // 关键:覆盖 BottomTabBar 内部默认的 paddingBottom: insets.bottom——
               // 外壳已经用 bottom: TAB_BAR_GAP + insets.bottom 避开过安全区，库内部再 pad 一次
-              // 会把 54px 栏高的内容区压到 ~30px，导致 Tab 文字下半截被挤出卡片
+              // 会把内容区压扁，导致 Tab 文字下半截被挤出卡片
               paddingBottom: 0,
-              backgroundColor: semantic.surfaceElevated,
-              // 发丝线：整圈 hairline（顶边就是列表与栏之间那道分隔线）
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor: semantic.hairline,
-              borderRadius: BAR_RADIUS,
+              backgroundColor: semantic.tabBar,
+              // 全圆角胶囊（UI V2：不再用 20 圆角方框，也不再画发丝描边）
+              borderRadius: radius.full,
               // 圆角要裁掉内容（历史上按渐变出血的装饰层会漏出来出直角）
               overflow: 'hidden',
-              // 浮层阴影统一用跨平台 boxShadow（iOS / Android 一致），不再用 elevation
-              boxShadow: elevation.level2.boxShadow,
+              // 稿里的栏身投影（夜 = 大黑软阴影 / 日 = 近距淡影 + 大范围淡紫灰）
+              boxShadow: tabBarShadow,
               // ⚠库的 BottomTabBar 自带 styles.bottom.elevation: 8（安卓默认"黑"阴影）——
               // 半透明/浅色栏身上会透出一条中性暗带（=用户追过的"白条"暗半）；清零，
               // 阴影统一交给这里的 boxShadow
@@ -453,13 +449,14 @@ function AppContent() {
             tabBarIcon: ({ color, focused }) => {
               const icon = TAB_ICONS[route.name];
               if (!icon) return null;
-              // 层次感：选中图标从描线切换为实底（Ionicons -outline ↔ 实底名）
+              // 层次感：选中图标从描线切换为实底（Ionicons -outline ↔ 实底名）——
+              // 稿里「轻微填充」的近似（20 号是 UI V2 稿的 Tab 图标尺寸）
               let name: keyof typeof Ionicons.glyphMap = icon;
               if (focused && icon.endsWith('-outline')) {
                 const solid = icon.replace('-outline', '') as keyof typeof Ionicons.glyphMap;
                 if (solid in Ionicons.glyphMap) name = solid;
               }
-              return <Ionicons name={name} size={24} color={color} />;
+              return <Ionicons name={name} size={20} color={color} />;
             },
           })}
         >
@@ -509,14 +506,15 @@ export default function App() {
   const galleryMode =
     Platform.OS === 'web' && typeof window !== 'undefined' && /[?&]gallery=1/.test(window.location.search);
 
-  // 打包字体（计划 8.2 第 1 条 / T01b）：4 档 Inter 静态字重随包发，只覆盖数字 / 拉丁字形，
-  // 中文继续走系统字体。键名 = 字体内部 PostScript 名，必须与 src/theme/theme.ts 的
-  // fontFamily 令牌保持一致（改一处要同步另一处）。
+  // 打包字体（UI V2 第 2 节，2026-10-10）：数字 / 英文从 Inter 换成 Geist（Vercel 官方 OFL），
+  // 4 档静态字重随包发，只覆盖数字 / 拉丁字形，中文继续走系统字体。
+  // 键名 = 字体内部 PostScript 名，必须与 src/theme/theme.ts 的 fontFamily 令牌保持一致
+  // （改一处要同步另一处）。加载失败（fontError）回退系统字体，绝不白屏 / 卡死。
   const [fontsLoaded, fontError] = useFonts({
-    'Inter-Regular': require('./assets/fonts/Inter-Regular.ttf'),
-    'Inter-Medium': require('./assets/fonts/Inter-Medium.ttf'),
-    'Inter-SemiBold': require('./assets/fonts/Inter-SemiBold.ttf'),
-    'Inter-Bold': require('./assets/fonts/Inter-Bold.ttf'),
+    'Geist-Light': require('./assets/fonts/Geist-Light.ttf'),
+    'Geist-Regular': require('./assets/fonts/Geist-Regular.ttf'),
+    'Geist-Medium': require('./assets/fonts/Geist-Medium.ttf'),
+    'Geist-SemiBold': require('./assets/fonts/Geist-SemiBold.ttf'),
   });
   // 占位页底色：ThemeModeProvider 还没挂载（它在下面才渲染），读不到用户在设置项里选的
   // 深色偏好，只能按系统外观取 theme.ts 的既有底色令牌——只影响字体加载这一瞬间的画面。
@@ -567,16 +565,16 @@ export default function App() {
 const styles = StyleSheet.create({
   // 浮空 Tab 栏外壳：只负责几何定位 + 承载收起/展开的 transform。
   // 高度 / 距底 / 圆钮槽位在外壳内联给（都要读 insets 与令牌常量）。
-  // 中央圆钮凸出栏顶的部分也落在这个外壳里（高度 = TAB_BAR_SHELL_HEIGHT），
-  // 这样 Android 才会把圆的上半截的触摸判给圆钮；overflow 必须 visible（圆钮投影画到外壳之外）。
-  // 左右 12px：比 16 略窄，让每个 tab 的点击槽位更宽（与 Hero 卡右缘一致）
+  // 中央「+」整个落在胶囊内部（外壳高度 = 栏身高度），触摸区不再需要额外余量；
+  // overflow 必须 visible（+ 的投影画到外壳边缘之外）。
+  // 左右 16：UI V2 稿的悬浮胶囊缩进（与页面内容边距一致）
   tabShell: {
     position: 'absolute',
-    left: 12,
-    right: 12,
+    left: 16,
+    right: 16,
     overflow: 'visible',
   },
-  // 内层栏的内容区（54pt）：紧贴外壳下缘，上缘留给凸出的圆钮
+  // 内层栏的内容区：与外壳同尺寸（栏身 = 外壳高度；+ 收进栏内后不再留凸起区）
   tabBarRow: {
     position: 'absolute',
     left: 0,
@@ -593,12 +591,23 @@ const styles = StyleSheet.create({
     height: TAB_CENTER_BUTTON_SIZE,
     alignItems: 'center',
   },
-  // 中央圆钮本体：56pt 纯色圆（accent 底 + level2 阴影 + 白色「+」在 JSX 内联给）
+  // 中央圆钮本体（UI V2）：54pt 圆，accent 渐变 + 顶部内高光在 JSX 内联给；
+  // 根元素是普通 View（圆角 + overflow 裁切），渐变画在 absolute 子层
   centerButton: {
     width: TAB_CENTER_BUTTON_SIZE,
     height: TAB_CENTER_BUTTON_SIZE,
     borderRadius: TAB_CENTER_BUTTON_SIZE / 2,
+    overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  // 顶部内高光：1dp 白色亮线（稿里 inset 0 1px 0 rgba(255,255,255,.35)）
+  centerButtonHighlight: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.35)',
   },
 });

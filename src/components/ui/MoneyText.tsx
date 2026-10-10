@@ -36,7 +36,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { formatMoney, FormatMoneyOptions, MINUS } from '../../utils/formatMoney';
-import { TypographyVariant } from '../../theme/theme';
+import { FontWeightKey, TypographyVariant } from '../../theme/theme';
 import { useTheme } from '../../theme/useTheme';
 import { useDialogOptional } from '../AppDialog';
 import AppText from './AppText';
@@ -46,6 +46,22 @@ import AppText from './AppText';
  * 18 不是 typography 令牌档，是验收点名的兜底字号下限）。
  */
 const SHRINK_LADDER = [40, 34, 28, 22, 18];
+
+/**
+ * UI V2 Hero 金额（首页 58 / 资产 42 / 记一笔 64）：整数段 500 + 负字距，
+ * RM 与小数为 300 且降透明度。其余部件按稿比例派生（58 → RM 24 / 小数 28 / 行高 64 / 字距 −2.4）。
+ */
+const HERO_PREFIX_RATIO = 0.414;
+const HERO_DECIMALS_RATIO = 0.483;
+const HERO_LINE_RATIO = 1.103;
+const HERO_LETTER_RATIO = -0.0414;
+/** RM 与整数之间的间距（稿：4） */
+const HERO_PREFIX_GAP = 4;
+/**
+ * Hero 降级阶梯（UI V2 定稿）：58 → 50 → 42 → 34，**全部放不下才用紧凑格式**。
+ * 比例制，heroSize=42/64 时同样按这四档等比降级。
+ */
+const HERO_LADDER_RATIOS = [1, 0.86, 0.72, 0.59];
 /** 各档的整数位上限（含）：≤9 → 阶梯[0] · ≤12 → [1] · ≤15 → [2] · 更多 → [3]（位数地板） */
 const LADDER_MAX_INT_DIGITS = [9, 12, 15];
 /**
@@ -87,6 +103,13 @@ export interface MoneyTextProps extends FormatMoneyOptions {
   shrinkLadder?: number[] | null;
   /** 连最小档都放不下时改用紧凑格式 + 长按看全文（默认 true；传 false 则一直用完整金额） */
   compactFallback?: boolean;
+  /**
+   * UI V2 Hero 样式：整数大（500）、RM 与小数为 300 且降透明度（渐变上的大金额用）。
+   * 整数段仍保留逐位滚动；首页 58 / 资产 42 / 记一笔 64 由 heroSize 传入。
+   */
+  hero?: boolean;
+  /** Hero 整数段字号（默认 58），其余部件按稿比例派生：RM ≈ 0.414×、小数 ≈ 0.483× */
+  heroSize?: number;
   /** 文本/布局微调（color / opacity / margin / textAlign 等；flexShrink 默认 0 = 金额不被挤压） */
   style?: StyleProp<TextStyle>;
   /** 读屏文本（默认 = 完整金额，即使屏上显示的是紧凑格式） */
@@ -142,6 +165,16 @@ function moneyIntDigits(text: string): number {
     if (ch !== undefined && ch >= '0' && ch <= '9') n++;
   }
   return n;
+}
+
+/**
+ * Hero 拆段（UI V2）：'−RM17,061.15 USD' → 前缀(−RM) · 整数(17,061) · 小数(.15) · 后缀( USD)。
+ * 前缀 / 小数 / 后缀是 300 字重的小字，中间整数段保留逐位滚动。
+ */
+function splitHeroParts(text: string): { prefix: string; int: string; decimals: string; suffix: string } {
+  const m = /^([^0-9]*)([0-9][0-9,]*)(\.[0-9]+)?(.*)$/.exec(text);
+  if (!m) return { prefix: '', int: text, decimals: '', suffix: '' };
+  return { prefix: m[1] ?? '', int: m[2] ?? '', decimals: m[3] ?? '', suffix: m[4] ?? '' };
 }
 
 /** 按整数位个数取阶梯档位（计划 4.2 的位数规则，作为地板，不单独决定最终档） */
@@ -201,6 +234,7 @@ function RollingCell({
   progress,
   startFraction,
   variant,
+  weight,
   textStyle,
   color,
 }: {
@@ -210,6 +244,8 @@ function RollingCell({
   progress: SharedValue<number>;
   startFraction: number;
   variant: TypographyVariant;
+  /** 字重覆盖（Hero 整数段用 500；省略 = variant 自带档位） */
+  weight?: FontWeightKey;
   textStyle: StyleProp<TextStyle>;
   color: string;
 }) {
@@ -238,13 +274,13 @@ function RollingCell({
     <View style={styles.cell} onLayout={onLayout}>
       <Animated.View style={incomingStyle}>
         {/* 每格只有 1 个字符：这里 numberOfLines={1} 不是「截断金额」，只是保证格子恒为一行高 */}
-        <AppText variant={variant} color={color} style={textStyle} numberOfLines={1}>
+        <AppText variant={variant} weight={weight} color={color} style={textStyle} numberOfLines={1}>
           {char}
         </AppText>
       </Animated.View>
       {from !== null && (
         <Animated.View style={[styles.cellOutgoing, outgoingStyle]} pointerEvents="none">
-          <AppText variant={variant} color={color} style={textStyle} numberOfLines={1}>
+          <AppText variant={variant} weight={weight} color={color} style={textStyle} numberOfLines={1}>
             {from}
           </AppText>
         </Animated.View>
@@ -306,11 +342,17 @@ export function MoneyText({
   roll = true,
   shrinkLadder,
   compactFallback = true,
+  hero = false,
+  heroSize = 58,
   style,
   accessibilityLabel,
 }: MoneyTextProps) {
   const { typography, semantic, motion } = useTheme();
   const token = typography[variant];
+  // UI V2 Hero：整数段基准档 = heroSize（首页 58 / 资产 42 / 记一笔 64），
+  // 各档尺寸在下面按「降级阶梯」从基准档算出（见 heroLadder）
+  const heroIntSize = hero ? heroSize : 0;
+  const baseSize = hero ? heroIntSize : token.fontSize;
   // 软获取：不在 AppDialogProvider 里时返回 null（长按看全文自动禁用，不报错）
   const dialog = useDialogOptional();
 
@@ -332,13 +374,15 @@ export function MoneyText({
             : semantic.textPrimary;
   const resolvedColor = color ?? kindColor;
 
-  // 阶梯：基准 ≥40 的大字号档才走降级（display / amountEntry）
+  // 阶梯：基准 ≥40 的大字号档才走降级（display / amountEntry）；
+  // Hero 走自己的四档（58 → 50 → 42 → 34，比例制）
   const ladder = useMemo(() => {
-    if (shrinkLadder === null) return [token.fontSize];
+    if (shrinkLadder === null) return [baseSize];
     if (shrinkLadder) return shrinkLadder;
+    if (hero) return Array.from(new Set(HERO_LADDER_RATIOS.map((r) => Math.round(heroSize * r))));
     if (token.fontSize < SHRINK_LADDER[0]) return [token.fontSize];
     return SHRINK_LADDER.map((step, index) => (index === 0 ? token.fontSize : step));
-  }, [shrinkLadder, token.fontSize]);
+  }, [shrinkLadder, token.fontSize, hero, heroSize, baseSize]);
 
   // 本组件被允许占的宽度（onLayout 实测：卡片里 = 卡片内宽，行内跟着自己的框走）
   const [availableWidth, setAvailableWidth] = useState(0);
@@ -354,6 +398,27 @@ export function MoneyText({
     setMeasuredEm(null);
   }, [fullText]);
 
+  /**
+   * Hero 专线（与上面的 em 估算无关）：
+   * 1) 用隐藏测量层在**基准档**下量出整串的真实宽度（RM/整数/小数按各自字号拼，绝不被容器裁）；
+   * 2) 各档宽度 = 基准宽 × (档位 ÷ 基准档) —— 所有部件比例都随档位等比，是线性关系；
+   * 3) 可用宽 = 组件当帧实际盒宽。同一行的眼睛按钮（36 + 间距 10）由 Flex 布局从盒宽里
+   *    扣掉**一次**，组件内不再二次扣减（页面别重复扣）。
+   */
+  const [heroBaseWidth, setHeroBaseWidth] = useState<number | null>(null);
+  useEffect(() => {
+    setHeroBaseWidth(null);
+  }, [fullText, heroSize]);
+  const heroTier = useMemo(() => {
+    if (!hero) return 0;
+    if (heroBaseWidth === null || availableWidth <= 0 || heroSize <= 0) return 0;
+    for (let i = 0; i < ladder.length; i++) {
+      const size = ladder[i] ?? heroSize;
+      if (heroBaseWidth * (size / heroSize) <= availableWidth + 0.5) return i;
+    }
+    return -1; // 四档全部放不下 → 才走紧凑格式
+  }, [hero, heroBaseWidth, availableWidth, ladder, heroSize]);
+
   // ── 选文本 + 选档（顺序很重要：先按完整金额选，放不下才退紧凑格式） ──
   // 字距总贡献（px，与字号无关）：display 档 −0.8 × 26 字符 ≈ −21px，不能忽略
   const spacingTotal = token.letterSpacing * fullText.length;
@@ -361,6 +426,7 @@ export function MoneyText({
   const widthEm = measuredEm ?? estimatedEm;
   // 只在「估算说放不下、又还没实测过」时渲染隐藏测量层做精确判定（平时不占节点）
   const needsMeasure =
+    !hero &&
     measuredEm === null &&
     availableWidth > 0 &&
     !fitsByEm(estimatedEm, ladder[0] ?? token.fontSize, spacingTotal, availableWidth);
@@ -371,28 +437,42 @@ export function MoneyText({
   // ⚠ |值| ≥ 1e21 时 JS 的 toFixed 会吐指数写法（"1.23e+21"）—— 这种文本一律走紧凑格式，
   //   屏幕上不能出现 e+21 这种东西（现实金额到不了这个量级，属于数据异常兜底）。
   const unusableText = /e[+-]\d/.test(fullText);
-  const useCompact =
-    compactFallback &&
-    !hidden &&
-    (unusableText || (measuredEm !== null && fullTier < 0 && availableWidth > 0));
+  const useCompact = hero
+    ? compactFallback && !hidden && heroBaseWidth !== null && availableWidth > 0 && heroTier < 0
+    : compactFallback &&
+      !hidden &&
+      (unusableText || (measuredEm !== null && fullTier < 0 && availableWidth > 0));
   const shownText = useMemo(
     () => (useCompact ? formatMoney(value, { ...formatOptions, compact: true }) : fullText),
     [useCompact, value, formatOptions, fullText]
   );
-  const tier = useCompact
-    ? Math.max(0, tierFitting(estimateEm(shownText), token.letterSpacing * shownText.length, ladder, availableWidth))
-    : Math.max(0, fullTier, digitTier(moneyIntDigits(fullText)));
+  const tier = hero
+    ? useCompact
+      ? 0
+      : Math.max(0, heroTier)
+    : useCompact
+      ? Math.max(0, tierFitting(estimateEm(shownText), token.letterSpacing * shownText.length, ladder, availableWidth))
+      : Math.max(0, fullTier, digitTier(moneyIntDigits(fullText)));
   const fontSize = ladder[Math.min(tier, ladder.length - 1)] ?? token.fontSize;
   const lineHeight = Math.round((token.lineHeight / token.fontSize) * fontSize);
   const sizeStyle: TextStyle | undefined =
     fontSize === token.fontSize && lineHeight === token.lineHeight ? undefined : { fontSize, lineHeight };
+
+  // Hero 渲染尺寸：各部件都从**当前档**（可能是降级后的 50/42/34）派生，保证整串等比缩放
+  const heroPrefixSize = Math.round(fontSize * HERO_PREFIX_RATIO);
+  const heroDecimalsSize = Math.round(fontSize * HERO_DECIMALS_RATIO);
+  const heroLetterSpacing = Math.round(fontSize * HERO_LETTER_RATIO * 10) / 10;
+  const heroLineHeight = Math.round(fontSize * HERO_LINE_RATIO);
 
   /* -------------------------------------------------- 布局 / 文本样式拆分 */
 
   const flatStyle = (StyleSheet.flatten(style) ?? {}) as TextStyle;
   // 容器只认「盒子」属性；其余（color / 字距 / 变形 …）交给文字本身
   const containerStyle: TextStyle = {
-    flexShrink: flatStyle.flexShrink ?? 0,
+    // Hero：金额要能被同行控件（如「隐藏金额」眼睛）挤窄 —— 由 Flex 布局把 36 + 间距 10
+    // 扣掉**一次**（盒宽 = 剩余可用宽）；普通用法保持 0（内容宽即全部，老行为不变）
+    flexShrink: flatStyle.flexShrink ?? (hero ? 1 : 0),
+    ...(hero ? { minWidth: 0 } : null),
     alignSelf: flatStyle.alignSelf,
     opacity: flatStyle.opacity,
     marginTop: flatStyle.marginTop,
@@ -418,7 +498,12 @@ export function MoneyText({
 
   /* ------------------------------------------------------------ 滚动状态 */
 
-  const [cells, setCells] = useState<MoneyCell[]>(() => splitCells(shownText, null, false));
+  // Hero：把「前缀 / 整数 / 小数 / 后缀」拆开（整数段照常逐位滚动，其余是静态小字）
+  const heroParts = useMemo(() => (hero ? splitHeroParts(shownText) : null), [hero, shownText]);
+  /** 送进滚动状态机的文本：非 Hero = 整段，Hero = 只滚整数段 */
+  const rollText = heroParts ? heroParts.int : shownText;
+
+  const [cells, setCells] = useState<MoneyCell[]>(() => splitCells(rollText, null, false));
   const [hasRolled, setHasRolled] = useState(false);
   const progress = useSharedValue(1);
   const prevTextRef = useRef<string | null>(null);
@@ -430,14 +515,14 @@ export function MoneyText({
 
   useEffect(() => {
     const prevText = prevTextRef.current;
-    prevTextRef.current = shownText;
+    prevTextRef.current = rollText;
     // 首次渲染（挂载）不滚动；文本没变也不动
-    if (prevText === null || prevText === shownText) return;
+    if (prevText === null || prevText === rollText) return;
 
     // 首屏数据到位（挂载后 600ms 内的首次赋值）不滚动：不算「用户操作引起的变化」
     const isFirstLoad = Date.now() - mountedAtRef.current < FIRST_LOAD_WINDOW_MS;
     const canRoll = roll && !motion.reduceMotion && !isFirstLoad;
-    const next = splitCells(shownText, prevText, canRoll);
+    const next = splitCells(rollText, prevText, canRoll);
     setCells(next);
 
     if (next.some((c) => c.from !== null)) {
@@ -452,7 +537,8 @@ export function MoneyText({
         }
       );
     }
-  }, [shownText, roll, motion]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rollText, roll, motion]);
 
   /* ------------------------------------------------------------- 渲染 */
 
@@ -475,6 +561,160 @@ export function MoneyText({
       }}
     />
   ) : null;
+
+  // Hero 隐藏测量层：在**基准档**下把「RM + 整数 + 小数」按各自字号拼出来量真实宽（透明、不参与排版）。
+  // ⚠ 量的是完整金额（fullText）而不是屏上文本：紧凑格式切换后基准宽必须保持不变，
+  //   否则「放不下 → 紧凑 → 变小 → 又放得下」会来回翻。
+  const heroPartsFull = useMemo(() => (hero ? splitHeroParts(fullText) : null), [hero, fullText]);
+  // 测量盒宽：按 em 估算放大 1.5 倍 + 余量，保证长金额不先被测量盒自己裁掉（否则量出来是盒宽、不是真宽）
+  const heroMeasureBoxWidth = useMemo(() => {
+    if (!hero || !heroPartsFull) return 0;
+    const em =
+      estimateEm(heroPartsFull.prefix) * HERO_PREFIX_RATIO +
+      estimateEm(heroPartsFull.int) +
+      (estimateEm(heroPartsFull.decimals) + estimateEm(heroPartsFull.suffix)) * HERO_DECIMALS_RATIO;
+    return Math.ceil(em * heroSize * 1.5) + 64;
+  }, [hero, heroPartsFull, heroSize]);
+  const heroMeasureLayer =
+    hero && heroPartsFull && availableWidth > 0 ? (
+      <View
+        pointerEvents="none"
+        accessible={false}
+        style={[styles.measureBox, { width: heroMeasureBoxWidth }]}
+      >
+        <View
+          style={styles.row}
+          onLayout={(e) => {
+            const w = Math.round(e.nativeEvent.layout.width);
+            if (w > 0 && w !== heroBaseWidth) setHeroBaseWidth(w);
+          }}
+        >
+          {heroPartsFull.prefix ? (
+            <AppText
+              variant={variant}
+              weight="300"
+              color="transparent"
+              numberOfLines={1}
+              style={{ fontSize: Math.round(heroSize * HERO_PREFIX_RATIO), lineHeight: Math.round(heroSize * HERO_PREFIX_RATIO * 1.15), marginRight: HERO_PREFIX_GAP }}
+            >
+              {heroPartsFull.prefix}
+            </AppText>
+          ) : null}
+          <AppText
+            variant={variant}
+            weight="500"
+            color="transparent"
+            numberOfLines={1}
+            style={{
+              fontSize: heroSize,
+              lineHeight: Math.round(heroSize * HERO_LINE_RATIO),
+              letterSpacing: Math.round(heroSize * HERO_LETTER_RATIO * 10) / 10,
+            }}
+          >
+            {heroPartsFull.int}
+          </AppText>
+          {heroPartsFull.decimals ? (
+            <AppText
+              variant={variant}
+              weight="300"
+              color="transparent"
+              numberOfLines={1}
+              style={{ fontSize: Math.round(heroSize * HERO_DECIMALS_RATIO), lineHeight: Math.round(heroSize * HERO_DECIMALS_RATIO * 1.15) }}
+            >
+              {heroPartsFull.decimals}
+            </AppText>
+          ) : null}
+          {heroPartsFull.suffix ? (
+            <AppText
+              variant={variant}
+              weight="300"
+              color="transparent"
+              numberOfLines={1}
+              style={{ fontSize: Math.round(heroSize * HERO_DECIMALS_RATIO), lineHeight: Math.round(heroSize * HERO_DECIMALS_RATIO * 1.15) }}
+            >
+              {heroPartsFull.suffix}
+            </AppText>
+          ) : null}
+        </View>
+      </View>
+    ) : null;
+
+  // Hero 路径（UI V2）：整数段大（500 + 负字距）、RM 与小数为 300 且降透明度；
+  // 整数段沿用逐位滚动（cells 里 from=null 时就是静态字符）。整行底部对齐（row 的 flex-end），
+  // 长按看全文的手势与普通路径共用。
+  if (hero && heroParts) {
+    const heroIntStyle: TextStyle = {
+      fontSize,
+      lineHeight: heroLineHeight,
+      letterSpacing: heroLetterSpacing,
+    };
+    const heroPrefixStyle: TextStyle = {
+      fontSize: heroPrefixSize,
+      lineHeight: Math.round(heroPrefixSize * 1.15),
+      opacity: 0.8,
+      marginRight: HERO_PREFIX_GAP,
+    };
+    const heroDecimalsStyle: TextStyle = {
+      fontSize: heroDecimalsSize,
+      lineHeight: Math.round(heroDecimalsSize * 1.15),
+      opacity: 0.7,
+    };
+
+    const heroContent = (
+      <View
+        style={[styles.row, containerStyle]}
+        onLayout={measureWidth}
+        accessible={!longPressable}
+        accessibilityLabel={longPressable ? undefined : a11yLabel}
+      >
+        {heroParts.prefix ? (
+          <AppText variant={variant} weight="300" color={resolvedColor} style={[heroPrefixStyle, cellTextStyle]} numberOfLines={1}>
+            {heroParts.prefix}
+          </AppText>
+        ) : null}
+        {cells.map((cell) => (
+          <RollingCell
+            key={cell.key}
+            char={cell.char}
+            from={cell.from}
+            progress={progress}
+            startFraction={cell.delay / (motion.timing.numberRoll + STAGGER_MAX_STEPS * STAGGER_MS)}
+            variant={variant}
+            weight="500"
+            textStyle={[heroIntStyle, cellTextStyle]}
+            color={resolvedColor}
+          />
+        ))}
+        {heroParts.decimals ? (
+          <AppText variant={variant} weight="300" color={resolvedColor} style={[heroDecimalsStyle, cellTextStyle]} numberOfLines={1}>
+            {heroParts.decimals}
+          </AppText>
+        ) : null}
+        {heroParts.suffix ? (
+          <AppText variant={variant} weight="300" color={resolvedColor} style={[heroDecimalsStyle, cellTextStyle]} numberOfLines={1}>
+            {heroParts.suffix}
+          </AppText>
+        ) : null}
+        {heroMeasureLayer}
+      </View>
+    );
+
+    if (longPressable && dialog) {
+      return (
+        <Pressable
+          style={containerStyle}
+          onLongPress={() => dialog.alert({ title: fullText })}
+          delayLongPress={400}
+          accessibilityRole="button"
+          accessibilityLabel={a11yLabel}
+          accessibilityHint={fullText}
+        >
+          {heroContent}
+        </Pressable>
+      );
+    }
+    return heroContent;
+  }
 
   // 静态路径（挂载时 / roll 关闭 / 减弱动态效果）：整段一个 Text，最省。
   // ⚠ numberOfLines={1} + ellipsizeMode="clip"：金额恒一行、**永不换行也永不出省略号**，
