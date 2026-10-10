@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,7 +8,7 @@ import {
   Pressable,
   ScrollView,
   ActivityIndicator,
-  Image,
+  Animated,
   Modal,
   Switch,
   Dimensions,
@@ -16,20 +16,12 @@ import {
   Keyboard,
 } from 'react-native';
 import DraggableFlatList, { ScaleDecorator, RenderItemParams } from 'react-native-draggable-flatlist';
-import Reanimated, {
-  useAnimatedScrollHandler,
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-  runOnJS,
-} from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import Svg, { Path } from 'react-native-svg';
-import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import { useApp } from '../context/AppContext';
 import { ROUTES } from '../navigation/routes';
@@ -39,22 +31,48 @@ import { useT, useLanguage } from '../i18n/LanguageContext';
 import { getCategoryLabel, getGroupLabel, findCategoryIdByChineseName } from '../i18n/categories';
 import { EXPENSE_CATEGORY_GROUPS, INCOME_CATEGORY_GROUPS } from '../utils/defaultCategories';
 import { scanReceipt } from '../utils/scanReceipt';
-import { getCurrencySymbol, getCurrencyFlag } from '../utils/currencies';
+import { getCurrencySymbol } from '../utils/currencies';
 import { CATEGORY_ICON_OPTIONS, CATEGORY_COLOR_OPTIONS, CategoryIconName } from '../constants/categoryAddOptions';
-import { getAssetDisplayBalance, getAssetTransferBalance } from '../utils/creditCard';
 import { hapticLight, hapticSelection, hapticSuccess, hapticWarning } from '../utils/haptics';
 import { useTheme } from '../theme/useTheme';
+import { useLayout } from '../theme/useLayout';
 import { useTabClearance } from '../hooks/useTabClearance';
 import { useTabBarScrollHandler, useTabBarForceHide } from '../context/TabBarAutoHideContext';
-import { ThemeColors } from '../theme/theme';
+import { ThemeColors, SemanticColors, Spacing, Layout, Radius, categoryRing } from '../theme/theme';
 import { useAmountExpression } from '../hooks/useAmountExpression';
+import { getExpressionTotal } from '../utils/amountExpression';
+import { formatMoney } from '../utils/formatMoney';
+import { formatDate as formatDateLabel } from '../utils/formatDate';
 import { AmountCalculatorKeypad } from '../components/AmountCalculatorKeypad';
 import { CursorAmountText } from '../components/CursorAmountText';
 import { ReceiptCameraModal } from '../components/ReceiptCameraModal';
+import AppText from '../components/ui/AppText';
+import Badge from '../components/ui/Badge';
+import Button from '../components/ui/Button';
+import Card from '../components/ui/Card';
+import IconButton from '../components/ui/IconButton';
+import ScreenHeader from '../components/ui/ScreenHeader';
+import GlassView from '../components/ui/GlassView';
+import { withAlpha } from '../components/ui/color';
+import HeroGradient from '../components/ui/HeroGradient';
+import IconCircle from '../components/ui/IconCircle';
+import PressableScale from '../components/PressableScale';
+import { TransactionTypeHeader } from '../components/transaction/TransactionTypeHeader';
+import { TransactionChip } from '../components/transaction/TransactionChip';
+import { AccountPickerSheet } from '../components/transaction/AccountPickerSheet';
+import { CategoryPickerSheet } from '../components/transaction/CategoryPickerSheet';
+import { ReceiptPreviewModal } from '../components/transaction/ReceiptPreviewModal';
 import { useDialog } from '../components/AppDialog';
 
 
 type IconName = keyof typeof Ionicons.glyphMap;
+
+/** 渐变上的白字档（UI V2 稿 / ComponentGallery 同一约定：不在主题色板内，直接字面量） */
+const V2_ON_GRADIENT = '#FFFFFF';
+/** 渐变上的次要白（chevron 等辅助图标） */
+const V2_ON_GRADIENT_DIM = 'rgba(255,255,255,0.85)';
+/** 记一笔 Hero 渐变高度（UI V2 定稿 400；矮屏 ×0.9） */
+const HERO_GRADIENT_HEIGHT = 400;
 
 // iOS 风格"左侧边缘右滑返回"：从屏幕左边缘(40px内)横向右滑超过阈值就返回。
 // manualActivation 手动接管：只有"起点贴近左边缘且横向位移占主导"才激活手势，
@@ -106,6 +124,177 @@ function twoLineLabel(label: string, boxW: number, fullW: number) {
   return boxW < fullW && label.indexOf(' ') > 0 ? label.replace(' ', '\n') : label;
 }
 
+// T14：把 getExpressionDisplay() 的输出（"5.00" / "5.00 + 2.00"）还原成求和函数要吃的最小结构，
+// 交给共享的 getExpressionTotal 求和——只为「算式在上、合计在下」的展示，不改任何计算逻辑
+// （保存时的金额仍由 amountExpr.confirm() 出，这里是纯展示值）
+function expressionTotal(display: string): number {
+  const tokens = display.split(/\s+([+-])\s+/); // 值 / 运算符交替
+  const terms = tokens
+    .filter((_, i) => i % 2 === 0)
+    .map((tok, i) => ({
+      op: (i === 0 ? '+' : (tokens[i * 2 - 1] as '+' | '-')),
+      raw: String(Math.round((parseFloat(tok) || 0) * 100)),
+    }));
+  return getExpressionTotal({ terms });
+}
+
+/** 金额字号档位（UI_RULES 第 5 节：按档位降级、不做连续压缩）。
+ *  V2 稿基准档 64（矮屏 58）；长串按 44 → 34 两档降级，保证 14 位大数字也不溢出 */
+function amountFontTier(display: string, base: number): number {
+  if (display.length <= 9) return base;
+  if (display.length <= 12) return 44;
+  return 34;
+}
+
+// ---------- UI V2 记一笔：Hero 金额（稿）----------
+// 整数段 = 基准 64/500 白（字距 −2.5、行高 66）；「.小数」段 = 34/300 白 70%（稿的降透明度）。
+// 键盘开着时把闪烁光标画在「光标所在的那一段」里：复用 CursorAmountText 的点按/拖动定位，
+// 只做 cursorFromEnd 的全串 ↔ 分段换算（整段：Li − si；小段：Li + Ld − si）。
+// 为什么不是 MoneyText / CursorAmountText 单独搞定：MoneyText hero 没有光标，
+// CursorAmountText 不拆整数/小数（组件都在别处、本车道不改），两个片段各自渲染是唯一不损功能的组合。
+const HERO_INT_RATIO_DEC = 34 / 64; // 小数段 ÷ 整数段（稿 34/64）
+const HERO_LINE_RATIO = 66 / 64; // 行高 ÷ 字号（稿 line-height 66）
+const HERO_LETTER_RATIO = -2.5 / 64; // 字距 ÷ 字号（稿 letter-spacing −2.5）
+
+/** Hero 金额 / 成功勾选徽章的静态样式（颜色全在组件内取稿的字面白档，与主题无关） */
+const v2Styles = StyleSheet.create({
+  heroAmountRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'center' },
+  saveFlashOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 50,
+  },
+  saveFlashBadge: {
+    width: 64,
+    height: 64,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+});
+
+function HeroAmountText({
+  display,
+  fontSize,
+  cursorFromEnd,
+  cursorActive,
+  onCursorChange,
+}: {
+  display: string;
+  fontSize: number;
+  cursorFromEnd: number;
+  /** 光标是否可见（键盘开着且不是多项算式的合计态） */
+  cursorActive: boolean;
+  onCursorChange: (cursorFromEnd: number) => void;
+}) {
+  const dotIdx = display.indexOf('.');
+  const intPart = dotIdx < 0 ? display : display.slice(0, dotIdx);
+  const decPart = dotIdx < 0 ? '' : display.slice(dotIdx);
+  const intLen = intPart.length;
+  const decLen = decPart.length;
+  // 光标在整串中的「前面有几个字符」位置（0 = 最前）
+  const cursorIdx = Math.max(0, Math.min(display.length, display.length - cursorFromEnd));
+  const cursorInInt = cursorIdx <= intLen;
+
+  const intSize = fontSize;
+  const decSize = Math.round(fontSize * HERO_INT_RATIO_DEC);
+  const intStyle = {
+    fontSize: intSize,
+    lineHeight: Math.round(intSize * HERO_LINE_RATIO),
+    fontWeight: '500' as const,
+    letterSpacing: Math.round(fontSize * HERO_LETTER_RATIO * 10) / 10,
+    color: '#FFFFFF',
+  };
+  const decStyle = {
+    fontSize: decSize,
+    lineHeight: Math.round(decSize * HERO_LINE_RATIO),
+    fontWeight: '300' as const,
+    // 稿：小数部分降透明度
+    color: 'rgba(255,255,255,0.7)',
+  };
+  // 光标：白色细竖条（稿里是 2×44 渐变条；这里沿用文字光标字形，尺寸跟着片段字号）
+  const cursorStyle = {
+    fontSize: Math.round(intSize * 0.68),
+    fontWeight: '300' as const,
+    color: 'rgba(255,255,255,0.9)',
+    marginLeft: 2,
+  };
+
+  const showCursor = cursorActive && display.length > 0;
+  const intWithCursor = showCursor && cursorInInt;
+  const decWithCursor = showCursor && !cursorInInt && decLen > 0;
+
+  return (
+    <View style={v2Styles.heroAmountRow}>
+      {intWithCursor ? (
+        <CursorAmountText
+          display={intPart}
+          cursorFromEnd={intLen - cursorIdx}
+          onCursorChange={(segFromEnd) => onCursorChange(display.length - (intLen - segFromEnd))}
+          style={intStyle}
+          cursorStyle={cursorStyle}
+          numberOfLines={1}
+        />
+      ) : (
+        <Text style={intStyle} numberOfLines={1}>
+          {intPart}
+        </Text>
+      )}
+      {decLen > 0 &&
+        (decWithCursor ? (
+          <CursorAmountText
+            display={decPart}
+            cursorFromEnd={decLen - (cursorIdx - intLen)}
+            onCursorChange={(segFromEnd) => onCursorChange(display.length - (intLen + decLen - segFromEnd))}
+            style={decStyle}
+            cursorStyle={cursorStyle}
+            numberOfLines={1}
+          />
+        ) : (
+          <Text style={decStyle} numberOfLines={1}>
+            {decPart}
+          </Text>
+        ))}
+    </View>
+  );
+}
+
+// ---------- UI V2 T17：保存成功的 300ms 勾选动画 ----------
+// 保存成功 = success 震动（调用方发）+ 中央勾选徽章 120ms 弹入，300ms 后由调用方照原逻辑返回/留页。
+// 徽章用 accent 渐变（与「完成」键同一档），纯装饰、不接触摸。
+function SaveSuccessFlash() {
+  const scale = useRef(new Animated.Value(0.6)).current;
+  const opacity = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(opacity, { toValue: 1, duration: 110, useNativeDriver: true }),
+      Animated.spring(scale, { toValue: 1, friction: 6, tension: 180, useNativeDriver: true }),
+    ]).start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const { gradients } = useTheme();
+  return (
+    <View style={v2Styles.saveFlashOverlay} pointerEvents="none">
+      <Animated.View style={[v2Styles.saveFlashBadge, { opacity, transform: [{ scale }] }]}>
+        <LinearGradient
+          colors={gradients.accent.colors}
+          locations={gradients.accent.locations as [number, number, ...number[]]}
+          start={gradients.accent.start}
+          end={gradients.accent.end}
+          style={StyleSheet.absoluteFill}
+        />
+        <Ionicons name="checkmark" size={34} color="#FFFFFF" />
+      </Animated.View>
+    </View>
+  );
+}
+
 type Step = 'category' | 'detail' | 'transferDetail';
 
 // 类别横排"最近用过"快捷选择：本地存一份最近选过的类别 id（新的插最前面，去重），
@@ -130,7 +319,9 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   const { categories, categoryGroups, addCategory, addCategoryGroup, deleteCategoryGroup, addTransaction, updateTransaction, addTransfer, updateCategory, deleteCategory, deleteTransaction, assets, getAssetBalance, currencySymbol, currency, activeLedgerId, paymentPlans, addPaymentPlan } =
     useApp();
   const insets = useSafeAreaInsets();
-  const { colors, isDark } = useTheme();
+  const { colors, isDark, semantic, spacing, layout, radius } = useTheme();
+  // 矮屏（可用高 < 700）：金额卡内边距 / 行距再收紧一档，保证「金额 + 至少 2 行类别 + 键盘」一屏可见
+  const { isShort, categoryColumns } = useLayout();
   const t = useT();
   const { langMode } = useLanguage();
   // 主题化弹窗（替代系统 Alert）
@@ -139,7 +330,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   const onTabScroll = useTabBarScrollHandler(); // 不传参数！
   const setTabBarForceHidden = useTabBarForceHide();
   const isFocused = useIsFocused();
-  const styles = useMemo(() => makeStyles(colors, isDark), [colors, isDark]);
+  const styles = useMemo(() => makeStyles(colors, isDark, semantic, spacing, layout, radius), [colors, isDark, semantic, spacing, layout, radius]);
 
   const editTransaction: Transaction | undefined = route?.params?.editTransaction;
   const isEditing = !!editTransaction;
@@ -194,64 +385,9 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   // 普通收支专用：可选的资产账户（这笔钱从/到哪个账户）——没有编辑数据时，用"资产"页设的默认账户
   const [assetId, setAssetId] = useState<string | null>(editTransaction?.assetId ?? defaultAsset?.id ?? null);
   const [assetPickerOpen, setAssetPickerOpen] = useState(false);
-  // 账户选择弹窗下滑收起（与日期选择面板同款的 manualActivation 手势 + 树内覆盖层）：
-  // - 账户列表滚到顶部时往下拖 → 接管手势，整块面板跟手下移，松手超过 120px / 快速甩动就收起
-  // - 列表不在顶部、或往上拖 → 不接管，账户列表照常滚动；从把手/头部下滑永远生效
-  const accountPickerPanY = useSharedValue(0);
-  const accountPickerScrim = useSharedValue(0);
-  // 列表滚动偏移：手动经 useAnimatedScrollHandler 写进 sharedValue（UI 线程零延迟）。
-  // 之前用 useScrollViewOffset(accountListRef)，但 ScrollView 挂在 assetPickerOpen 条件分支里，
-  // 弹窗未打开时 ref 未挂载，Reanimated 每帧报 "animatedRef is not initialized" 警告
-  const accountListOffset = useSharedValue(0);
-  const accountListScrollHandler = useAnimatedScrollHandler((e) => {
-    accountListOffset.value = e.contentOffset.y;
-  });
-  const pickerDragStart = useSharedValue({ x: 0, y: 0 });
-  const accountPickerClosingSV = useSharedValue(false);
-  const closeAccountPicker = () => {
-    // 支出/收入与转账/兑换共用同一个弹层外壳（两个分支互斥渲染，永远只开一个），这里一把全关
-    setAssetPickerOpen(false);
-    setAccountPickerOpen(false);
-    setCurrencyDropOpen(false);
-  };
-  const accountPickerGesture = Gesture.Pan()
-    .manualActivation(true)
-    .onTouchesDown((e) => {
-      const t = e.allTouches[0];
-      pickerDragStart.value = { x: t?.absoluteX ?? 0, y: t?.absoluteY ?? 0 };
-    })
-    .onTouchesMove((e, stateManager) => {
-      const t = e.allTouches[0];
-      if (!t) return;
-      if (accountListOffset.value > 0) return; // 列表不在顶部：不接管，让它正常滚
-      const dy = t.absoluteY - pickerDragStart.value.y;
-      const dx = t.absoluteX - pickerDragStart.value.x;
-      if (dy > 12 && Math.abs(dy) > Math.abs(dx) * 1.2) stateManager.activate();
-    })
-    .onUpdate((e) => {
-      accountPickerPanY.value = Math.max(0, e.translationY);
-      accountPickerScrim.value = Math.min(0.4, Math.max(0, e.translationY) / 500 + 0.15);
-    })
-    .onEnd((e) => {
-      if (e.translationY > 120 || e.velocityY > 800) {
-        if (accountPickerClosingSV.value) return;
-        accountPickerClosingSV.value = true;
-        accountPickerScrim.value = withTiming(0, { duration: 180 });
-        accountPickerPanY.value = withTiming(900, { duration: 220 }, (finished) => {
-          if (finished) runOnJS(closeAccountPicker)();
-        });
-      } else {
-        accountPickerPanY.value = withTiming(0, { duration: 180 });
-        accountPickerScrim.value = withTiming(0.4, { duration: 150 });
-      }
-    });
-  const accountPickerAnimStyle = useAnimatedStyle(
-    () => ({ transform: [{ translateY: accountPickerPanY.value }] }),
-    []
-  );
-  const accountPickerScrimStyle = useAnimatedStyle(() => ({ opacity: accountPickerScrim.value }), []);
+  // 「全部」类别抽屉（T15）：打开完整列表；管理与排序入口在里面 →（管理类别）→ 选择类别页
+  const [catSheetOpen, setCatSheetOpen] = useState(false);
 
-  // 入场动画已移到下方 accountPickerOpen 声明之后：两个分支共用一套面板动画
   // 用户手动选过账户后就不再自动跟随"默认账户"变化；保存后重置（resetAll）恢复自动跟随。
   // 编辑已有账单时初始值来自账单本身，视为已手动确定
   const userPickedAssetRef = useRef(!!editTransaction?.assetId);
@@ -292,33 +428,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   // 转账/兑换账户选择：不再经过独立的“选择步骤”，直接在当前页面通过弹层菜单切换账户
   const [accountPickerOpen, setAccountPickerOpen] = useState(false);
   const [accountPickerRole, setAccountPickerRole] = useState<'from' | 'to'>('from');
-  const [accountSearch, setAccountSearch] = useState('');
-  const [accountFilter, setAccountFilter] = useState<'all' | 'cash' | 'bank' | 'credit' | 'ewallet'>('all');
-  // TASK-025：账户弹层币种分组（资产页内联菜单式）——反向记录「被收起」的组，默认全展开；
-  // 点分组头切换；两处弹层（支出/收入 assetPicker 与转账/兑换 accountPicker）共用
-  const [pickerCollapsedGroups, setPickerCollapsedGroups] = useState<Set<string>>(new Set());
-  const togglePickerGroup = (code: string) => {
-    setPickerCollapsedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(code)) next.delete(code);
-      else next.add(code);
-      return next;
-    });
-  };
 
-  // 入场：面板从屏幕外滑入 + 遮罩淡入（panY 复位也在这里做，保证每次打开都是全新状态）。
-  // 支出/收入（assetPickerOpen）与转账/兑换（accountPickerOpen）共用同一套面板动画；
-  // 列表滚动偏移一并清零——上次打开时滚到中间残留的话，下滑收起手势会因"列表不在顶部"失灵
-  useEffect(() => {
-    if (assetPickerOpen || accountPickerOpen) {
-      accountPickerClosingSV.value = false;
-      accountPickerPanY.value = 900;
-      accountPickerScrim.value = 0;
-      accountListOffset.value = 0;
-      accountPickerPanY.value = withTiming(0, { duration: 260 });
-      accountPickerScrim.value = withTiming(0.4, { duration: 260 });
-    }
-  }, [assetPickerOpen, accountPickerOpen, accountPickerPanY, accountPickerScrim, accountListOffset]);
 
   // Enter/下一步跳到"备注"这个真实输入框——详情页和转账页的备注框不会同时挂载，共用一个 ref 就够
   const noteInputRef = useRef<TextInput>(null);
@@ -514,12 +624,15 @@ export default function AddTransactionScreen({ navigation, route }: any) {
 
   // ---------- 类别横排"最近用过"：外面直接显示4个，点了就直接选中，不用进选择页 ----------
   const [recentCategoryIds, setRecentCategoryIds] = useState<string[]>([]);
+  /** 网格顺序重建代号：列表数据（最近用过 / 固定格）落地、类型切换、重进页面（resetAll）时 +1 */
+  const [catListsGen, setCatListsGen] = useState(0);
   useEffect(() => {
     AsyncStorage.getItem(RECENT_CATEGORY_KEY)
       .then((raw) => {
         if (!raw) return;
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) setRecentCategoryIds(parsed);
+        setCatListsGen((g) => g + 1); // 最近用过落地 → 重建网格顺序
       })
       .catch(() => {});
   }, []);
@@ -554,6 +667,10 @@ export default function AddTransactionScreen({ navigation, route }: any) {
           } catch {}
         }
       })
+      .then(() => {
+        // 固定格数据落地（或已无更多读取）→ 重建网格顺序
+        if (!cancelled) setCatListsGen((g) => g + 1);
+      })
       .catch(() => {});
     return () => {
       cancelled = true;
@@ -569,13 +686,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
     });
   };
   // 最近用过的排前面，不够4个就用当前类型下的其他类别补齐，保证横排始终有得选
-  // ---------- 类别自适应网格：按机型定列数，最近用过的往下开新行，"全部"永远殿后 ----------
-  // 列数（类别胶囊数，不含"全部"）按屏宽分档：≥420 宽机 4 个，其余窄/中机 3 个；
-  // "全部"入口独占行尾一格，不与类别挤。用户选了新类别就追加进网格，
-  // "全部"随之往下移一行；网格不限行数（TASK-007），挤满自动换行继续往下铺
-  const winW = Dimensions.get('window').width;
-  const categoryColumns = winW >= 420 ? 4 : 3;
-  const categoryChipW = (winW - 36 - categoryColumns * 5) / (categoryColumns + 1);
+  // ---------- 类别网格（T15）：列数取 useLayout().categoryColumns（窄屏 4 / 常规·大屏 5，"全部"占一格） ----------
 
   // ---------- 类别网格内容：固定格 + 首行补齐 ----------
   // - 固定格：本次会话新选过的类别（新的在最前）+ 本地"最近用过"（记账成功时写入），顺序固定；
@@ -586,22 +697,36 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   const [sessionPickedIds, setSessionPickedIds] = useState<string[]>([]);
 
   const selectedCategory = categories.find((c) => c.id === categoryId);
-  // ---------- 可见容量计算（TASK-024：挪到 gridPinned 之前——补齐目标要用 gridMaxCount） ----------
-  // 五轮（用户定版尝试）：外层换成普通 View 不再可滚——内容物理上不可能滚到键盘底下，
-  // flex 纵向布局自动把键盘面板高度从容器里扣除，「全部」按钮天然停在键盘上沿。
-  // 兜底：仍保留容量 slice——用 View 的 onLayout 高度（已扣键盘）和网格顶内容坐标计算，
-  // 超出容量的类别不渲染，保证任何机型「全部」都完整可见。
-  const [scrollViewH, setScrollViewH] = useState<number | null>(null);
-  const [gridTopY, setGridTopY] = useState<number | null>(null);
-  // 行高（2026-09-25 字号15批次）：图标 23 + paddingV 3.5×2 + 边框 2 ≈ 32，+ 行距 6 = 38
-  const chipRowHeight = 38;
-  const columnsInRow = categoryColumns + 1; // 类别列 + 「全部」行尾格
-  const gridVisibleRows =
-    scrollViewH == null || gridTopY == null
-      ? null
-      : Math.max(1, Math.floor((scrollViewH - gridTopY) / chipRowHeight));
-  const gridMaxCount =
-    gridVisibleRows == null ? null : gridVisibleRows * columnsInRow - 1;
+  // ---------- T15：类别网格容量（实测，不再按字符估宽）----------
+  // 网格区是可滚动的 flex:1 区域：实测到多少高度就铺多少格（至少 2 行 —— 计划 8.2 第 7 条
+  // 「金额 + 至少 2 行类别 + 键盘」一屏可见）；历史用过的类别超出可见容量时靠网格滚动查看，不再裁剪
+  const [gridH, setGridH] = useState<number | null>(null);
+  /** 一格高度 = 48 圆（V2） + 4 标签间距 + 16 单行标签预留 + 4 顶距 + 4 行距 = 76
+   *  （与 catCell / catCellLabel / catGridContent 样式同步；两行标签的格子自然变高，网格可滚动） */
+  const CAT_CELL_ROW_HEIGHT = 76;
+  const gridVisibleRows = gridH == null ? null : Math.max(2, Math.floor(gridH / CAT_CELL_ROW_HEIGHT));
+  const gridMaxCount = gridVisibleRows == null ? null : gridVisibleRows * categoryColumns - 1;
+  // ---------- 网格顺序冻结（T15 修正）----------
+  // 进入页面 / 切换支出·收入 / 列表数据落地（catListsGen）/ 保存后重进页面（resetAll）时重建一次；
+  // 本次会话里「点网格格子」只高亮、不重排 —— 修「手指下的格子弹到第 1 格」；
+  // 只有从「全部」抽屉选了「网格里没有」的类别才插到第 1 格（见抽屉 onPickCategory）；
+  // 下次进页面仍按最近使用排序（点选照旧写 sessionPicked / recent，只是不改本次的顺序）
+  const [gridOrder, setGridOrder] = useState<string[]>([]);
+  useEffect(() => {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    const push = (id: string) => {
+      if (!seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    };
+    sessionPickedIds.forEach(push);
+    recentCategoryIds.forEach(push);
+    setGridOrder(ids);
+    // 有意不把 sessionPickedIds / recentCategoryIds 放进依赖：点选会改它们，但顺序要冻结
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uiType, isEditing, catListsGen]);
   const gridPinned = useMemo(() => {
     const byId = new Map(filteredCategories.map((c) => [c.id, c] as const));
     const pinned: Category[] = [];
@@ -614,86 +739,34 @@ export default function AddTransactionScreen({ navigation, route }: any) {
         seen.add(id);
       }
     };
-    sessionPickedIds.forEach(push);
-    recentCategoryIds.forEach(push);
-    // TASK-024：补齐目标从"第一行"扩为"全部可见容量"（gridMaxCount 已为「全部」预留 -1 格）——
-    // Hero 区腾出的空间有多少格就填多少格（第 5 行自动出现）；首帧容量未知时维持只补第一行。
-    // 新选/最近用过的永远排在补齐类别前面，顺序规则不变
-    const fillTarget = gridMaxCount ?? categoryColumns;
+    gridOrder.forEach(push);
+    // TASK-024 / T15：补齐目标 = 可见容量（gridMaxCount 已为「全部」预留 -1 格），
+    // 首帧容量未知时至少补 2 行；冻结顺序（本次选过 + 最近用过）永远排在补齐类别前面
+    const fillTarget = gridMaxCount ?? categoryColumns * 2;
     for (const c of filteredCategories) {
       if (pinned.length >= fillTarget) break;
-      if (!seen.has(c.id)) {
-        pinned.push(c);
-        seen.add(c.id);
-      }
+      push(c.id);
     }
     return pinned;
-    // TASK-024：补齐目标跟随可见容量（键盘弹出/收起、Hero 压缩都会改变 gridMaxCount）
-  }, [sessionPickedIds, recentCategoryIds, filteredCategories, categoryColumns, gridMaxCount]);
-  const [currencyDropOpen, setCurrencyDropOpen] = useState(false);
-  // 转账/兑换弹层「币种下拉」的锚点：头部实测盒（相对弹层 y/h）+ 货币钮实测高。
-  // 面板停在「货币钮正下方」靠这两个实测值算——EN 标题折两行会把头部撑高，固定 top 会压住货币钮
-  const [acctHeaderBox, setAcctHeaderBox] = useState({ y: 0, h: 0 });
-  const [acctPillH, setAcctPillH] = useState(0);
-  // 账户列表的币种筛选：下拉里点了某个币种（如 USD），列表就只显示该币种的账户；'all' 为不筛
-  const [currencyFilter, setCurrencyFilter] = useState<string>('all');
+    // 补齐目标跟随可见容量（键盘弹出/收起、Hero 压缩都会改变 gridMaxCount）
+  }, [gridOrder, filteredCategories, categoryColumns, gridMaxCount]);
   // 金额币种只认所选账户（2026-09-24 用户定版）：选什么账户显示什么货币，没选账户用全局设置货币；
   // 弹层里的币种项只做账户筛选，不再改金额币种（displayCurrencyCode 直选机制已移除）
   const selectedAsset = assets.find((a) => a.id === assetId);
   const amountCurrencyCode = selectedAsset?.currency ?? currency;
-  const amountCurrencySymbol = getCurrencySymbol(amountCurrencyCode);
   // Hero 账户选择框宽度 = 转账页账户块的实测宽度（transferBlockW，onLayout 从转账块同步来，
   // 两页切换零跑位）；首次渲染还没量到时用几何公式兜底（转账卡内 flex:1 均分 = (屏宽−116)/2）
   const [transferBlockW, setTransferBlockW] = useState((Dimensions.get('window').width - 116) / 2);
-  const heroPickerW = transferBlockW;
-  // D-3.1：真机反馈——账户名过长会被截断，账户框改「弹性撑满」金额行下方可用宽度
-  // （不再跟随转账块定宽）；宽度 onLayout 实测喂给 SVG 路径。货币标签仍贴内容宽不跟长
-  const [heroWrapW, setHeroWrapW] = useState(heroPickerW);
-  // D-3：L 型选择器整块改 SVG 一笔轮廓——标签+胶囊一根线画完，物理上无接缝；
-  // 内凹圆角（ri）让标签右缘自然拐进胶囊顶边，是 View 边框画不出的「自然拐角」。
-  // 标签宽 Wt=标签内容 onLayout 实测（货币代码恒 3 字母，稳定），路径随其实测值动态生成
-  const [heroTabW, setHeroTabW] = useState(88);
-  const HT = 38; // 标签高
-  const HP = 54; // 胶囊高
-  const HH = HT + HP; // 整块高 92
-  const heroLPaths = useMemo(() => {
-    const W = Math.max(heroWrapW, heroTabW + 40);
-    const wt = Math.min(heroTabW, W - 40); // 防御：标签宽不得挤掉内凹角与胶囊右圆角
-    const ri = 10; // 内凹拐角半径
-    const rT = 14; // 标签顶部圆角
-    const rP = 15; // 胶囊圆角（与原 heroCurrencyTouch radius 一致）
-    const f = (n: number) => n.toFixed(2);
-    const dL = [
-      `M ${f(rT)},0`,
-      `H ${f(wt - rT)}`,
-      `A ${rT} ${rT} 0 0 1 ${f(wt)},${rT}`,
-      `V ${f(HT - ri)}`,
-      `A ${ri} ${ri} 0 0 0 ${f(wt + ri)},${f(HT)}`,
-      `H ${f(W - rP)}`,
-      `A ${rP} ${rP} 0 0 1 ${f(W)},${f(HT + rP)}`,
-      `V ${f(HH - rP)}`,
-      `A ${rP} ${rP} 0 0 1 ${f(W - rP)},${f(HH)}`,
-      `H ${f(rP)}`,
-      `A ${rP} ${rP} 0 0 1 0,${f(HH - rP)}`,
-      `V ${f(rT)}`,
-      `A ${rT} ${rT} 0 0 1 ${f(rT)},0`,
-      'Z',
-    ].join(' ');
-    return { dL, W };
-  }, [heroWrapW, heroTabW]);
-  // Hero 金额字号：TASK-022 用户指定 21 号——基准 21，每多 1 位 -0.25px；底线 13 号
-  const heroAmountRaw = amountKeypadOpen ? amountExpr.displayValue : amount || '0.00';
-  const heroAmountFontSize = Math.max(13, 21 - Math.max(0, heroAmountRaw.replace('.', '').length - 9) * 0.25);
-  // 用户已有账户出现过的币种（去重、ABC 字母序——2026-09-24 用户定版），给货币下拉菜单用——和首页的多币种切换同一思路
-  const ownCurrencies = useMemo(() => {
-    const codes: string[] = [];
-    assets.forEach((a) => {
-      if (a.currency && !codes.includes(a.currency)) codes.push(a.currency);
-    });
-    // 金额币种若还没有任何账户（如全局货币）也要能选到——按字母位插入而非置顶，选中项靠勾亮定位不靠位置
-    if (!codes.includes(amountCurrencyCode)) codes.push(amountCurrencyCode);
-    return codes.sort((c1, c2) => c1.localeCompare(c2));
-  }, [assets, amountCurrencyCode]);
+  // T14：金额显示串——键盘打开时，单项 = 正在输入的金额串（带光标），
+  // 多项（有 +/− 运算符）= 算式移到金额上方 15pt、金额行显示合计（expressionTotal 复用共享求和函数）；
+  // 键盘关着时 = 已保存的金额（与保存语义一致，不改任何计算逻辑）
+  const heroAmountDisplay = amountKeypadOpen
+    ? amountExpr.isMulti
+      ? formatMoney(expressionTotal(amountExpr.displayValue))
+      : amountExpr.displayValue
+    : amount || '0.00';
+  // 金额字号档位（V2 稿基准 64；矮屏按 T15 惯例再收一档 44，给类别网格腾「至少 2 行」）
+  const heroAmountFontSize = amountFontTier(heroAmountDisplay, isShort ? 44 : 64);
   const fromAsset = assets.find((a) => a.id === fromAssetId);
   const toAsset = assets.find((a) => a.id === toAssetId);
   const isCrossCurrency = !!fromAsset && !!toAsset && fromAsset.currency !== toAsset.currency;
@@ -715,11 +788,39 @@ export default function AddTransactionScreen({ navigation, route }: any) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ---------- T17：保存成功的 300ms 勾选动画 ----------
+  // 四个保存路径（完成 / 长按完成 / 转账完成 / 转账长按）统一走 playSaveFlashThen：
+  // success 震动由各调用点先发，这里只负责「中央徽章弹入 → 300ms 后执行原本的返回/留页逻辑」
+  const [saveFlash, setSaveFlash] = useState(false);
+  const saveFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (saveFlashTimerRef.current) clearTimeout(saveFlashTimerRef.current);
+    },
+    []
+  );
+  const playSaveFlashThen = (next: () => void) => {
+    setSaveFlash(true);
+    if (saveFlashTimerRef.current) clearTimeout(saveFlashTimerRef.current);
+    saveFlashTimerRef.current = setTimeout(() => {
+      saveFlashTimerRef.current = null;
+      setSaveFlash(false);
+      next();
+    }, 300);
+  };
+
+  // ---------- UI V2：类别选中的外圈 ----------
+  // 由页面侧画（IconCircle 的 boxShadow / style 两个入口在 react-native-web 下都不落地）：
+  // 真圆 = 58 圆 + borderWidth 2（夜：类别色 60% / 日 #9B5BD6），与 48 实心圆之间留 3 的页面底间隙；
+  // 绝对定位在 48 盒子上 → 不影响网格行高、选中前后图标不位移。等 ui 侧修好可移除。
+
   const resetAll = () => {
     // 类型也要重置回支出：底部Tab的"记一笔"切走不会卸载，uiType 留着的话，
     // 上次停在转账/兑换，回来就还是转账/兑换，而不是用户期望的全新支出表单
     setUiType('expense');
     setStep(stepForType('expense'));
+    // 重进页面：网格顺序按"最近用过"重建一次（本次会话里的点选只写存储、不改已冻结的顺序）
+    setCatListsGen((g) => g + 1);
     // TASK-009：退出返回不清类别——sessionPickedIds（本次选过的）/recentCategoryIds（本地历史）
     // /categoryId（当前选中）全部保留，回来网格和选中态原样恢复；只清表单内容
     setAmount('');
@@ -747,8 +848,6 @@ export default function AddTransactionScreen({ navigation, route }: any) {
     setAutoMonthly(false);
     // 离开页面时可能还开着的弹层一并关掉，回来才是干净的初始状态
     setAccountPickerOpen(false);
-    setCurrencyDropOpen(false);
-    setCurrencyFilter('all');
     setDateSheetOpen(false);
     setDatePickerOpen(false);
     setReceiptPreviewOpen(false);
@@ -807,63 +906,13 @@ export default function AddTransactionScreen({ navigation, route }: any) {
     };
   }, [isFocused]);
 
-  // （可见容量计算已上移至 gridPinned 之前——TASK-024：gridPinned 补齐要用 gridMaxCount）
 
-  // 最终网格：容量裁剪兜底——能放几格显示几格，「全部」永远殿后可见；
-  // 当前选中的类别若被裁掉则强制保留（替换末尾一格），保证选中态高亮在网格里可见
-  // ---------- 可见容量（宽度感知装箱版，2026-09-25 字号14批次）----------
-  // 胶囊改 minWidth 自适应后，4 字名（如「贷款还款」≈97）比网格宽（≈78），
-  // 旧计数容量(rows×cols−1)会高估行容量——「全部」被挤到裁剪线外一行悬空。
-  // 这里按字符估宽模拟真实装箱：容器宽内逐格横排、放不下换行；
-  // 超过可见行数就从尾部丢类别，保证「全部」永远落在最后一行的行尾
-  // （=用户定版：全部前一个类别被全部替代）。
-  // ⚠纯估算、不回流测量——避免 TASK-009 记录过的 measure→trim→remeasure 正反馈循环。
-  // ⚠估宽常量与样式同步：label 14 号（CJK 全宽 14/半角 8）、图标座23+右距4+横padding12+边框2=41
-  const gridContentW = winW - 36; // categoryChipGrid paddingHorizontal 18×2
-  const chipWidthOf = useCallback((c: Category) => {
-    const label = getCategoryLabel(c, t);
-    let textW = 0;
-    for (const ch of label) textW += ch.charCodeAt(0) > 0x2e80 ? 14 : 8;
-    return Math.max(categoryChipW, 41 + Math.ceil(textW) + 1);
-  }, [categoryChipW, t]);
-
+  // 最终网格内容：固定在前的（本次选过 + 最近用过）、按默认顺序补齐到可见容量；
+  // 多出来的（历史用过的）不再按字符估宽裁剪丢弃 —— 网格区可滚动（T15），「全部」永远殿后
   const displayCategories = useMemo(() => {
-    const withSelected =
-      selectedCategory && !gridPinned.some((c) => c.id === selectedCategory.id)
-        ? [selectedCategory, ...gridPinned]
-        : gridPinned;
-    // 首帧（可见行数未知）：退回旧的计数裁剪兜底
-    if (gridVisibleRows == null) {
-      if (gridMaxCount == null || withSelected.length + 1 <= gridMaxCount) return withSelected;
-      const base = withSelected.slice(0, gridMaxCount);
-      if (selectedCategory && !base.some((c) => c.id === selectedCategory.id)) {
-        base[base.length - 1] = selectedCategory;
-      }
-      return base;
-    }
-    // 宽度感知装箱：放不下「全部」就从尾部丢，丢完保持「选中项可见」的既有规则
-    const list = [...withSelected];
-    const rowsNeeded = (items: Category[]) => {
-      let rows = 1;
-      let w = 0;
-      for (const c of items) {
-        const cw = chipWidthOf(c);
-        if (w > 0 && w + 5 + cw > gridContentW) {
-          rows++;
-          w = cw;
-        } else {
-          w = w > 0 ? w + 5 + cw : cw;
-        }
-      }
-      if (w > 0 && w + 5 + categoryChipW > gridContentW) rows++; // 「全部」固定宽 categoryChipW
-      return rows;
-    };
-    while (list.length > 0 && rowsNeeded(list) > gridVisibleRows) list.pop();
-    if (selectedCategory && list.length > 0 && !list.some((c) => c.id === selectedCategory.id)) {
-      list[list.length - 1] = selectedCategory;
-    }
-    return list;
-  }, [gridPinned, selectedCategory, gridMaxCount, gridVisibleRows, chipWidthOf, categoryChipW, gridContentW]);
+    if (!selectedCategory || gridPinned.some((c) => c.id === selectedCategory.id)) return gridPinned;
+    return [selectedCategory, ...gridPinned];
+  }, [gridPinned, selectedCategory]);
 
   // 计算器键盘和浮空 Tab bar 在同一块屏幕区域，键盘展开时强制把 Tab bar 收起，
   // 键盘收起（按完成、或者切到别的表单）时恢复——避免两者叠在一起互相挡住点击
@@ -896,6 +945,8 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   }, [isFocused]);
 
   const handlePickCategory = (id: string) => {
+    // 选类别 = selection 震动（UI_RULES 4.3；网格格与「全部」抽屉共用这一套）
+    hapticSelection();
     setCategoryId(id);
     // TASK-022 补充：编辑账单时点类别只改这一笔，绝不写持久化键——
     // 否则会污染"记一笔（新增）"记住的默认类别（编辑模式自己又不读这个键，表现为两边不同步）
@@ -1041,12 +1092,15 @@ export default function AddTransactionScreen({ navigation, route }: any) {
       const ok = await saveTransaction(total);
       if (ok) {
         hapticSuccess();
-        if (isEditing) {
-          navigation?.goBack();
-        } else {
-          resetAll();
-          navigation?.navigate(ROUTES.TAB_HOME);
-        }
+        // T17：勾选动画 300ms 后照原逻辑返回（编辑 → 返回；新增 → 清表单回首页）
+        playSaveFlashThen(() => {
+          if (isEditing) {
+            navigation?.goBack();
+          } else {
+            resetAll();
+            navigation?.navigate(ROUTES.TAB_HOME);
+          }
+        });
       }
     } catch (err) {
       console.error('保存失败:', err);
@@ -1062,7 +1116,10 @@ export default function AddTransactionScreen({ navigation, route }: any) {
       const ok = await saveTransaction(total);
       if (ok) {
         hapticSuccess();
-        resetAll();
+        // T17：同样先播勾选动画，300ms 后清表单、留在本页记下一笔
+        playSaveFlashThen(() => {
+          resetAll();
+        });
       }
     } catch (err) {
       console.error('保存失败:', err);
@@ -1192,11 +1249,15 @@ export default function AddTransactionScreen({ navigation, route }: any) {
       note,
       receiptUri: receiptUri ?? undefined,
     });
-    resetAll();
-    // 长按"完成"＝保存后继续记下一笔，留在本页；普通点击才退出到首页
-    if (!options?.continueRecording) {
-      navigation?.navigate(ROUTES.TAB_HOME);
-    }
+    // T17：success 震动 + 300ms 勾选动画，然后照原逻辑（清表单；非长按再回首页）
+    hapticSuccess();
+    playSaveFlashThen(() => {
+      resetAll();
+      // 长按"完成"＝保存后继续记下一笔，留在本页；普通点击才退出到首页
+      if (!options?.continueRecording) {
+        navigation?.navigate(ROUTES.TAB_HOME);
+      }
+    });
     return true;
   };
 
@@ -1321,53 +1382,19 @@ export default function AddTransactionScreen({ navigation, route }: any) {
       <SafeAreaView style={styles.container} edges={['top']}
       onTouchStart={() => { Keyboard.dismiss(); }}>
         <View style={{ flex: 1 }}>
-        {/* 顶部与收入/支出完全统一：返回 + 四个类型 Tab + 扫票 */}
-        <View style={styles.txHeaderRow}>
-          <TouchableOpacity
-            style={styles.txHeaderBackBtn}
-            onPress={() => navigation?.goBack()}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Ionicons name="chevron-back" size={22} color={colors.icon} style={{ fontWeight: "700" }} />
-          </TouchableOpacity>
-          <View style={styles.txHeaderTypeSwitch}>
-            {TYPE_TABS.map((t, idx) => (
-              <React.Fragment key={t.key}>
-                {/* 格间竖分割线：一体框格内的分格标记 */}
-                {idx > 0 && <View style={styles.txHeaderTypeDivider} />}
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.txHeaderTypeBtn,
-                    uiType === t.key && styles.txHeaderTypeBtnActive,
-                    pressed && (uiType === t.key ? styles.txHeaderTypeBtnSinkActive : styles.txHeaderTypeBtnSink),
-                  ]}
-                  onPress={() => {
-                    hapticSelection();
-                    setUiType(t.key);
-                    setCategoryId(null);
-                    setStep(stepForType(t.key));
-                  }}
-                >
-                  <Text
-                    style={[styles.txHeaderTypeText, langMode !== 'zh' && styles.txHeaderTypeTextEn, uiType === t.key && styles.txHeaderTypeTextActive]}
-                    numberOfLines={1}
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.8}
-                  >
-                    {t.label}
-                  </Text>
-                  {/* 底线：标记当前所在页面 */}
-                  {uiType === t.key && <View style={styles.txHeaderTypeUnderline} />}
-                </Pressable>
-              </React.Fragment>
-            ))}
-          </View>
-          {/* 转账/兑换不做扫票识别：按钮隐藏，但用同尺寸的透明占位保住排版不变 */}
-          <View style={[styles.txHeaderScanBtn, { opacity: 0 }]} pointerEvents="none">
-            <Ionicons name="camera-outline" size={13} color={colors.link} style={{ marginRight: 4 }} />
-            <Text style={styles.txHeaderScanBtnText}>{t('addTx.scanReceipt')}</Text>
-          </View>
-        </View>
+        {/* UI V2：最底层品牌渐变（与支出/收入同一档：400 / 矮屏 ×0.9） */}
+        <HeroGradient height={isShort ? Math.round(HERO_GRADIENT_HEIGHT * 0.9) : HERO_GRADIENT_HEIGHT} grid={false} />
+        {/* 页头两行（T14）：返回 + 标题 + 扫票 / 类型分段独占一行；转账·兑换不做扫票识别 */}
+        <TransactionTypeHeader
+          uiType={uiType}
+          onBack={() => navigation?.goBack()}
+          onSelectType={(nextType) => {
+            setUiType(nextType);
+            setCategoryId(null);
+            setStep(stepForType(nextType));
+          }}
+          title={t('nav.add')}
+        />
 
         <ScrollView
           ref={scrollViewRef}
@@ -1383,230 +1410,282 @@ export default function AddTransactionScreen({ navigation, route }: any) {
             { paddingBottom: amountKeypadOpen ? 16 : tabClearance + 36 },
           ]}
         >
-          {/* FROM / TO 账户卡：对应参考图顶部的资金流向卡 */}
-          <View style={styles.transferRouteCard}>
-            <View style={styles.transferRouteTopRow}>
-              <Text style={styles.transferRouteHint}>{t('addTx.fundFlow')}</Text>
-              <View style={styles.transferStatusPill}>
-                <View style={styles.transferStatusDot} />
-                <Text style={styles.transferStatusText}>{t('addTx.instantRecord')}</Text>
-              </View>
+          {/* 资金流卡（T16 / A6）：转出账户 → 转入账户，中间方向 IconButton 互换两边；
+              点账户块开账户抽屉；账户名放不下换行、不截断；标签 ≥12pt */}
+          <Card style={styles.flowCard}>
+            <View style={styles.flowHeader}>
+              <AppText variant="caption" color={semantic.textSecondary}>
+                {t('addTx.fundFlow')}
+              </AppText>
+              <Badge label={t('addTx.instantRecord')} tone="success" dot />
             </View>
 
-            <View style={styles.transferRouteRow}>
-              <TouchableOpacity
-                style={styles.transferAccountBlock}
-                activeOpacity={0.72}
-                // 实测转账账户块的真实渲染宽度，同步给支出/收入页的账户选择框——
-                // 两页切换时框格宽度像素级一致（手算公式会被描边/字渲染等细节带偏）
-                onLayout={(e) => {
-                  const w = e.nativeEvent.layout.width;
-                  setTransferBlockW((prev) => (Math.abs(prev - w) > 0.5 ? w : prev));
-                }}
+            <View style={styles.flowRow}>
+              {/* 转出账户块（外层 View 承载 flex —— PressableScale 的样式落在内层，flex 必须给直接子项） */}
+              <View style={styles.flowBlockWrap}>
+              <PressableScale
+                style={styles.flowBlock}
+                activeScale={0.98}
+                hitSlop={0}
                 onPress={() => {
                   setAccountPickerRole('from');
-                  setAccountSearch('');
-                  setAccountFilter('all');
-                  setCurrencyFilter('all');
                   setAccountPickerOpen(true);
                 }}
+                accessibilityRole="button"
+                accessibilityLabel={`${t('addTx.outAccount')} ${fromAsset?.name ?? t('common.notSelected')}`}
               >
-                <Text style={styles.transferAccountCaption}>{t('addTx.outAccount')}</Text>
-                <View style={styles.transferAccountMain}>
-                  <View style={[styles.transferAccountIcon, { backgroundColor: (fromAsset?.color ?? colors.link) + '20' }]}>
-                    <Ionicons name={(fromAsset?.icon as IconName) ?? 'wallet-outline'} size={20} color={fromAsset?.color ?? colors.link} />
-                  </View>
-                  <View style={styles.transferAccountInfo}>
-                    {/* 与 Hero 同策略：窄框英文按词两行（可用宽 = 块实测宽 - padding 16 - 图标 40 - 名字间距 10 - 描边 2） */}
-                    <Text
-                      style={styles.transferAccountName}
-                      numberOfLines={2}
-                      textBreakStrategy={Platform.OS === 'android' ? 'simple' : undefined}
-                    >
-                      {fromAsset?.name ?? twoLineLabel(t('common.notSelected'), transferBlockW - 68, 100)}
-                    </Text>
-                  </View>
+                <View style={styles.flowBlockLabelRow}>
+                  <AppText variant="caption" color={semantic.textSecondary}>
+                    {t('addTx.outAccount')}
+                  </AppText>
+                  <Ionicons name="chevron-down" size={16} color={semantic.textTertiary} />
                 </View>
-                <Ionicons name="chevron-down" size={12} color={colors.textTertiary} style={styles.transferAccountChevron} />
-              </TouchableOpacity>
+                <View style={styles.flowBlockMain}>
+                  {/* UI V2：圆形账户图标（42 圆，取代旧 40 圆角方块） */}
+                  <IconCircle
+                    size={42}
+                    color={fromAsset?.color ?? semantic.accent}
+                    icon={(fromAsset?.icon as IconName) ?? 'wallet-outline'}
+                  />
+                  <AppText variant="headline" numberOfLines={2} style={styles.flowBlockName}>
+                    {fromAsset?.name ?? t('common.notSelected')}
+                  </AppText>
+                </View>
+              </PressableScale>
+              </View>
 
-              {/* 中间按钮：点击互换转出/转入两个账户 */}
-              <TouchableOpacity
-                style={styles.transferRouteArrow}
-                activeOpacity={0.7}
-                onPress={() => {
-                  hapticLight();
-                  // 互换是显式操作，之后转出账户不再自动跟随默认账户变化
-                  userPickedFromRef.current = true;
-                  setFromAssetId(toAssetId);
-                  setToAssetId(fromAssetId);
-                }}
-              >
-                <Ionicons name="swap-horizontal" size={18} color={colors.link} />
-              </TouchableOpacity>
+              {/* 中间方向按钮：互换转出/转入两个账户（原逻辑不变）；同样用外层 View 承载外边距 */}
+              <View style={styles.flowSwapWrap}>
+                <IconButton
+                  icon="swap-horizontal"
+                  variant="soft"
+                  accessibilityLabel={t('addTx.swapAccounts')}
+                  onPress={() => {
+                    hapticLight();
+                    // 互换是显式操作，之后转出账户不再自动跟随默认账户变化
+                    userPickedFromRef.current = true;
+                    setFromAssetId(toAssetId);
+                    setToAssetId(fromAssetId);
+                  }}
+                />
+              </View>
 
-              <TouchableOpacity
-                style={[styles.transferAccountBlock, styles.transferAccountBlockRight]}
-                activeOpacity={0.72}
+              {/* 转入账户块（外层 View 承载 flex） */}
+              <View style={styles.flowBlockWrap}>
+              <PressableScale
+                style={styles.flowBlock}
+                activeScale={0.98}
+                hitSlop={0}
                 onPress={() => {
                   setAccountPickerRole('to');
-                  setAccountSearch('');
-                  setAccountFilter('all');
-                  setCurrencyFilter('all');
                   setAccountPickerOpen(true);
                 }}
+                accessibilityRole="button"
+                accessibilityLabel={`${t('addTx.inAccount')} ${toAsset?.name ?? t('common.notSelected')}`}
               >
-                <Text style={[styles.transferAccountCaption, styles.transferAccountCaptionRight]}>{t('addTx.inAccount')}</Text>
-                <View style={styles.transferAccountMain}>
-                  <View style={styles.transferAccountInfoRight}>
-                    <Text
-                      style={styles.transferAccountName}
-                      numberOfLines={2}
-                      textBreakStrategy={Platform.OS === 'android' ? 'simple' : undefined}
-                    >
-                      {toAsset?.name ?? twoLineLabel(t('common.notSelected'), transferBlockW - 68, 100)}
-                    </Text>
-                  </View>
-                  <View style={[styles.transferAccountIcon, { backgroundColor: (toAsset?.color ?? colors.link) + '20' }]}>
-                    <Ionicons name={(toAsset?.icon as IconName) ?? 'wallet-outline'} size={20} color={toAsset?.color ?? colors.link} />
-                  </View>
+                <View style={styles.flowBlockLabelRow}>
+                  <AppText variant="caption" color={semantic.textSecondary}>
+                    {t('addTx.inAccount')}
+                  </AppText>
+                  <Ionicons name="chevron-down" size={16} color={semantic.textTertiary} />
                 </View>
-                <Ionicons name="chevron-down" size={12} color={colors.textTertiary} style={styles.transferAccountChevronRight} />
-              </TouchableOpacity>
+                <View style={styles.flowBlockMain}>
+                  {/* UI V2：圆形账户图标（42 圆，取代旧 40 圆角方块） */}
+                  <IconCircle
+                    size={42}
+                    color={toAsset?.color ?? semantic.accent}
+                    icon={(toAsset?.icon as IconName) ?? 'wallet-outline'}
+                  />
+                  <AppText variant="headline" numberOfLines={2} style={styles.flowBlockName}>
+                    {toAsset?.name ?? t('common.notSelected')}
+                  </AppText>
+                </View>
+              </PressableScale>
+              </View>
             </View>
+          </Card>
 
-          </View>
-
-          {/* 转账和兑换/跨币种转账统一用同一套网格排版：
+          {/* 转账和兑换/跨币种转账统一用同一套网格排版（T16 令牌化）：
               第一行左边永远是可编辑的"转出金额"，右边是根据 converted 算出来的只读金额
               （兑换叫"到账"、普通转账叫"转入金额"，本质是同一个数——普通转账走 !showRateField
               时 converted 就是 amount 本身，天然 1:1，不用额外分支处理数值）。
-              第二行：有汇率就分左右两格（汇率/手续费）；普通转账没有汇率，手续费独占一整行。 */}
+              第二行：手续费独占一整行（有汇率时汇率在中间格）；金额等宽数字、标签 ≥12pt；
+              手续费空态 = 灰色 0.00 占位（原来写"选填"） */}
           <View
-            style={styles.exchangeRateCard}
             onLayout={(e) => {
               fieldY.current['cardTop'] = e.nativeEvent.layout.y;
             }}
           >
-            <Text style={styles.exchangeRateTitle}>{showRateField ? t('addTx.exchangeRate') : t('addTx.transfer')}</Text>
+            <Card style={styles.rateCard}>
+              <AppText variant="subhead" weight="600" align="center" style={styles.rateCardTitle}>
+                {showRateField ? t('addTx.exchangeRate') : t('addTx.transfer')}
+              </AppText>
 
-            {/* 第一行：左边转出金额输入框，右边到账/转入金额（只读展示） */}
-            <View style={styles.rateGridRow}>
-              <TouchableOpacity
-                style={styles.rateGridCellLeft}
-                activeOpacity={0.8}
-                onPress={() => openTransferCalculator('amount')}
-                onLayout={(e) => {
-                  const cardY = fieldY.current['cardTop'] ?? 0;
-                  fieldY.current['amount'] = cardY + e.nativeEvent.layout.y;
-                }}
-              >
-                <View style={styles.rateGridLabelRow}>
-                  <Text style={styles.rateGridLabel}>{t('addTx.outAmount')}</Text>
-                  {/* 后置货币提示贴在"转出金额"标签右侧：选了转出账户才显示，不与金额数字碰撞 */}
-                  {fromAsset && <Text style={styles.rateGridLabelSuffix}>({fromAsset.currency})</Text>}
-                </View>
-                <View style={styles.rateGridValueRow}>
-                  <CursorAmountText
-                    display={calculatorTarget === 'amount' && amountKeypadOpen ? amountExpr.displayValue : amount || '0.00'}
-                    enabled={calculatorTarget === 'amount' && amountKeypadOpen}
-                    cursorFromEnd={amountCursor}
-                    onCursorChange={setAmountCursor}
-                    style={styles.rateGridValue}
-                    cursorStyle={styles.rateCursor}
-                  />
-                </View>
-              </TouchableOpacity>
-
-              {/* 分隔竖线：兑换/普通转账都渲染——转账没有汇率时这条线就是转出与转入的分界；
-                  大金额换行时线跟随格子布局，两种货币不会撞在一起 */}
-              <View style={styles.rateGridDividerVertical} />
-
-              {showRateField ? (
-                <>
-                  <TouchableOpacity
-                    style={styles.rateCenterCell}
-                    activeOpacity={0.75}
-                    onPress={() => openTransferCalculator('rate')}
-                    onLayout={(e) => {
-                      const cardY = fieldY.current['cardTop'] ?? 0;
-                      fieldY.current['rate'] = cardY + e.nativeEvent.layout.y;
-                    }}
+              {/* 第一行：左边转出金额输入框，右边到账/转入金额（只读展示） */}
+              <View style={styles.rateGridRow}>
+                {/* onLayout 挂外层 View（PressableScale 不收 onLayout；T16 wip 的 7 个 tsc 错） */}
+                <View
+                  style={styles.rateGridCellWrapLeft}
+                  onLayout={(e) => {
+                    const cardY = fieldY.current['cardTop'] ?? 0;
+                    fieldY.current['amount'] = cardY + e.nativeEvent.layout.y;
+                  }}
+                >
+                  <PressableScale
+                    style={styles.rateGridCellLeft}
+                    activeScale={0.98}
+                    hitSlop={0}
+                    onPress={() => openTransferCalculator('amount')}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('addTx.outAmount')}
                   >
-                    <Text style={styles.rateCenterLabel}>{t('addTx.rate')}</Text>
+                    <View style={styles.rateGridLabelRow}>
+                      <AppText variant="caption" color={semantic.textSecondary}>
+                        {t('addTx.outAmount')}
+                      </AppText>
+                      {/* 后置货币提示贴在"转出金额"标签右侧：选了转出账户才显示，不与金额数字碰撞 */}
+                      {fromAsset && (
+                        <AppText variant="footnote" color={semantic.textTertiary} style={styles.rateGridLabelSuffix}>
+                          ({fromAsset.currency})
+                        </AppText>
+                      )}
+                    </View>
                     <View style={styles.rateGridValueRow}>
-                      <Text style={styles.rateFieldValue}>×</Text>
                       <CursorAmountText
-                        display={calculatorTarget === 'rate' && amountKeypadOpen ? rateExpr.displayValue : exchangeRate || '0.00'}
-                        enabled={calculatorTarget === 'rate' && amountKeypadOpen}
-                        cursorFromEnd={rateCursor}
-                        onCursorChange={setRateCursor}
-                        style={styles.rateFieldValue}
+                        display={calculatorTarget === 'amount' && amountKeypadOpen ? amountExpr.displayValue : amount || '0.00'}
+                        enabled={calculatorTarget === 'amount' && amountKeypadOpen}
+                        cursorFromEnd={amountCursor}
+                        onCursorChange={setAmountCursor}
+                        style={styles.rateGridValue}
                         cursorStyle={styles.rateCursor}
                       />
-                      <Ionicons name="calculator-outline" size={12} color={colors.link} style={styles.rateGridCalcIcon} />
                     </View>
-                  </TouchableOpacity>
-                  <View style={styles.rateGridDividerVertical} />
-                </>
-              ) : null}
-
-              <View style={styles.rateGridCellRight}>
-                <View style={styles.rateGridLabelRow}>
-                  <Text style={styles.rateGridLabel}>{showRateField ? t('addTx.receivedLabel') : t('addTx.inAmountLabel')}</Text>
-                  {/* 后置货币提示贴在标签右侧：选了转入账户才显示，不与金额数字碰撞 */}
-                  {toAsset && <Text style={styles.rateGridLabelSuffix}>({toAsset.currency})</Text>}
+                  </PressableScale>
                 </View>
-                <View style={styles.rateGridValueRow}>
-                  <Text style={[styles.rateGridValue, showRateField ? styles.rateGridValueTo : styles.rateGridValueTransfer]}>{converted}</Text>
+
+                {/* 分隔竖线：兑换/普通转账都渲染——转账没有汇率时这条线就是转出与转入的分界；
+                    大金额换行时线跟随格子布局，两种货币不会撞在一起 */}
+                <View style={styles.rateGridDividerVertical} />
+
+                {showRateField ? (
+                  <>
+                    <View
+                      style={styles.rateCenterCellWrap}
+                      onLayout={(e) => {
+                        const cardY = fieldY.current['cardTop'] ?? 0;
+                        fieldY.current['rate'] = cardY + e.nativeEvent.layout.y;
+                      }}
+                    >
+                      <PressableScale
+                        style={styles.rateCenterCell}
+                        activeScale={0.96}
+                        hitSlop={0}
+                        onPress={() => openTransferCalculator('rate')}
+                        accessibilityRole="button"
+                        accessibilityLabel={t('addTx.rate')}
+                      >
+                        <AppText variant="caption" color={semantic.textSecondary} style={styles.rateCenterLabel}>
+                          {t('addTx.rate')}
+                        </AppText>
+                        <View style={styles.rateGridValueRow}>
+                          <Text style={styles.rateFieldValue}>×</Text>
+                          <CursorAmountText
+                            display={calculatorTarget === 'rate' && amountKeypadOpen ? rateExpr.displayValue : exchangeRate || '0.00'}
+                            enabled={calculatorTarget === 'rate' && amountKeypadOpen}
+                            cursorFromEnd={rateCursor}
+                            onCursorChange={setRateCursor}
+                            style={styles.rateFieldValue}
+                            cursorStyle={styles.rateCursor}
+                          />
+                          <Ionicons name="calculator-outline" size={16} color={semantic.accentText} style={styles.rateGridCalcIcon} />
+                        </View>
+                      </PressableScale>
+                    </View>
+                    <View style={styles.rateGridDividerVertical} />
+                  </>
+                ) : null}
+
+                <View style={styles.rateGridCellRight}>
+                  <View style={styles.rateGridLabelRow}>
+                    <AppText variant="caption" color={semantic.textSecondary}>
+                      {showRateField ? t('addTx.receivedLabel') : t('addTx.inAmountLabel')}
+                    </AppText>
+                    {/* 后置货币提示贴在标签右侧：选了转入账户才显示，不与金额数字碰撞 */}
+                    {toAsset && (
+                      <AppText variant="footnote" color={semantic.textTertiary} style={styles.rateGridLabelSuffix}>
+                        ({toAsset.currency})
+                      </AppText>
+                    )}
+                  </View>
+                  <View style={styles.rateGridValueRow}>
+                    <Text
+                      style={[
+                        styles.rateGridValue,
+                        styles.rateGridValueTo,
+                        { fontVariant: ['tabular-nums'] },
+                      ]}
+                    >
+                      {converted}
+                    </Text>
+                  </View>
                 </View>
               </View>
-            </View>
 
-            <View style={styles.exchangeRateDivider} />
+              <View style={styles.exchangeRateDivider} />
 
-            {/* 第二行：手续费独占一整行——兑换和普通转账统一用同一套整行布局，大小完全一致 */}
-            <View
-              style={styles.transferMetaNoteRow}
-              onLayout={(e) => {
-                const cardY = fieldY.current['cardTop'] ?? 0;
-                fieldY.current['fee'] = cardY + e.nativeEvent.layout.y;
-              }}
-            >
-              <View style={styles.transferMetaLeft}>
-                <Ionicons name="receipt-outline" size={16} color={colors.textSecondary} />
-                <Text style={styles.transferMetaLabel}>{t('addTx.fee')}</Text>
-              </View>
-              <TouchableOpacity
-                style={styles.transferFeeValueButton}
-                activeOpacity={0.75}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                onPress={() => openTransferCalculator('fee')}
+              {/* 第二行：手续费独占一整行——兑换和普通转账统一用同一套整行布局，大小完全一致 */}
+              <View
+                style={styles.transferMetaNoteRow}
+                onLayout={(e) => {
+                  const cardY = fieldY.current['cardTop'] ?? 0;
+                  fieldY.current['fee'] = cardY + e.nativeEvent.layout.y;
+                }}
               >
-                <CursorAmountText
-                  display={calculatorTarget === 'fee' && amountKeypadOpen ? feeExpr.displayValue : (feeNum > 0 ? `${fromSymbol}${feeNum.toFixed(2)}` : t('common.optional'))}
-                  enabled={calculatorTarget === 'fee' && amountKeypadOpen}
-                  cursorFromEnd={feeCursor}
-                  onCursorChange={setFeeCursor}
-                  style={[styles.transferFeeValue, ...(feeNum > 0 ? [styles.transferFeeValueActive] : [])]}
-                  cursorStyle={styles.feeCursor}
-                />
-                <Ionicons name="calculator-outline" size={15} color={colors.textTertiary} />
-              </TouchableOpacity>
-            </View>
-
-            {/* 填了手续费就提示：手续费先从转出金额里扣掉——兑换的到账是"扣完再按汇率换算"，
-                普通转账则直接按扣完的金额到账 */}
-            {liveFeeNum > 0 && (
-              <View style={styles.exchangeFeeHintRow}>
-                <Ionicons name="information-circle-outline" size={12} color={colors.textTertiary} />
-                <Text style={styles.exchangeFeeHintText} numberOfLines={2}>
-                  {showRateField
-                    ? t('addTx.feeDeductExchange', { fee: `${fromSymbol}${liveFeeNum.toFixed(2)}`, net: `${fromSymbol}${netAmount.toFixed(2)}` })
-                    : t('addTx.feeDeductTransfer', { fee: `${fromSymbol}${liveFeeNum.toFixed(2)}`, net: `${toSymbol}${netAmount.toFixed(2)}` })}
-                </Text>
+                <View style={styles.transferMetaLeft}>
+                  <Ionicons name="receipt-outline" size={16} color={semantic.textSecondary} />
+                  <AppText variant="caption" color={semantic.textSecondary} style={styles.transferMetaLabel}>
+                    {t('addTx.fee')}
+                  </AppText>
+                </View>
+                <PressableScale
+                  style={styles.transferFeeValueButton}
+                  activeScale={0.97}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  onPress={() => openTransferCalculator('fee')}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('addTx.fee')}
+                >
+                  <CursorAmountText
+                    display={
+                      calculatorTarget === 'fee' && amountKeypadOpen
+                        ? feeExpr.displayValue
+                        : feeNum > 0
+                          ? `${fromSymbol}${feeNum.toFixed(2)}`
+                          : '0.00'
+                    }
+                    enabled={calculatorTarget === 'fee' && amountKeypadOpen}
+                    cursorFromEnd={feeCursor}
+                    onCursorChange={setFeeCursor}
+                    style={[styles.transferFeeValue, ...(feeNum > 0 ? [styles.transferFeeValueActive] : [])]}
+                    cursorStyle={styles.feeCursor}
+                  />
+                  <Ionicons name="calculator-outline" size={16} color={semantic.textTertiary} />
+                </PressableScale>
               </View>
-            )}
+
+              {/* 填了手续费就提示：手续费先从转出金额里扣掉——兑换的到账是"扣完再按汇率换算"，
+                  普通转账则直接按扣完的金额到账 */}
+              {liveFeeNum > 0 && (
+                <View style={styles.exchangeFeeHintRow}>
+                  <Ionicons name="information-circle-outline" size={16} color={semantic.textSecondary} />
+                  <AppText variant="caption" color={semantic.textSecondary} numberOfLines={2} style={styles.exchangeFeeHintText}>
+                    {showRateField
+                      ? t('addTx.feeDeductExchange', { fee: `${fromSymbol}${liveFeeNum.toFixed(2)}`, net: `${fromSymbol}${netAmount.toFixed(2)}` })
+                      : t('addTx.feeDeductTransfer', { fee: `${fromSymbol}${liveFeeNum.toFixed(2)}`, net: `${toSymbol}${netAmount.toFixed(2)}` })}
+                  </AppText>
+                </View>
+              )}
+            </Card>
           </View>
         </ScrollView>
         </View>
@@ -1615,7 +1694,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
             底部留白收紧(insets-32)：edge-to-edge 下根视图已延伸到导航条后面，
             再垫满 insets 会在键盘下方多出一条空位——键盘整体下移填补它 */}
         {amountKeypadOpen && (
-          <View style={[styles.stickyFooter, { paddingBottom: Math.max(insets.bottom - 40, 8), paddingHorizontal: 0 }]}>
+          <View style={[styles.stickyFooter, isShort && styles.stickyFooterShort, { paddingBottom: Math.max(insets.bottom - 40, isShort ? 4 : 8), paddingHorizontal: 0 }]}>
             <AmountCalculatorKeypad
               onPressKey={handleExprKey}
               onPressToday={() => setDatePickerOpen(true)}
@@ -1640,264 +1719,30 @@ export default function AddTransactionScreen({ navigation, route }: any) {
           </View>
         )}
 
-        {/* 选择账户（转账/兑换）：与支出/收入的账户弹层完全同款——树内覆盖层 + 下滑收起手势 +
-            头部货币直选按钮；仅列表逻辑保留转账特有：排除对方账户、按 from/to 角色写回选择 */}
+        {/* 选择账户（转账/兑换）：AccountPickerSheet（T13 抽取）——树内覆盖层 + 下滑收起手势 +
+            头部货币直选按钮；列表逻辑保留转账特有：排除对方账户、按 from/to 角色写回选择 */}
         {accountPickerOpen && (
-          <View style={[StyleSheet.absoluteFill, { zIndex: 90, elevation: 90 }]}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={closeAccountPicker}>
-              <Reanimated.View style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }, accountPickerScrimStyle]} />
-            </Pressable>
-            <GestureDetector gesture={accountPickerGesture}>
-              <Reanimated.View style={[styles.accountPickerSheet, accountPickerAnimStyle]}>
-                <View style={styles.accountPickerGrabber} />
-                <View
-                  style={styles.accountPickerHeader}
-                  onLayout={(e) => {
-                    // 头部盒实测（相对弹层）：币种下拉面板的锚点，头部被 EN 标题折行撑高时跟着下移
-                    const { y, height } = e.nativeEvent.layout;
-                    if (Math.abs(y - acctHeaderBox.y) > 0.5 || Math.abs(height - acctHeaderBox.h) > 0.5) {
-                      setAcctHeaderBox({ y, h: height });
-                    }
-                  }}
-                >
-                  <View style={{ flexShrink: 1, marginRight: 8 }}>
-                    <Text style={styles.accountPickerTitle}>
-                      {accountPickerRole === 'from' ? t('addTx.selectOut') : t('addTx.selectIn')}
-                    </Text>
-                  </View>
-                  <View style={styles.accountPickerHeaderRight}>
-                    {/* 货币直选键：与支出/收入弹层同款，点开"自己已有的币种"下拉，点选直接筛选账户列表。
-                        按键文字跟随当前筛选：打开时默认"全部货币"→显示该文案，选了具体币种→显示该代码 */}
-                    <TouchableOpacity
-                      style={styles.accountPickerCurrencyBtn}
-                      activeOpacity={0.75}
-                      onPress={() => setCurrencyDropOpen((v) => !v)}
-                      onLayout={(e) => {
-                        const h = e.nativeEvent.layout.height;
-                        if (Math.abs(h - acctPillH) > 0.5) setAcctPillH(h);
-                      }}
-                    >
-                      <Text style={styles.accountPickerCurrencyBtnText}>
-                        {currencyFilter === 'all' ? t('addTx.allCurrencies') : currencyFilter}
-                      </Text>
-                      <Ionicons
-                        name={currencyDropOpen ? 'chevron-up' : 'chevron-down'}
-                        size={12}
-                        color={colors.link}
-                      />
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.accountPickerClose} onPress={closeAccountPicker}>
-                      <Ionicons name="close" size={18} color={colors.textSecondary} />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                {/* 币种下拉面板：与支出/收入弹层同款；转账侧只筛选列表，不动金额显示币种（那是支出/收入的语义） */}
-                {currencyDropOpen && (
-                  <Pressable style={styles.currencyDropCatch} onPress={() => setCurrencyDropOpen(false)} />
-                )}
-                {currencyDropOpen && (
-                  <View
-                    style={[
-                      styles.currencyDropPanel,
-                      // 锚到货币钮实测底缘（+4 与支出/收入弹层同距）：EN 标题折行撑高头部时不再压住按钮
-                      acctHeaderBox.h > 0 && acctPillH > 0 && {
-                        top: acctHeaderBox.y + (acctHeaderBox.h + acctPillH) / 2 + 4,
-                      },
-                    ]}
-                  >
-                    <Text style={styles.currencyDropTitle}>{t('addTx.selectCurrency')}</Text>
-                    <TouchableOpacity
-                      style={[styles.currencyDropItem, currencyFilter === 'all' && { backgroundColor: colors.link + '14' }]}
-                      onPress={() => {
-                        setCurrencyFilter('all');
-                        setCurrencyDropOpen(false);
-                      }}
-                    >
-                      <Text
-                        style={[
-                          styles.currencyDropItemText,
-                          currencyFilter === 'all' && { color: colors.link, fontWeight: '700' },
-                        ]}
-                      >
-                        {t('addTx.allCurrencies')}
-                      </Text>
-                      {currencyFilter === 'all' && <Ionicons name="checkmark" size={16} color={colors.link} />}
-                    </TouchableOpacity>
-                    {ownCurrencies.map((code) => {
-                      const active = currencyFilter === code;
-                      return (
-                        <TouchableOpacity
-                          key={code}
-                          style={[styles.currencyDropItem, active && { backgroundColor: colors.link + '14' }]}
-                          onPress={() => {
-                            setCurrencyFilter(code);
-                            setCurrencyDropOpen(false);
-                          }}
-                        >
-                          <Text style={[styles.currencyDropItemText, active && { color: colors.link, fontWeight: '700' }]}>
-                            {code}
-                          </Text>
-                          {active && <Ionicons name="checkmark" size={16} color={colors.link} />}
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                )}
-
-                <View style={styles.accountSearchBox}>
-                  <Ionicons name="search-outline" size={16} color={colors.textTertiary} />
-                  <TextInput
-                    style={styles.accountSearchInput}
-                    value={accountSearch}
-                    onChangeText={setAccountSearch}
-                    placeholder={t('addTx.searchPlaceholder')}
-                    placeholderTextColor={colors.textTertiary}
-                  />
-                </View>
-
-                <View style={styles.accountFilterRow}>
-                  {[
-                    ['all', t('common.all')],
-                    ['cash', t('addTx.filterCash')],
-                    ['bank', t('addTx.filterBank')],
-                    ['credit', t('addTx.filterCredit')],
-                    ['ewallet', t('addTx.filterEwallet')],
-                  ].map(([key, label]) => (
-                    <TouchableOpacity
-                      key={key}
-                      style={[styles.accountFilterChip, accountFilter === key && styles.accountFilterChipActive]}
-                      onPress={() => setAccountFilter(key as typeof accountFilter)}
-                    >
-                      <Text style={[styles.accountFilterText, accountFilter === key && styles.accountFilterTextActive]}>
-                        {label}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                <Reanimated.ScrollView
-                  onScroll={accountListScrollHandler}
-                  style={styles.accountPickerList}
-                  showsVerticalScrollIndicator={false}
-                  keyboardShouldPersistTaps="handled"
-                >
-                  {(() => {
-                    // 资产页同款「一币一大卡」（与支出/收入弹层同款）：任何时候都是大卡，
-                    // from/to 双选语义保留（再点已选=取消）
-                    const visible = assets.filter((a) => {
-                      const keyword = accountSearch.trim().toLowerCase();
-                      const matchSearch = !keyword || `${a.name} ${a.currency} ${a.type}`.toLowerCase().includes(keyword);
-                      // 币种筛选：下拉里点了 USD 之类后，列表只显示该币种的账户
-                      const matchCurrency = currencyFilter === 'all' || a.currency === currencyFilter;
-                      // 分类按账户类型精确匹配（现金/银行卡/信用卡/电子钱包）；投资等其他类型只在"全部"里出现
-                      const matchFilter = accountFilter === 'all' || a.type === accountFilter;
-                      // 转账的两个角色互相排除：选转出时不列转入账户，反之亦然
-                      const otherId = accountPickerRole === 'from' ? toAssetId : fromAssetId;
-                      return matchSearch && matchCurrency && matchFilter && a.id !== otherId;
-                    });
-                    const byCurrency: Record<string, typeof visible> = {};
-                    visible.forEach((a) => {
-                      if (!byCurrency[a.currency]) byCurrency[a.currency] = [];
-                      byCurrency[a.currency].push(a);
-                    });
-                    return Object.entries(byCurrency)
-                      .sort(([c1], [c2]) => c1.localeCompare(c2))
-                      .map(([code, items]) => {
-                        const expanded = !pickerCollapsedGroups.has(code);
-                        const groupTotal = items.reduce((sum, a) => sum + getAssetBalance(a.id), 0);
-                        const flag = getCurrencyFlag(code);
-                        return (
-                          <View key={`grp-${code}`} style={styles.accountGroupShadow}>
-                            <LinearGradient
-                              colors={[colors.netWorthGradientFrom, colors.netWorthGradientTo]}
-                              start={{ x: 0, y: 0 }}
-                              end={{ x: 1, y: 1 }}
-                              style={styles.accountGroupCard}
-                            >
-                              <TouchableOpacity
-                                style={styles.accountGroupHeader}
-                                activeOpacity={0.75}
-                                onPress={() => togglePickerGroup(code)}
-                              >
-                                <View style={styles.accountGroupFlag}>
-                                  <Text style={flag ? styles.accountGroupFlagEmoji : styles.accountGroupFlagText}>
-                                    {flag ?? getCurrencySymbol(code)}
-                                  </Text>
-                                </View>
-                                <Text style={styles.accountGroupCode}>{code}</Text>
-                                <Text style={styles.accountGroupTotal}>{groupTotal.toFixed(2)}</Text>
-                                <Ionicons
-                                  name={expanded ? 'chevron-up' : 'chevron-down'}
-                                  size={16}
-                                  color={colors.netWorthAccent}
-                                  style={{ marginLeft: 6 }}
-                                />
-                              </TouchableOpacity>
-                              {expanded && (
-                                <View style={styles.accountGroupBody}>
-                                  {items.map((a) => {
-                                    const selected = accountPickerRole === 'from' ? fromAssetId === a.id : toAssetId === a.id;
-                                    return (
-                                      <TouchableOpacity
-                                        key={a.id}
-                                        style={[styles.accountGroupRow, selected && styles.accountGroupRowActive]}
-                                        activeOpacity={0.8}
-                                        onPress={() => {
-                                          // 手动选择/取消，之后不再自动跟随"默认账户"变化；再点一次已选＝取消选择
-                                          userPickedFromRef.current = true;
-                                          if (accountPickerRole === 'from') {
-                                            setFromAssetId((prev) => (prev === a.id ? null : a.id));
-                                          } else {
-                                            setToAssetId((prev) => (prev === a.id ? null : a.id));
-                                          }
-                                          setCurrencyFilter('all');
-                                          closeAccountPicker();
-                                        }}
-                                      >
-                                        <View style={styles.accountGroupRowIcon}>
-                                          <Ionicons name={a.icon as IconName} size={20} color={a.color} />
-                                        </View>
-                                        <View style={styles.accountGroupRowInfo}>
-                                          <Text style={styles.accountGroupRowName} numberOfLines={1}>
-                                            {a.name}
-                                          </Text>
-                                          {a.isDefault && <Text style={styles.accountDefaultBadge}>{t('addTx.currentDefault')}</Text>}
-                                        </View>
-                                        <Text style={styles.accountGroupRowAmount}>
-                                          {getAssetTransferBalance(a, getAssetBalance(a.id)).toFixed(2)}
-                                        </Text>
-                                        {selected && (
-                                          <Ionicons name="checkmark-circle" size={18} color={colors.income} style={{ marginLeft: 6 }} />
-                                        )}
-                                      </TouchableOpacity>
-                                    );
-                                  })}
-                                </View>
-                              )}
-                            </LinearGradient>
-                          </View>
-                        );
-                      });
-                  })()}
-                </Reanimated.ScrollView>
-
-                {/* "添加新账户"固定在面板最底部，不随账户列表滚动；点击直达添加资产账户页，返回时 goBack 回记一笔 */}
-                <View style={[styles.accountPickerFooter, { paddingBottom: Math.max(insets.bottom, 20) + 8 }]}>
-                  <TouchableOpacity
-                    style={styles.addAccountPickerBtn}
-                    onPress={() => {
-                      closeAccountPicker();
-                      navigation?.navigate(ROUTES.ADD_ASSET);
-                    }}
-                  >
-                    <Ionicons name="add-circle-outline" size={18} color={colors.link} />
-                    <Text style={styles.addAccountPickerText}>{t('addTx.addAccount')}</Text>
-                  </TouchableOpacity>
-                </View>
-              </Reanimated.View>
-            </GestureDetector>
-          </View>
+          <AccountPickerSheet
+            title={accountPickerRole === 'from' ? t('addTx.selectOut') : t('addTx.selectIn')}
+            selectedId={accountPickerRole === 'from' ? fromAssetId : toAssetId}
+            excludeId={accountPickerRole === 'from' ? toAssetId : fromAssetId}
+            currencyCode={amountCurrencyCode}
+            onPickAsset={(id) => {
+              // 手动选择/取消，之后不再自动跟随"默认账户"变化；再点一次已选＝取消选择
+              userPickedFromRef.current = true;
+              if (accountPickerRole === 'from') {
+                setFromAssetId((prev) => (prev === id ? null : id));
+              } else {
+                setToAssetId((prev) => (prev === id ? null : id));
+              }
+              setAccountPickerOpen(false);
+            }}
+            onClose={() => setAccountPickerOpen(false)}
+            onAddAccount={() => {
+              setAccountPickerOpen(false);
+              navigation?.navigate(ROUTES.ADD_ASSET);
+            }}
+          />
         )}
 
         <DateRangePickerSheet
@@ -1927,29 +1772,14 @@ export default function AddTransactionScreen({ navigation, route }: any) {
           }}
         />
 
-        <Modal
+        <ReceiptPreviewModal
           visible={receiptPreviewOpen}
-          transparent
-          animationType="fade"
-          onRequestClose={() => setReceiptPreviewOpen(false)}
-        >
-          <TouchableOpacity
-            style={styles.receiptViewerOverlay}
-            activeOpacity={1}
-            onPress={() => setReceiptPreviewOpen(false)}
-          >
-            {receiptUri && (
-              <Image source={{ uri: receiptUri }} style={styles.receiptViewerImage} resizeMode="contain" />
-            )}
-            <TouchableOpacity
-              style={styles.receiptViewerCloseBtn}
-              onPress={() => setReceiptPreviewOpen(false)}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            >
-              <Ionicons name="close" size={26} color={colors.bg} />
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </Modal>
+          uri={receiptUri}
+          onClose={() => setReceiptPreviewOpen(false)}
+        />
+
+        {/* T17：保存成功的勾选动画（转账/兑换同一套） */}
+        {saveFlash && <SaveSuccessFlash />}
       </SafeAreaView>
       </EdgeBackSwipe>
     );
@@ -1961,38 +1791,24 @@ export default function AddTransactionScreen({ navigation, route }: any) {
       <EdgeBackSwipe onBack={edgeBackHome}>
       <SafeAreaView style={styles.container} edges={['top']}
       onTouchStart={() => { Keyboard.dismiss(); }}>
-        <View style={styles.formHeaderRow}>
-          <View style={styles.formHeaderSide}>
-            <TouchableOpacity
-              style={styles.txHeaderBackBtn}
-              onPress={() => setStep('detail')}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons name="chevron-back" size={22} color={colors.icon} style={{ fontWeight: "700" }} />
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.formHeaderTitle}>{t('addTx.selectCategory')}</Text>
-          <View style={styles.formHeaderSideRight}>
-            {/* 右上编辑键：进出排版模式——三条横线行式拖动排序 + ⊖ 删除（资产页同款范式） */}
-            <TouchableOpacity
-              style={[styles.catEditToggleBtn, catEditMode && styles.catEditToggleBtnActive]}
+        {/* 二级页标准页头（T15 换 ScreenHeader）：返回 + 居中标题 + 编辑（进排版模式） */}
+        <ScreenHeader
+          title={t('addTx.selectCategory')}
+          onBack={() => setStep('detail')}
+          right={
+            <Button
+              title={catEditMode ? t('common.done') : t('addTx.edit')}
+              icon={catEditMode ? 'checkmark' : 'create-outline'}
+              variant={catEditMode ? 'primary' : 'secondary'}
+              size="sm"
+              fullWidth={false}
               onPress={() => {
                 hapticLight();
                 setCatEditMode((prev) => !prev);
               }}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons
-                name={catEditMode ? 'checkmark' : 'create-outline'}
-                size={16}
-                color={catEditMode ? colors.fabIcon : colors.link}
-              />
-              <Text style={[styles.catEditToggleText, catEditMode && { color: colors.fabIcon }]}>
-                {catEditMode ? t('common.done') : t('addTx.edit')}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+            />
+          }
+        />
 
         {/* 类别选择页不再显示 支出/收入/转账/兑换 切换栏：进来是什么类型就只显示该类型的类别 */}
 
@@ -2305,99 +2121,73 @@ export default function AddTransactionScreen({ navigation, route }: any) {
     <SafeAreaView style={styles.container} edges={['top']}
       onTouchStart={() => { Keyboard.dismiss(); }}>
       <View style={{ flex: 1 }}>
+      {/* UI V2：最底层品牌渐变（400 / 矮屏 ×0.9，底部自动淡出到 bg）；内容全部压在它上面 */}
+      <HeroGradient height={isShort ? Math.round(HERO_GRADIENT_HEIGHT * 0.9) : HERO_GRADIENT_HEIGHT} grid={false} />
       {/* TASK-011 五轮（用户定版尝试）：外层不再可滚——普通 View 替代 ScrollView。
-          页面不能滚 → 内容不可能被滚到键盘底下 → flex 布局让「全部」按钮天然停在键盘上沿。
+          页面不能滚 → 内容不可能被滚到键盘底下；T15 起类别网格自己可滚（catGridScroll），
+          flex 布局把键盘面板高度从容器里扣除，网格天然停在键盘上沿。
           scrollViewRef 不再挂在本页（scrollToField 的 ?. 兜底安全跳过）；转账/兑换分支不动 */}
-      <View
-        style={{ flex: 1 }}
-        onLayout={(e) => {
-          // 可视高度锁存（flex 已自动扣除键盘面板高度）——slice 裁剪兜底的输入
-          const h = e.nativeEvent.layout.height;
-          setScrollViewH((prev) => (prev == null || Math.abs(prev - h) > 0.5 ? h : prev));
-        }}
-      >
-        {/* 头部：返回 + 类型切换 + 扫票，合并成一行；编辑模式没有类型切换，保留原来的标题式头部 */}
+      <View style={{ flex: 1 }}>
+        {/* 头部两行（T14）：返回 + 标题 + 右侧动作（编辑模式 = 删除键）/ 类型分段单独一行 */}
         {isEditing ? (
-          <View style={styles.formHeaderRow}>
-            <View style={styles.formHeaderSide}>
-              <TouchableOpacity
-                style={styles.txHeaderBackBtn}
-                onPress={() => navigation?.goBack()}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <Ionicons name="chevron-back" size={22} color={colors.icon} style={{ fontWeight: "700" }} />
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.formHeaderTitle}>{t('addTx.editTitle')}</Text>
-            <View style={styles.formHeaderSideRight}>
-              {/* 删除入口从账单列表的滑动改到这里：点垃圾桶确认后删除并返回 */}
-              <TouchableOpacity
-                style={styles.txDeleteBtn}
-                onPress={handleDeleteTransaction}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <Ionicons name="trash-outline" size={20} color={colors.expense} />
-              </TouchableOpacity>
-            </View>
-          </View>
+          <TransactionTypeHeader
+            uiType={uiType}
+            onBack={() => navigation?.goBack()}
+            onSelectType={() => {}}
+            title={t('addTx.editTitle')}
+            onDeletePress={handleDeleteTransaction}
+            showTypeSwitch={false}
+          />
         ) : (
-          <View style={styles.txHeaderRow}>
-            <TouchableOpacity
-              style={styles.txHeaderBackBtn}
-              onPress={() => navigation?.goBack()}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons name="chevron-back" size={22} color={colors.icon} style={{ fontWeight: "700" }} />
-            </TouchableOpacity>
-            <View style={styles.txHeaderTypeSwitch}>
-              {TYPE_TABS.map((t, idx) => (
-                <React.Fragment key={t.key}>
-                  {idx > 0 && <View style={styles.txHeaderTypeDivider} />}
-                  <Pressable
-                    style={({ pressed }) => [
-                      styles.txHeaderTypeBtn,
-                      uiType === t.key && styles.txHeaderTypeBtnActive,
-                      pressed && (uiType === t.key ? styles.txHeaderTypeBtnSinkActive : styles.txHeaderTypeBtnSink),
-                    ]}
-                    onPress={() => {
-                      hapticSelection();
-                      setUiType(t.key);
-                      setCategoryId(null);
-                      setStep(stepForType(t.key));
-                    }}
-                  >
-                    <Text
-                      style={[styles.txHeaderTypeText, langMode !== 'zh' && styles.txHeaderTypeTextEn, uiType === t.key && styles.txHeaderTypeTextActive]}
-                      numberOfLines={1}
-                      adjustsFontSizeToFit
-                      minimumFontScale={0.8}
-                    >
-                      {t.label}
-                    </Text>
-                    {/* 底线：标记当前所在页面 */}
-                    {uiType === t.key && <View style={styles.txHeaderTypeUnderline} />}
-                  </Pressable>
-                </React.Fragment>
-              ))}
-            </View>
-          <TouchableOpacity style={styles.txHeaderScanBtn} onPress={handleScanPress}>
-              <Ionicons name="camera-outline" size={13} color={colors.link} style={{ marginRight: 4 }} />
-              <Text style={styles.txHeaderScanBtnText}>{t('addTx.scanReceipt')}</Text>
-            </TouchableOpacity>
-          </View>
+          <TransactionTypeHeader
+            uiType={uiType}
+            onBack={() => navigation?.goBack()}
+            onSelectType={(nextType) => {
+              setUiType(nextType);
+              setCategoryId(null);
+              setStep(stepForType(nextType));
+            }}
+            title={t('nav.add')}
+            onScanPress={handleScanPress}
+          />
         )}
 
-        {/* 金额：整屏视觉主角——与转账/兑换的资金流向卡同款外框,内含金额行 + 账户选择下拉 */}
-        <View style={styles.heroCard}>
-        <View style={styles.heroAmountWrap} onLayout={registerFieldY('amount')}>
-          {/* D-2（2026-09-24 用户拍板）：货币钮并入账户选择器成 L 型标签——
-              金额行只剩金额（行高 44 不变、改垂直居中），点金额区域打开自绘计算器键盘 */}
-          <View style={styles.heroAmountLine}>
-            {/* 金额行：TASK-015 固定行高不随位数变化——缩字+单行截断，14 位也不撑变形；
-                金额自己接管点按（原 heroAmountLine 的 onPress 移到 CursorAmountText 外包一层） */}
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={styles.heroAmountTextWrap}
+        {/* 金额 Hero（UI V2 / 稿）：币种小胶囊 → 算式（多项时才出现，14pt 降透明）→ 64pt 金额，
+            全部居中直接落在渐变上（不再是卡片）；金额点按打开自绘键盘 / 定位光标 */}
+        <View style={[styles.heroArea, isShort && styles.heroAreaShort]}>
+          <PressableScale
+            activeScale={0.96}
+            hitSlop={0}
+            onPress={() => setAssetPickerOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel={t('addTx.selectCurrency')}
+          >
+            <GlassView radius={999} style={styles.currencyPill}>
+              <AppText variant="caption2" weight="500" color={V2_ON_GRADIENT}>
+                {amountCurrencyCode}
+              </AppText>
+              <Ionicons name="chevron-down" size={12} color={V2_ON_GRADIENT_DIM} />
+            </GlassView>
+          </PressableScale>
+
+          {/* 算式行：多项（有 +/− 运算符）时才出现；稿里是 14pt 降透明白 */}
+          {amountExpr.isMulti && (
+            <AppText
+              variant="footnote"
+              color="rgba(255,255,255,0.8)"
+              align="center"
+              numberOfLines={1}
+              style={styles.heroExpr}
+            >
+              {amountExpr.displayValue}
+            </AppText>
+          )}
+
+          <View onLayout={registerFieldY('amount')} style={styles.heroAmountBox}>
+            <PressableScale
+              style={styles.heroAmountTouch}
+              activeScale={0.98}
+              hitSlop={0}
               onPress={() => {
                 // 备注框的系统键盘/光标退场：一次只允许一个光标显示
                 noteInputRef.current?.blur();
@@ -2407,188 +2197,130 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                 setAmountKeypadOpen(true);
                 scrollToField('amount');
               }}
+              accessibilityRole="button"
+              accessibilityLabel={`${amountCurrencyCode} ${heroAmountDisplay}`}
             >
-              <CursorAmountText
-                containerStyle={styles.heroAmountTextInner}
-                style={[styles.heroAmountText, { fontSize: heroAmountFontSize, lineHeight: heroAmountFontSize * 1.2 }]}
-                cursorStyle={[styles.heroCursorInline, { fontSize: heroAmountFontSize * 0.85 }]}
-                display={amountKeypadOpen ? amountExpr.displayValue : amount || '0.00'}
-                enabled={amountKeypadOpen}
+              {/* 整数 64/500 白 + .小数 34/300 降透明；光标随键盘开关（多项算式合计态无光标） */}
+              <HeroAmountText
+                display={heroAmountDisplay}
+                fontSize={heroAmountFontSize}
                 cursorFromEnd={amountCursor}
+                cursorActive={amountKeypadOpen && !amountExpr.isMulti}
                 onCursorChange={setAmountCursor}
-                numberOfLines={1}
               />
-            </TouchableOpacity>
+            </PressableScale>
           </View>
+        </View>
 
-          {/* D-3（2026-09-24 用户拍板）：第二行 = L 型选择器（左）+ 自动月结开关（右）。
-              视觉整块交给一张 SVG 一笔轮廓（外填紫罩+描边），标签与胶囊物理上无接缝、
-              拐角内凹圆弧自然过渡；内容与触区仍是透明 RN 视图叠在 SVG 上：
-              标签区=弹层直开「选择货币」，账户区=普通开弹层（选完账户币种自动跟随
-              =选择账户同时就能切换货币）；原金额行内联「选择货币」下拉面板已删 */}
-          <View style={styles.heroSecondRow}>
-            <View
-              style={[styles.heroCurrencyWrap, { height: HH }]}
-              onLayout={(e) => {
-                const w = e.nativeEvent.layout.width;
-                if (Math.abs(w - heroWrapW) > 0.5) setHeroWrapW(w);
+        {/* 账户 / 日期 / 月度结转：一行 V2 实底 Chip（夜 surfaceSunken / 日白底轻投影，稿），居中排布 */}
+        <View style={[styles.heroChipsRow, isShort && styles.heroChipsRowShort]}>
+          <TransactionChip
+            label={selectedAsset ? selectedAsset.name : t('common.notSelected')}
+            dotColor={selectedAsset?.color}
+            trailingIcon="chevron-down"
+            compact={isShort}
+            onPress={() => setAssetPickerOpen(true)}
+            accessibilityLabel={t('addTx.selectAccount')}
+          />
+          <TransactionChip
+            label={formatDateLabel(date, langMode, { style: 'monthDay' })}
+            trailingIcon="chevron-down"
+            compact={isShort}
+            onPress={() => setDatePickerOpen(true)}
+            accessibilityLabel={formatDateLabel(date, langMode, { style: 'monthDay' })}
+          />
+          {!isEditing && (
+            <TransactionChip
+              /* 文案按 9.2 ④ 长度预算取短档（胶囊 ≤10 字符）：英文 "Monthly expense" 会把整行挤换行，
+                 支出/收入类型由上方分段控件表达，这里只表达「每月一次」 */
+              label={t('finance.monthlyLabel')}
+              icon="repeat-outline"
+              selected={autoMonthly}
+              compact={isShort}
+              onPress={() => {
+                hapticLight();
+                setAutoMonthly((v) => !v);
               }}
-            >
-              <Svg width={heroLPaths.W} height={HH} style={styles.heroLSvg}>
-                <Path d={heroLPaths.dL} fill={colors.link + '14'} />
-                <Path
-                  d={heroLPaths.dL}
-                  stroke={assetPickerOpen ? colors.link : colors.link + '33'}
-                  strokeWidth={1}
-                  fill="none"
-                />
-              </Svg>
-              {/* 货币标签触区+内容（L 型上半）：点开弹层并直接展开「选择货币」面板 */}
-              <TouchableOpacity
-                style={styles.heroLTabRow}
-                activeOpacity={0.75}
-                onLayout={(e) => {
-                  const w = e.nativeEvent.layout.width;
-                  if (Math.abs(w - heroTabW) > 0.5) setHeroTabW(w);
-                }}
-                onPress={() => {
-                  setAccountSearch('');
-                  setAccountFilter('all');
-                  setCurrencyDropOpen(true);
-                  setAssetPickerOpen(true);
-                }}
-              >
-                <Text style={[styles.heroCurrencyTabText, { fontSize: 21, lineHeight: 21 * 1.2 }]}>
-                  {amountCurrencyCode}
-                </Text>
-                {/* D-3.5：货币旁的下拉箭头去除（用户定版）——点击整块标签仍可开「选择货币」面板 */}
-              </TouchableOpacity>
-              {/* 账户触区+内容（L 型下半）：收起货币面板防串态；选完账户币种自动跟随 */}
-              <TouchableOpacity
-                style={styles.heroLAccRow}
-                activeOpacity={0.7}
-                onPress={() => {
-                  setAccountSearch('');
-                  setAccountFilter('all');
-                  setCurrencyDropOpen(false);
-                  setAssetPickerOpen(true);
-                }}
-              >
-                <View
-                  style={[
-                    styles.heroCurrencyIconCircle,
-                    { backgroundColor: (selectedAsset?.color ?? colors.link) + '20' },
-                  ]}
-                >
-                  <Ionicons
-                    name={(selectedAsset?.icon as IconName) ?? 'wallet-outline'}
-                    size={20}
-                    color={selectedAsset?.color ?? colors.link}
-                  />
-                </View>
-                <Text
-                  style={styles.heroCurrencyAccName}
-                  numberOfLines={2}
-                  textBreakStrategy={Platform.OS === 'android' ? 'simple' : undefined}
-                >
-                  {/* 窄框里英文按词两行显示（"Not selected" 不缩字只能 Not/selected）；
-                      可用宽 = 账户行实测宽 - 固定占用（padding 8 + 图标 40 + 名字间距 4 + 箭头 2+12） */}
-                  {selectedAsset
-                    ? selectedAsset.name
-                    : twoLineLabel(t('common.notSelected'), heroWrapW - 66, 130)}
-                </Text>
-                <Ionicons name="chevron-down" size={12} color={colors.textTertiary} style={styles.heroCurrencyChevron} />
-              </TouchableOpacity>
-            </View>
-
-            {/* 月度结转开关（仅新增模式，默认关）：图示胶囊按钮式——左状态圆（关=空心圈/开=✓ 实心圆）
-                + 右侧文字；开时胶囊发光描边；整行点按切换 */}
-            {!isEditing && (
-              <TouchableOpacity
-                style={[styles.autoMonthlyRow, autoMonthly && styles.autoMonthlyRowOn]}
-                activeOpacity={0.8}
-                onPress={() => {
-                  hapticLight();
-                  setAutoMonthly((v) => !v);
-                }}
-              >
-                {/* 左状态圆：关=空心圈（dividerHair 描边），开=实心 link 圆 + 白色 ✓ */}
-                {autoMonthly ? (
-                  <View style={[styles.autoMonthlyStateCircle, styles.autoMonthlyStateCircleOn]}>
-                    <Ionicons name="checkmark" size={16} color="#FFFFFF" />
-                  </View>
-                ) : (
-                  <View style={styles.autoMonthlyStateCircle} />
-                )}
-                <Text style={[styles.autoMonthlyLabel, autoMonthly && styles.autoMonthlyLabelOn]} numberOfLines={1}>
-                  {/* 按类型显示「月度支出/月度收入」 */}
-                  {type === 'income' ? t('finance.typeIncome') : t('finance.typeExpense')}
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
+            />
+          )}
         </View>
 
-        {/* 类别：自适应网格——列数按机型（宽机 4 个/行、窄机 3 个/行，"全部"占行尾一格）；
-            最近用过的排前面，选了新类别就追加进网格、"全部"随之下移一行（TASK-007：
-            不限行数，挤满自动换行继续往下铺，铺不下的滚动查看） */}
-        <View style={styles.categorySectionHeader}>
-          <Text style={styles.sectionLabel}>
-            {selectedCategory ? `${t('addTx.categoryPrefix')}${getCategoryLabel(selectedCategory, t)}` : t('addTx.categoryRequired')}
-          </Text>
-        </View>
-        {/* 类别网格容器：onLayout 记录它在内容里的顶部 y（slice 裁剪兜底输入）。
-            外层已不可滚，网格被 flex 顶在键盘上方——此值仅作容量计算 */}
-        <View
-          style={styles.categoryChipGrid}
+        {/* 类别（T15 / V2）：列数取版型；格 = 48 圆图标 + 12pt 标签；网格区可滚动，「全部」永远殿后。
+            定稿里没有「类别：xxx」提示行（选中态由外圈表达）→ 整行删掉，高度让给网格：
+            390×844 露出 3 行（15 格，与稿一致），360×640 至少 2 行 */}
+        <ScrollView
+          style={styles.catGridScroll}
+          contentContainerStyle={[styles.catGridContent, isShort && styles.catGridContentShort]}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
           onLayout={(e) => {
-            const top = e.nativeEvent.layout.y;
-            setGridTopY((prev) => (prev == null || Math.abs(prev - top) > 0.5 ? top : prev));
+            // 实测网格区可见高度 → 决定铺多少格（至少 2 行）；超出的历史类别靠网格自身滚动
+            const h = e.nativeEvent.layout.height;
+            setGridH((prev) => (prev == null || Math.abs(prev - h) > 0.5 ? h : prev));
           }}
         >
+          {/* 每格外包一层 View 承载百分比宽度 —— RN Web 里百分比宽度必须落在 flex 直接子项上
+              （PressableScale 的 Pressable 宽度是内容自适应，百分比给不到它内部那层） */}
           {displayCategories.map((c) => {
             const active = categoryId === c.id;
             return (
-              <TouchableOpacity
-                key={c.id}
-                style={[
-                  styles.categoryChip,
-                  // 长名不截断（2026-09-25 字号15批次）：短名保持网格等宽（minWidth），
-                  // 4 字名按内容加长、flexWrap 自动 reflow——文字永不被挤出框外
-                  { minWidth: categoryChipW },
-                  active && { backgroundColor: colors.fabBg, borderColor: colors.fabBg },
-                ]}
-                onPress={() => handlePickCategory(c.id)}
-              >
-                <View
-                  style={[
-                    styles.categoryChipIconBox,
-                    { backgroundColor: active ? 'rgba(255,255,255,0.28)' : c.color + '20' },
-                  ]}
+              <View key={c.id} style={[styles.catCellWrap, { width: `${100 / categoryColumns}%` as unknown as `${number}%` }]}>
+                <PressableScale
+                  style={[styles.catCell, isShort && styles.catCellShort]}
+                  activeScale={0.94}
+                  onPress={() => handlePickCategory(c.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={getCategoryLabel(c, t)}
+                  accessibilityState={{ selected: active }}
                 >
-                  {/* TASK-011 三轮（用户定版）：选中不再渲染白色✓，图标格保持原分类图标不变 */}
-                  <Ionicons name={c.icon as IconName} size={15} color={active ? '#fff' : c.color} />
-                </View>
-                <Text style={[styles.categoryChipLabel, active && { color: '#fff' }]} numberOfLines={1}>
-                  {getCategoryLabel(c, t)}
-                </Text>
-              </TouchableOpacity>
+                  {/* UI V2 稿：48 圆图标（未选中 = 类别色淡底；选中 = 类别色实底 + 外圈）。
+                      外圈 = 两层嵌套 View 画的真圆（不依赖 boxShadow）：58 圆 borderWidth 2
+                      （夜 = 类别色 60% / 日 = #9B5BD6），与 48 实心圆之间留 3 的页面底间隙；
+                      绝对定位在 48 盒子上，不占布局、选中时图标不位移 */}
+                  <View style={styles.catIconBox}>
+                    <IconCircle size={48} color={c.color} icon={c.icon as IconName} selected={active} />
+                    {active ? (
+                      <View
+                        pointerEvents="none"
+                        style={[
+                          styles.catRing,
+                          { borderColor: isDark ? withAlpha(c.color, categoryRing.darkAlpha) : categoryRing.light },
+                        ]}
+                      />
+                    ) : null}
+                  </View>
+                  <AppText
+                    variant="caption"
+                    align="center"
+                    numberOfLines={2}
+                    weight={active ? '600' : undefined}
+                    color={active ? semantic.textPrimary : semantic.textSecondary}
+                    style={styles.catCellLabel}
+                  >
+                    {getCategoryLabel(c, t)}
+                  </AppText>
+                </PressableScale>
+              </View>
             );
           })}
 
-          {/* "全部"入口：做成和类别胶囊一样大小的紫色描边 Pill，放在网格最后一位。
-              TASK-011 容量裁剪：超出可见容量的类别不渲染，「全部」永远殿后且必在
-              键盘面板上方的可见区域内（网格顶→停止线之间），不会再被键盘盖住 */}
-          <TouchableOpacity
-            style={[styles.morePill, { width: categoryChipW }]}
-            onPress={() => setStep('category')}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.morePillText}>{t('common.all')}</Text>
-            <Ionicons name="chevron-forward" size={13} color={colors.link} />
-          </TouchableOpacity>
-        </View>
+          {/* 「全部」殿后格：与类别格同尺寸，打开完整列表抽屉（组内新增 / 排序 / 删除都在「管理类别」页）；
+              稿里是中性圆（夜 surfaceSunken / 日白底轻投影）+ 九宫格图标 */}
+          <View style={[styles.catCellWrap, { width: `${100 / categoryColumns}%` as unknown as `${number}%` }]}>
+            <PressableScale
+              style={[styles.catCell, isShort && styles.catCellShort]}
+              activeScale={0.94}
+              onPress={() => setCatSheetOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel={t('common.all')}
+            >
+              <IconCircle size={48} icon="grid-outline" />
+              <AppText variant="caption" align="center" color={semantic.textSecondary} style={styles.catCellLabel}>
+                {t('common.all')}
+              </AppText>
+            </PressableScale>
+          </View>
+        </ScrollView>
       </View>
       </View>
 
@@ -2597,7 +2329,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
           再垫满 insets 会在键盘下方多出一条空位——键盘整体下移填补它 */}
       {amountKeypadOpen && (
         <View
-          style={[styles.stickyFooter, { paddingBottom: Math.max(insets.bottom - 40, 8), paddingHorizontal: 0 }]}
+          style={[styles.stickyFooter, isShort && styles.stickyFooterShort, { paddingBottom: Math.max(insets.bottom - 40, isShort ? 4 : 8), paddingHorizontal: 0 }]}
         >
           <AmountCalculatorKeypad
             onPressKey={(key) => setAmountCursor(amountExpr.pressKeyAt(key, amountCursor))}
@@ -2651,287 +2383,71 @@ export default function AddTransactionScreen({ navigation, route }: any) {
         }}
       />
 
-      {/* 凭证大图预览：点缩略图放大查看整体，长按缩略图可重新拍照/选相册 */}
-      <Modal
+      {/* 凭证大图预览：挂在 ReceiptPreviewModal（T13 抽取）里，点缩略图放大查看整体 */}
+      <ReceiptPreviewModal
         visible={receiptPreviewOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setReceiptPreviewOpen(false)}
-      >
-        <TouchableOpacity
-          style={styles.receiptViewerOverlay}
-          activeOpacity={1}
-          onPress={() => setReceiptPreviewOpen(false)}
-        >
-          {receiptUri && (
-            <Image source={{ uri: receiptUri }} style={styles.receiptViewerImage} resizeMode="contain" />
-          )}
-          <TouchableOpacity
-            style={styles.receiptViewerCloseBtn}
-            onPress={() => setReceiptPreviewOpen(false)}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-          >
-            <Ionicons name="close" size={26} color={colors.bg} />
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
-      {/* 选择账户：树内覆盖层（不用 RN Modal——Modal 是独立原生窗口，和 Reanimated 在安卓上
-          会出重影、也接不了下滑手势；外壳与日期选择面板完全同款） */}
+        uri={receiptUri}
+        onClose={() => setReceiptPreviewOpen(false)}
+      />
+      {/* 选择账户：AccountPickerSheet（T13 抽取）——树内覆盖层（不用 RN Modal——Modal 是独立原生窗口，
+          和 Reanimated 在安卓上会出重影、也接不了下滑手势；外壳与日期选择面板完全同款） */}
       {assetPickerOpen && (
-        <View style={[StyleSheet.absoluteFill, { zIndex: 90, elevation: 90 }]}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={closeAccountPicker}>
-            <Reanimated.View style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }, accountPickerScrimStyle]} />
-          </Pressable>
-          <GestureDetector gesture={accountPickerGesture}>
-            <Reanimated.View style={[styles.accountPickerSheet, accountPickerAnimStyle]}>
-              <View style={styles.accountPickerGrabber} />
-                <View style={styles.accountPickerHeader}>
-                  <View style={{ flexShrink: 1, marginRight: 8 }}>
-                    <Text style={styles.accountPickerTitle}>{t('addTx.selectAccount')}</Text>
-                  </View>
-                  <View style={styles.accountPickerHeaderRight}>
-                    {/* 货币直选键：点击弹出"自己已有的币种"下拉菜单（同首页多币种切换），点选直接切换金额币种。
-                        按键文字跟随当前筛选：打开时默认"全部"→显示 ALL，选了具体币种→显示该代码 */}
-                    <TouchableOpacity
-                      style={styles.accountPickerCurrencyBtn}
-                      activeOpacity={0.75}
-                      onPress={() => setCurrencyDropOpen((v) => !v)}
-                    >
-                      <Text style={styles.accountPickerCurrencyBtnText}>
-                        {currencyFilter === 'all' ? t('addTx.allCurrencies') : currencyFilter}
-                      </Text>
-                      <Ionicons
-                        name={currencyDropOpen ? 'chevron-up' : 'chevron-down'}
-                        size={12}
-                        color={colors.link}
-                      />
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.accountPickerClose} onPress={closeAccountPicker}>
-                      <Ionicons name="close" size={18} color={colors.textSecondary} />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-            {/* 币种下拉面板：悬浮在货币按钮正下方（右对齐、绝对定位不挤压下方内容）；
-                点面板外任意空白处收起；选项只显示 MYR/THB 这种后置代码，
-                点选只筛选账户列表（金额币种只认所选账户，不随面板币种变化）；"全部币种"恢复不筛选 */}
-            {currencyDropOpen && (
-              <Pressable style={styles.currencyDropCatch} onPress={() => setCurrencyDropOpen(false)} />
-            )}
-            {currencyDropOpen && (
-              <View style={styles.currencyDropPanel}>
-                <Text style={styles.currencyDropTitle}>{t('addTx.selectCurrency')}</Text>
-                <TouchableOpacity
-                  style={[styles.currencyDropItem, currencyFilter === 'all' && { backgroundColor: colors.link + '14' }]}
-                  onPress={() => {
-                    setCurrencyFilter('all');
-                    setCurrencyDropOpen(false);
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.currencyDropItemText,
-                      currencyFilter === 'all' && { color: colors.link, fontWeight: '700' },
-                    ]}
-                  >
-                    {t('addTx.allCurrencies')}
-                  </Text>
-                  {currencyFilter === 'all' && <Ionicons name="checkmark" size={16} color={colors.link} />}
-                </TouchableOpacity>
-                {ownCurrencies.map((code) => {
-                  const active = currencyFilter === code;
-                  return (
-                    <TouchableOpacity
-                      key={code}
-                      style={[styles.currencyDropItem, active && { backgroundColor: colors.link + '14' }]}
-                      onPress={() => {
-                        setCurrencyFilter(code);
-                        setCurrencyDropOpen(false);
-                      }}
-                    >
-                      <Text style={[styles.currencyDropItemText, active && { color: colors.link, fontWeight: '700' }]}>
-                        {code}
-                      </Text>
-                      {active && <Ionicons name="checkmark" size={16} color={colors.link} />}
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            )}
-
-            <View style={styles.accountSearchBox}>
-              <Ionicons name="search-outline" size={16} color={colors.textTertiary} />
-              <TextInput
-                style={styles.accountSearchInput}
-                value={accountSearch}
-                onChangeText={setAccountSearch}
-                placeholder={t('addTx.searchPlaceholder')}
-                placeholderTextColor={colors.textTertiary}
-              />
-            </View>
-
-            <View style={styles.accountFilterRow}>
-              {[
-                ['all', t('common.all')],
-                ['cash', t('addTx.filterCash')],
-                ['bank', t('addTx.filterBank')],
-                ['credit', t('addTx.filterCredit')],
-                ['ewallet', t('addTx.filterEwallet')],
-              ].map(([key, label]) => (
-                <TouchableOpacity
-                  key={key}
-                  style={[styles.accountFilterChip, accountFilter === key && styles.accountFilterChipActive]}
-                  onPress={() => setAccountFilter(key as typeof accountFilter)}
-                >
-                  <Text style={[styles.accountFilterText, accountFilter === key && styles.accountFilterTextActive]}>
-                    {label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Reanimated.ScrollView
-              onScroll={accountListScrollHandler}
-              style={styles.accountPickerList}
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-            >
-              {(() => {
-                // 资产页同款「一币一大卡」：每货币一张紫渐变大卡（卡头=旗徽+代码+组总额+折叠chevron，
-                // 点卡头收/展沿用 pickerCollapsedGroups），卡内=账户小框（白0.10底圆角12无边框）。
-                // 任何时候都是大卡——选了某币种=只显示那一张卡（原「筛选后平铺」分支删除）
-                const visible = assets.filter((a) => {
-                  const keyword = accountSearch.trim().toLowerCase();
-                  const matchSearch = !keyword || `${a.name} ${a.currency} ${a.type}`.toLowerCase().includes(keyword);
-                  // 币种筛选：下拉里点了 USD 之类后，列表只显示该币种的账户
-                  const matchCurrency = currencyFilter === 'all' || a.currency === currencyFilter;
-                  // 分类按账户类型精确匹配（现金/银行卡/信用卡/电子钱包）；投资等其他类型只在"全部"里出现
-                  const matchFilter = accountFilter === 'all' || a.type === accountFilter;
-                  return matchSearch && matchCurrency && matchFilter;
-                });
-                const byCurrency: Record<string, typeof visible> = {};
-                visible.forEach((a) => {
-                  if (!byCurrency[a.currency]) byCurrency[a.currency] = [];
-                  byCurrency[a.currency].push(a);
-                });
-                return Object.entries(byCurrency)
-                  .sort(([c1], [c2]) => c1.localeCompare(c2))
-                  .map(([code, items]) => {
-                    const expanded = !pickerCollapsedGroups.has(code);
-                    const groupTotal = items.reduce((sum, a) => sum + getAssetBalance(a.id), 0);
-                    const flag = getCurrencyFlag(code);
-                    return (
-                      <View key={`grp-${code}`} style={styles.accountGroupShadow}>
-                        {/* 与资产页 currencyGroupCard 同款渐变/描边/圆角，日夜间各有一组 token 自动切换 */}
-                        <LinearGradient
-                          colors={[colors.netWorthGradientFrom, colors.netWorthGradientTo]}
-                          start={{ x: 0, y: 0 }}
-                          end={{ x: 1, y: 1 }}
-                          style={styles.accountGroupCard}
-                        >
-                          <TouchableOpacity
-                            style={styles.accountGroupHeader}
-                            activeOpacity={0.75}
-                            onPress={() => togglePickerGroup(code)}
-                          >
-                            <View style={styles.accountGroupFlag}>
-                              <Text style={flag ? styles.accountGroupFlagEmoji : styles.accountGroupFlagText}>
-                                {flag ?? getCurrencySymbol(code)}
-                              </Text>
-                            </View>
-                            <Text style={styles.accountGroupCode}>{code}</Text>
-                            <Text style={styles.accountGroupTotal}>{groupTotal.toFixed(2)}</Text>
-                            <Ionicons
-                              name={expanded ? 'chevron-up' : 'chevron-down'}
-                              size={16}
-                              color={colors.netWorthAccent}
-                              style={{ marginLeft: 6 }}
-                            />
-                          </TouchableOpacity>
-                          {expanded && (
-                            <View style={styles.accountGroupBody}>
-                              {items.map((a) => {
-                                const selected = assetId === a.id;
-                                return (
-                                  <TouchableOpacity
-                                    key={a.id}
-                                    style={[styles.accountGroupRow, selected && styles.accountGroupRowActive]}
-                                    activeOpacity={0.8}
-                                    onPress={() => {
-                                      userPickedAssetRef.current = true;
-                                      setAssetId(a.id);
-                                      // 金额币种自动跟随新账户（只认所选账户），筛选复位
-                                      setCurrencyFilter('all');
-                                      setAssetPickerOpen(false);
-                                    }}
-                                  >
-                                    <View style={styles.accountGroupRowIcon}>
-                                      <Ionicons name={a.icon as IconName} size={20} color={a.color} />
-                                    </View>
-                                    <View style={styles.accountGroupRowInfo}>
-                                      <Text style={styles.accountGroupRowName} numberOfLines={1}>
-                                        {a.name}
-                                      </Text>
-                                      {a.isDefault && <Text style={styles.accountDefaultBadge}>{t('addTx.currentDefault')}</Text>}
-                                    </View>
-                                    <Text style={styles.accountGroupRowAmount}>
-                                      {getAssetDisplayBalance(a, getAssetBalance(a.id)).toFixed(2)}
-                                    </Text>
-                                    {selected && (
-                                      <Ionicons name="checkmark-circle" size={18} color={colors.income} style={{ marginLeft: 6 }} />
-                                    )}
-                                  </TouchableOpacity>
-                                );
-                              })}
-                            </View>
-                          )}
-                        </LinearGradient>
-                      </View>
-                    );
-                  });
-              })()}
-
-            </Reanimated.ScrollView>
-
-            {/* "添加新账户"固定在面板最底部，不随账户列表滚动；点击直达添加资产账户页，返回时 goBack 回记一笔 */}
-            <View style={[styles.accountPickerFooter, { paddingBottom: Math.max(insets.bottom, 20) + 8 }]}>
-              <TouchableOpacity
-                style={styles.addAccountPickerBtn}
-                onPress={() => {
-                  setAssetPickerOpen(false);
-                  navigation?.navigate(ROUTES.ADD_ASSET);
-                }}
-              >
-                <Ionicons name="add-circle-outline" size={18} color={colors.link} />
-                <Text style={styles.addAccountPickerText}>{t('addTx.addAccount')}</Text>
-              </TouchableOpacity>
-            </View>
-            </Reanimated.View>
-          </GestureDetector>
-        </View>
+        <AccountPickerSheet
+          title={t('addTx.selectAccount')}
+          selectedId={assetId}
+          currencyCode={amountCurrencyCode}
+          onPickAsset={(id) => {
+            userPickedAssetRef.current = true;
+            setAssetId(id);
+            // 金额币种自动跟随新账户（只认所选账户）
+            setAssetPickerOpen(false);
+          }}
+          onClose={() => setAssetPickerOpen(false)}
+          onAddAccount={() => {
+            setAssetPickerOpen(false);
+            navigation?.navigate(ROUTES.ADD_ASSET);
+          }}
+        />
       )}
+
+      {/* 「全部」类别抽屉（T15）：完整列表 + 行内打勾；管理与排序入口在「管理类别」页 */}
+      {catSheetOpen && (
+        <CategoryPickerSheet
+          sections={groupedExpenseSections}
+          selectedId={categoryId}
+          onPickCategory={(id) => {
+            // 「全部」抽屉选了「网格里没有」的类别 → 插到第 1 格（原行为）；
+            // 已在网格里的只高亮、不重排（T15 修正：格子不在手指下乱跑）
+            const visible = displayCategories.some((c) => c.id === id);
+            if (!visible) setGridOrder((prev) => [id, ...prev.filter((x) => x !== id)]);
+            handlePickCategory(id);
+            setCatSheetOpen(false);
+          }}
+          onManage={() => {
+            setCatSheetOpen(false);
+            setStep('category');
+          }}
+          onClose={() => setCatSheetOpen(false)}
+        />
+      )}
+
+      {/* T17：保存成功的勾选动画（300ms 后由 playSaveFlashThen 收尾返回 / 留页） */}
+      {saveFlash && <SaveSuccessFlash />}
     </SafeAreaView>
     </EdgeBackSwipe>
   );
 }
 
 // 关键：样式表要写成函数，接收 colors，返回 StyleSheet
-function makeStyles(colors: ThemeColors, isDark: boolean) {
+function makeStyles(colors: ThemeColors, isDark: boolean, semantic: SemanticColors, spacing: Spacing, layout: Layout, radius: Radius) {
   return StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.card },
+  container: { flex: 1, backgroundColor: semantic.bg },
   scanningWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   scanningText: { marginTop: 16, color: colors.textSecondary, fontSize: 14 },
-  typeSwitch: { flexDirection: 'row', marginHorizontal: 20, marginTop: 12, marginBottom: 20, backgroundColor: colors.bg, borderRadius: 14, padding: 4 },
-  typeBtn: { flex: 1, paddingVertical: 16, borderRadius: 11, alignItems: 'center' },
-  typeBtnActive: { backgroundColor: colors.fabBg },
-  typeText: { fontSize: 14, color: colors.textSecondary, fontWeight: '600' },
-  typeTextActive: { color: colors.bg },
   catGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 12 },
   catItem: { width: '25%', alignItems: 'center', marginBottom: 14 },
   catIconCircle: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center' },
   catLabel: { fontSize: 12, color: colors.textPrimary, marginTop: 6 },
-  // 「添加」方块：与分类图标同尺寸，点击跳到 类别分类 页新增
-  catAddTile: { width: '25%', alignItems: 'center', marginBottom: 14 },
   // 组内联添加（TASK-004 自类别分类页并入；TASK-016 两步小卡：图标预览 + 名称 + ✓ 一行 + 单行色条）
   catInlineCard: { paddingHorizontal: 14, paddingBottom: 12, paddingTop: 2 },
   catInlineInput: {
@@ -2981,19 +2497,6 @@ function makeStyles(colors: ThemeColors, isDark: boolean) {
   catMiniColorDot: { width: 26, height: 26, borderRadius: 13, marginRight: 10, marginBottom: 8 },
   catMiniColorDotActive: { borderWidth: 2, borderColor: colors.textPrimary },
   // 右上编辑键（TASK-006）：与返回键同尺寸圆框，未激活 link 描边、激活 fabBg 实底
-  catEditToggleBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    height: 34,
-    paddingHorizontal: 12,
-    borderRadius: 17,
-    borderWidth: 1.5,
-    borderColor: colors.link,
-    backgroundColor: colors.card,
-  },
-  catEditToggleBtnActive: { backgroundColor: colors.fabBg, borderColor: colors.fabBg },
-  catEditToggleText: { color: colors.link, fontSize: 12, fontWeight: '700' },
   // TASK-016⑤：编辑模式行式列表（资产页三条横线同款）
   catEditListWrap: { paddingHorizontal: 10, paddingBottom: 8 },
   catEditRow: {
@@ -3055,10 +2558,6 @@ function makeStyles(colors: ThemeColors, isDark: boolean) {
   newGroupEntryText: { color: colors.link, fontSize: 14, fontWeight: '700', marginLeft: 6 },
   newCatTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
   newCatTitle: { fontSize: 13, fontWeight: '700', color: colors.textPrimary },
-  newGroupColorLabel: { fontSize: 11, color: colors.textTertiary, marginTop: 10, marginBottom: 6 },
-  newGroupColorRow: { flexDirection: 'row', flexWrap: 'wrap' },
-  newGroupColorDot: { width: 28, height: 28, borderRadius: 14, marginRight: 10, marginBottom: 6 },
-  newGroupColorDotActive: { borderWidth: 2, borderColor: colors.textPrimary },
   newCatBtnFull: {
     marginTop: 12,
     backgroundColor: colors.fabBg,
@@ -3102,216 +2601,18 @@ function makeStyles(colors: ThemeColors, isDark: boolean) {
     paddingVertical: 8,
   },
   catEditDoneText: { color: colors.fabIcon, fontWeight: '700', fontSize: 13 },
-  backRow: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4 },
-  backText: { color: colors.link, fontSize: 14 },
-  selectedCatRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, marginTop: 8 },
-  selectedCatName: { fontSize: 16, fontWeight: '700', color: colors.textPrimary, marginLeft: 12 },
-  amountWrap: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginVertical: 28 },
-  currencySign: { fontSize: 28, color: colors.textPrimary, marginRight: 4 },
-  amountInput: { fontSize: 44, fontWeight: '700', color: colors.textPrimary, minWidth: 120, textAlign: 'center' },
-  sectionTitle: { fontSize: 13, color: colors.textSecondary, marginLeft: 20, marginBottom: 8, marginTop: 8 },
-  dateRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginHorizontal: 20,
-    backgroundColor: colors.bg,
-    borderRadius: 12,
-    padding: 12,
-  },
-  dateBtn: { padding: 6 },
-  dateBtnText: { color: colors.link, fontSize: 13 },
-  dateText: { fontSize: 15, fontWeight: '600', color: colors.textPrimary },
-  noteInput: {
-    marginHorizontal: 20,
-    backgroundColor: colors.bg,
-    borderRadius: 12,
-    padding: 12,
-    fontSize: 14,
-    color: colors.textPrimary,
-  },
-  emptyAssetWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 40 },
-  emptyAssetText: { textAlign: 'center', color: colors.textSecondary, marginBottom: 20, lineHeight: 22 },
-  assetGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 8 },
-  assetOption: {
-    width: '48%',
-    marginBottom: 12,
-    backgroundColor: colors.bg,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.dividerHair,
-    alignItems: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 6,
-  },
-  assetOptionDisabled: { opacity: 0.3 },
-  // width: '100%' 是关键——不设的话，文字换行时每一行只会按内容宽度紧贴，
-  // textAlign: 'center' 只能让单行看起来居中，一旦数字长到换行，第二行就会看着像贴边一样。
-  assetOptionLabel: { fontSize: 13, color: colors.textPrimary, marginTop: 6, textAlign: 'center', width: '100%' },
-  assetOptionCurrency: { fontSize: 11, color: colors.textTertiary, marginTop: 4, textAlign: 'center', width: '100%' },
 
-  // ---------- 转账/兑换选账户：一行3个的紧凑卡片 ----------
-  assetGrid3: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 4 },
-  assetOption3: {
-    width: '31%',
-    minHeight: 92,
-    marginBottom: 10,
-    backgroundColor: colors.bg,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.dividerHair,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 4,
-  },
-  // numberOfLines={1} + 固定宽度 + 居中：不管名字/金额多长，卡片高度都保持一致，
-  // 三张卡片并排时不会因为某一张文字换行而错位、看着"乱"
-  assetOption3Label: { fontSize: 12, fontWeight: '600', color: colors.textPrimary, marginTop: 6, textAlign: 'center', width: '100%' },
-  assetOption3Currency: { fontSize: 11, color: colors.textSecondary, marginTop: 3, textAlign: 'center', width: '100%' },
-  assetOption3Code: { fontSize: 9, color: colors.textTertiary, marginTop: 1, textAlign: 'center', width: '100%' },
-
-  // ---------- 固定在屏幕底部的按钮栏：不随内容滚动，永远看得见 ----------
+  // ---------- 键盘停靠区（V2）：面板自身画 keypadPanel 底 + 顶部 30 圆角，这里只留底部安全区补白 ----------
   stickyFooter: {
     paddingHorizontal: 20,
-    paddingTop: 6,
-    backgroundColor: colors.card,
-    borderTopWidth: 1,
-    borderTopColor: colors.dividerHair,
+    paddingTop: 0,
   },
-
-  // ---------- 日历快速选择（iOS用底部弹层包住内嵌日历） ----------
-  datePickerBackdrop: { flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' },
-  datePickerSheet: {
-    backgroundColor: colors.card,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 30,
-  },
-
-  transferSummary: { paddingHorizontal: 20, marginTop: 16 },
-  transferSummaryRow: { flexDirection: 'row', alignItems: 'center' },
-  transferSummaryText: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
-  rateInput: {
-    marginHorizontal: 20,
-    backgroundColor: colors.bg,
-    borderRadius: 12,
-    padding: 12,
-    fontSize: 14,
-    color: colors.textPrimary,
-    marginBottom: 4,
-  },
-  convertedPreview: { marginHorizontal: 20, fontSize: 12, color: colors.income, marginTop: 4, marginBottom: 8 },
+  // 矮屏：键盘面板上沿留白 6→0（键盘本身高度由 useLayout 键高决定）
+  stickyFooterShort: { paddingTop: 0 },
 
   // ---------- 支出/收入卡片式表单新增样式 ----------
   // 与转账/兑换页头部(txHeaderRow)对齐：同样的水平边距和更高的上下留白，
   // 让选择类别/编辑页的返回按钮和标题与主页面保持在同一层
-  formHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingTop: 6,
-    paddingBottom: 10,
-    // 与主页面头部(内容高50px)完全同高：Yoga 的 minHeight 不会让子元素重新居中，
-    // 必须用显式高度，返回钮/标题才会和主页面一样居中下沉 5px
-    height: 66,
-  },
-  formHeaderSide: { flex: 1, flexDirection: 'row', alignItems: 'center' },
-  formHeaderSideRight: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
-  formHeaderTitle: {
-    flex: 1,
-    textAlign: 'center',
-    fontSize: 17,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  formHeaderScanBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.bg,
-    borderRadius: 16,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  formHeaderScanBtnText: { fontSize: 12, color: colors.textPrimary, fontWeight: '600' },
-  formCard: {
-    marginHorizontal: 20,
-    marginTop: 20,
-    backgroundColor: colors.bg,
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    borderWidth: 1,
-    borderColor: colors.dividerHair,
-    overflow: 'hidden',
-  },
-  formRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 14,
-  },
-  formRowLeft: { flexDirection: 'row', alignItems: 'center' },
-  formRowRight: { flexDirection: 'row', alignItems: 'center' },
-  formRowLabel: { fontSize: 14, color: colors.textPrimary, marginLeft: 8 },
-  formRowValue: { fontSize: 14, color: colors.textPrimary, fontWeight: '600', marginRight: 4 },
-  formRowHint: { fontSize: 11, color: colors.textTertiary },
-  formRowInput: {
-    flex: 1,
-    marginLeft: 12,
-    fontSize: 14,
-    color: colors.textPrimary,
-    textAlign: 'right',
-  },
-  formDivider: { height: 1, backgroundColor: colors.dividerHair },
-  dateStepper: { flexDirection: 'row', alignItems: 'center' },
-  amountRowRight: { flexDirection: 'row', alignItems: 'center' },
-  currencySignSmall: { fontSize: 16, color: colors.textPrimary, marginRight: 4, fontWeight: '600' },
-  amountInputInline: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    minWidth: 90,
-    textAlign: 'right',
-    padding: 0,
-  },
-  catIconCircleSmall: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  assetDropdown: {
-    backgroundColor: colors.bg,
-    borderRadius: 10,
-    marginBottom: 12,
-    overflow: 'hidden',
-  },
-  assetDropdownItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.dividerHair,
-  },
-  assetDropdownItemText: { fontSize: 13, color: colors.textPrimary, fontWeight: '600' },
-  assetDropdownItemBalance: { fontSize: 11, color: colors.textSecondary, marginTop: 1 },
-  receiptPreviewWrap: { flexDirection: 'row', alignItems: 'center' },
-  receiptThumb: { width: 64, height: 64, borderRadius: 10, marginRight: 8, backgroundColor: colors.dividerHair },
-  receiptRemoveBadge: { padding: 2 },
-  receiptViewerOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.9)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  receiptViewerImage: {
-    width: Dimensions.get('window').width,
-    height: '80%',
-  },
-  receiptViewerCloseBtn: {
-    position: 'absolute',
-    top: 50,
-    right: 20,
-  },
   // TASK-016③：图标选择底部弹层（fade 遮罩 + 顶部圆角面板 + 6 列图标网格）
   iconPickerOverlay: {
     flex: 1,
@@ -3353,624 +2654,166 @@ function makeStyles(colors: ThemeColors, isDark: boolean) {
   },
   iconPickerCellActive: { backgroundColor: colors.link + '1A' },
 
-  // ---------- 新版"记一笔"排版：头部一行(返回+类型切换+扫票) ----------
-  txHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingTop: 6,
-    paddingBottom: 10,
-  },
+  // ---------- 记一笔的编辑 / 选择类别页头部（返回键、删除键；主表单头部已抽成 TransactionTypeHeader 组件） ----------
   // 返回按钮：更大(40)、紫色外环（与"全部"Pill 同色）、加粗箭头，让返回入口足够明显
-  txHeaderBackBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: 1.5,
-    borderColor: colors.link,
-    backgroundColor: colors.card,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 8,
-  },
   // 编辑页右上角的删除按钮：与返回键同款圆环，用红色警示色
-  txDeleteBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: 1.5,
-    borderColor: colors.expense,
-    backgroundColor: colors.card,
+
+  // ---------- UI V2：金额 Hero 区（不再包卡片，直接落在渐变上；币种胶囊 → 算式 → 64 金额） ----------
+  heroArea: {
     alignItems: 'center',
-    justifyContent: 'center',
+    paddingTop: spacing.xs,
+    paddingHorizontal: layout.page,
   },
-  // 类型导航（支出/收入/转账/兑换）：一体框格——外层一个大框，内部四格间竖分割线贯通整格；
-  // 点击渲染整个格子（选中紫实底铺满格内全部空间，无内 padding 缝隙 → 不会出现"框中框"）；
-  // 选中格带 2px 底线标记当前页面；字体 14 饱满；按钮尺寸 flex:1 四等分 + minHeight 46 不变
-  txHeaderTypeSwitch: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    backgroundColor: colors.bg,
-    borderRadius: 14, // 与统计页 amountBox 圆角一致
-    borderWidth: 1,
-    borderColor: colors.dividerHair,
-    overflow: 'hidden', // 分割线与选中底色裁进外框圆角内，视觉上与外框连成一体
-  },
-  // 格间竖分割线：stretch 贯通整格高度（与金额网格分隔线同色）
-  txHeaderTypeDivider: { width: 1, alignSelf: 'stretch', backgroundColor: colors.dividerHair },
-  txHeaderTypeBtn: {
-    flex: 1,
-    minHeight: 46,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  // 按下（未选中项）：泛 link 浅底
-  txHeaderTypeBtnSink: { backgroundColor: colors.link + '14' },
-  // 按下（已选中项）：底色加深
-  txHeaderTypeBtnSinkActive: { backgroundColor: colors.fabBg },
-  txHeaderTypeBtnActive: { backgroundColor: colors.fabBg },
-  txHeaderTypeText: { fontSize: 14, fontWeight: '700', color: colors.textSecondary, textAlign: 'center' },
-  // 英文界面 Exchange 在 60px 格内差 2px 会出省略号：收紧字距兜住（中文两字不受影响）
-  txHeaderTypeTextEn: { letterSpacing: -0.5 },
-  txHeaderTypeTextActive: { color: colors.bg },
-  // 选中项底线：2px 高、60% 宽，标记"目前在什么页面"
-  txHeaderTypeUnderline: { height: 2, width: '60%', marginTop: 3, borderRadius: 1, backgroundColor: colors.bg },
-  txHeaderScanBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginLeft: 8,
+  // 矮屏：上留白 4→0（一档收紧）
+  heroAreaShort: { paddingTop: 0 },
+  // 币种小胶囊（稿：高 28 / 内 10 / 12.5 文字 + 12 chevron）
+  currencyPill: {
+    height: 28,
     paddingHorizontal: 10,
-    paddingVertical: 10,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: colors.link,
-    backgroundColor: colors.bg,
-  },
-  txHeaderScanBtnText: { fontSize: 12, fontWeight: '600', color: colors.link },
-
-  // ---------- 资产账户内联下拉（备用样式保留） ----------
-  assetDropdownFloating: {
-    marginHorizontal: 20,
-    marginTop: 8,
-    backgroundColor: colors.bg,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.dividerHair,
-    overflow: 'hidden',
-  },
-
-  // ---------- 金额 Hero 区：整屏视觉主角（货币胶囊贴左侧，金额在胶囊右侧的整段空间里居中，
-  // 数字变长时光标一路向右推进到屏幕边缘才缩字） ----------
-  // Hero 外框:与转账/兑换页"资金流向卡"同款——bg 底、圆角 18、1px 描边
-  // 宽度:转账卡所在内容区左右 padding 18(总 36),记一笔页面是 20(总 40),
-  // 这里用 -2 外边距补偿,让两页卡片宽度一致;上下留白比原来拉高(20/18 → 24/22)
-  heroCard: {
-    backgroundColor: colors.bg,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: colors.dividerHair,
-    // TASK-022：顶部留白从 5 收到 2.5（三处同步缩共省 9.2px，卡边到 MYR/0.00 ≈ 9px）；
-    // 左右/底部保持 5
-    paddingTop: 2.5,
-    paddingBottom: 5,
-    paddingHorizontal: 5,
-    // 左右留白与转账/兑换一致:内容区滚动容器无水平 padding,这里直接给 18
-    marginHorizontal: 18,
-    // 顶部与转账页"资金流向卡"对齐:那边是零上边距贴着头部排,这边也要 0,
-    // 切换支出/收入/转账时两张卡的第一条边在同一高度
-    marginTop: 0,
-    marginBottom: 5,
-  },
-  heroAmountWrap: {
-    flexDirection: 'column',
-    // TASK-022：上方留白从 4 收到 2（三处同步缩，见 heroCard 注释）
-    // D-2 真机反馈：胶囊下探后底部余白偏大，下方收紧 4→2
-    paddingTop: 2,
-    paddingBottom: 2,
-    // 左右 0：账户按钮距卡内边 = 卡片 padding 5，与转账页"转出资金"块完全一致
-    paddingHorizontal: 0,
-  },
-  // 金额行:固定高 44（TASK-015：固定大小不随输入位数变化）——
-  // D-2：货币钮并入账户选择器成 L 型标签后，行内只剩金额；标签由 heroCurrencyWrap 负
-  // margin 上移到本行（见 heroCurrencyWrap 注释），对齐沿用校准体系（顶对齐+金额 paddingTop 9.3）
-  heroAmountLine: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'flex-start',
-    height: 44,
-    flexShrink: 0,
-  },
-  // ---------- D-3：L 型选择器（SVG 一笔轮廓版，2026-09-24 用户拍板）----------
-  // 视觉全部由 SVG Path 承担（外填紫罩 + 一根描边画完整个 L，内凹圆角自然拐进胶囊顶边）；
-  // RN 视图只负责内容与触区。旧 View 边框方案（heroCurrencyTab/TabInner/Touch 盒）退役——
-  // 双色调相接必有色阶线、内凹拐角 View 画不出，是接缝去不掉的根因
-  heroLSvg: { position: 'absolute', top: 0, left: 0 },
-  // 标签触区+内容行：随内容自适应宽（onLayout 实测喂给 SVG 路径的 wt），不随账户框加长
-  heroLTabRow: {
-    height: 38,
-    alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 12,
+    columnGap: 4,
   },
-  // 账户触区+内容行（L 型下半）：图标圆 + 完整账户名（超一行自动折行，行高 54 容两行）+ 内联箭头
-  heroLAccRow: {
-    height: 54,
+  // 算式行（稿：14pt 降透明白、居中）：只在多项算式时出现
+  heroExpr: { marginTop: 6 },
+  // 金额点按热区：整行居中；14 位大数字也绝不换行（档位降级由 JS 选）
+  heroAmountBox: { alignSelf: 'stretch', marginTop: 2 },
+  heroAmountTouch: { alignSelf: 'stretch', minWidth: 0, alignItems: 'center', justifyContent: 'center' },
+  // 账户 / 日期 / 月度结转 Chip 行（稿）：整行居中、放不下整块掉第二行，不截断、不缩字
+  heroChipsRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    // 2026-10-04 第二轮：padding 6→4，再收 4px 给账户名（英文 "Not selected" 不缩字、两行兜底）
-    padding: 4,
-  },
-  heroCurrencyTabText: { fontWeight: '700', color: colors.link },
-  // 账户触区内容：与转账块同规格（图标圆 40 + 账户名 13/700 + 内联箭头）；盒边框/底色归 SVG 路径
-  // 下拉箭头：与转账/兑换账户块同款（size 12 / textTertiary / 右上角定位）
-  // TASK-019：金额行下方第二行 = 账户框（左）+ 自动月结开关（右）并排
-  // D-2：L 型组合的胶囊顶边随负 margin 上探越过本行顶部，必须 overflow visible 放行；
-  // marginTop 归零让胶囊顶边贴住标签底边（一体相接）
-  heroSecondRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 0,
-    overflow: 'visible',
-  },
-  // 下拉箭头：TASK-019 改为内联跟在账户名后（图1 排列），不再钉右上角
-  // 2026-10-04 第二轮：marginLeft 6→4→2，继续回收给账户名窄框两行兜底
-  heroCurrencyChevron: { marginLeft: 2 },
-  // ---------- 月度结转开关（TASK-022 图示胶囊按钮式，用户反馈加大）：左状态圆 + 右文字，开时发光描边 ----------
-  autoMonthlyRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    height: 40,
-    marginRight: 5,
-    // D-3.2：与账户框右缘留 8px（marginRight 5 保留=金额右缘对齐锚点不动）
-    marginLeft: 8,
-    paddingLeft: 8,
-    // 2026-10-04 第二轮：paddingRight 16→12，胶囊收窄 4px 让给账户框（英文月度收入标签更宽）
-    paddingRight: 12,
-    borderRadius: 20,
-    borderWidth: 1.5,
-    borderColor: colors.dividerHair,
-    backgroundColor: colors.card,
-  },
-  // 开：link 发光描边（阴影同色模拟霓虹）+ 微亮底
-  autoMonthlyRowOn: {
-    borderColor: colors.link,
-    backgroundColor: colors.link + '14',
-    shadowColor: colors.link,
-    shadowOpacity: 0.45,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 4,
-  },
-  autoMonthlyLabel: { fontSize: 13, fontWeight: '600', color: colors.textTertiary },
-  autoMonthlyLabelOn: { color: colors.link, fontWeight: '700' },
-  // 左状态圆：关=空心圈；开=实心 link 圆内白 ✓（由 JSX 条件渲染，圆尺寸不变）
-  autoMonthlyStateCircle: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    borderWidth: 1.5,
-    borderColor: colors.dividerHair,
-    alignItems: 'center',
+    flexWrap: 'wrap',
     justifyContent: 'center',
-  },
-  autoMonthlyStateCircleOn: {
-    backgroundColor: colors.link,
-    borderColor: colors.link,
-  },
-  // MYR 触发器容器（D-3.4：账户框弹性撑满至月结开关左侧 8px（用户红竖线定版）——长名单行展示；
-  // 高度由 JSX 内联 HH 给出）
-  // 负 margin 把整块上移到与金额同行：标签顶 = 弹层 paddingTop 2 + 4.7（原货币钮校准位），
-  // 即 -(2+44) + 6.7 = -39.3；胶囊顶边随之上探越过行顶，靠 heroSecondRow overflow visible 放行；
-  // 月结开关经 alignItems center 自对齐胶囊中线（±1px），左缘 8px 间隙（autoMonthlyRow marginLeft）。
-  // 货币标签贴内容宽（heroLTabRow 自适应），不跟账户框宽度走
-  heroCurrencyWrap: { flex: 1, flexDirection: 'column', marginTop: -39.3 },
-  // 账户触区内容在 SVG 之上，不再需要盒边框/底色（视觉归 SVG 路径）
-  // 主行：40×40 圆角图标 + 账户名，与 transferAccountMain/Icon/Name 同规格
-  heroCurrencyIconCircle: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  // 账户名：两行内完整展示（numberOfLines=2）；flexShrink 让长名在框内折行而非溢出
-  // 2026-10-04 第二轮：marginLeft 10→6→4；断行策略改 simple（安卓默认 highQuality 均衡断行
-  // 会把 "Not selected" 切在词中间成 "Not sel/ected"，见 twoLineLabel）
-  heroCurrencyAccName: { fontSize: 17, fontWeight: '700', color: colors.textPrimary, marginLeft: 4, flexShrink: 1, lineHeight: 20 },
-  // 金额:对齐资产页（800 右对齐、等宽数字）；字号由组件内 heroAmountFontSize 按位数微调;
-  // 外层（TouchableOpacity 点按热区）：占金额行整行宽度
-  heroAmountTextWrap: {
-    flex: 1,
-    flexShrink: 1, // 大金额时金额侧收缩让位，14 位也不撑变形（D-2：货币钮已并入账户选择器）
-    minWidth: 0, // 允许缩到比内容窄：配合 numberOfLines=1 + 缩字截断
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-    // 对齐 MYR 标签（标签已由负 margin 回到原货币钮校准位）：标签文字中心 ≈ 24.3（行顶相对）；
-    // 金额 paddingTop 9.3 后中心 ≈ 26.6——沿用五轮校准的视觉平行关系，勿改回居中
-    paddingTop: 9.3,
-    height: '100%',
-    position: 'relative', // 光标的定位基准
-  },
-  // 内层（CursorAmountText 容器）：内容右对齐，宽度随内容不撑满
-  heroAmountTextInner: {
-    alignItems: 'flex-end',
-  },
-  heroAmountText: {
-    // 字号由组件内 heroAmountFontSize 给出（TASK-022：基准 21 号，超 9 位每字 −0.25）；
-    // lineHeight 由 JSX 内联 21×1.2=25.2——与货币按钮同一 lineHeight，基线完全平行；
-    // 字重 800/等宽数字一致；颜色日夜分档——金额区底是浅紫 L 型填充，日间必须深字
-    // （货币标签 link/账户名 textPrimary 同族深色，白字曾只在夜间正确）；
-    // TASK-022：paddingRight 22→5——光标已内联不再需要预留位，右缘对齐下方开关按钮
-    // （autoMonthlyRow marginRight: 5，同一 5px 让金额光标与开关右缘垂直对齐）
-    fontWeight: '800',
-    color: isDark ? colors.netWorthValue : colors.textPrimary,
-    textAlign: 'right',
-    fontVariant: ['tabular-nums'],
-    width: 'auto',
-    paddingRight: 5,
-  },
-  // 光标：内联在金额文字流里（CursorAmountText 切片渲染），紧跟光标位置而非固定右下角
-  heroCursorInline: { fontWeight: '300', color: colors.link },
-
-  // ---------- 账户选择弹窗头部：货币显示切换按键 ----------
-  accountPickerCurrencyBtn: {
-    flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.link + '14',
-    borderWidth: 1,
-    borderColor: colors.link + '33',
-    borderRadius: 14,
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    marginRight: 8,
+    columnGap: spacing.sm,
+    paddingHorizontal: layout.page,
+    marginTop: spacing.xs,
   },
-  accountPickerCurrencyBtnText: { fontSize: 12, fontWeight: '700', color: colors.link, marginRight: 2 },
+  // 矮屏：与金额区的间距 4→0、Chip 间距 8→6（三个 Chip 保持一行）
+  heroChipsRowShort: { marginTop: 0, columnGap: 6 },
 
-  // ---------- 账户弹窗里的币种下拉：悬浮在货币按钮正下方（绝对定位不占布局空间），点空白处收起 ----------
-  currencyDropCatch: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 18 },
-  currencyDropPanel: {
+  // ---------- T15/V2：类别网格（列数按版型；格 = 48 圆图标 + 12pt 标签，标签预留 2 行高度） ----------
+  // 网格区可滚动：吃掉剩余高度（flex:1），历史类别超出可见容量时滚下去看，「全部」永远殿后
+  catGridScroll: { flex: 1 },
+  catGridContent: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: layout.page,
+    paddingBottom: spacing.xs,
+    rowGap: spacing.xs,
+  },
+  // 矮屏：底部留白 4→0（「至少 2 行完整可见」的最后 4px）
+  catGridContentShort: { paddingBottom: 0 },
+  // 一格：48 圆 + 标签间距 4 + 单行标签 16 + 顶距 4 = 72（+4 行距 = 76，与 CAT_CELL_ROW_HEIGHT 同步）
+  catCellWrap: {},
+  catCell: { alignItems: 'center', paddingTop: spacing.xs },
+  // 矮屏：去掉格顶留白（让「至少 2 行」稳落在一屏内）
+  catCellShort: { paddingTop: 0 },
+  // （V2：图标底 / 选中圆与「全部」中性圆交给共享 IconCircle + 本页 catIconBox/catRing）
+  // 选中外圈：58 圆 + 2 描边，绝对定位在 48 盒子上（不占布局），与 48 圆之间留 3 的页面底间隙
+  catIconBox: { width: 48, height: 48 },
+  catRing: {
     position: 'absolute',
-    // top: 62 只服务支出/收入弹层（头部恒为单行标题，EN/ZH 实测都对齐）；
-    // 转账/兑换弹层头部会被 EN 标题折行撑高，走货币钮实测底缘动态锚定（见其 JSX 内联 top）
-    top: 62,
-    right: 54,
-    zIndex: 20,
-    backgroundColor: colors.bg,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.dividerHair,
-    paddingVertical: 4,
-    minWidth: 150,
-    elevation: 6,
+    top: -5,
+    left: -5,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    borderWidth: 2,
   },
-  currencyDropTitle: { fontSize: 11, fontWeight: '600', color: colors.textTertiary, paddingHorizontal: 14, paddingVertical: 6 },
-  currencyDropItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10 },
-  // TASK-023：菜单项按压瞬间高亮（Pressable pressed 态）——亮紫底，比选中常亮态 '14' 更实
-  currencyDropItemPressed: { backgroundColor: colors.link + '2E' },
-  currencyDropItemText: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
+  // 标签：12pt 居中、最多 2 行；minHeight 16（单行）+ alignSelf stretch 让整格宽度对齐
+  // （stretch 而不是 width:'100%'：百分比在 RN Web 的嵌套 flex 里解析不到父级实测宽）
+  catCellLabel: { marginTop: spacing.xs, minHeight: 16, alignSelf: 'stretch' },
+
   rateCursor: { fontSize: 17, fontWeight: '300', color: colors.link, marginLeft: 2 },
   feeCursor: { fontSize: 15, fontWeight: '400', color: colors.link, marginLeft: 3 },
 
-  // ---------- 类别自适应网格（点击仍是"进入选择页" ----------
-  categorySectionHeader: {
+  // 矮屏：整行再收 4（标签行不占多余高度，给类别格留位置）
+
+  // ---------- 转账/兑换（T16 / A6）：资金流卡 + 汇率卡，全部令牌化 ----------
+  exchangePageContent: { paddingHorizontal: layout.page, paddingBottom: 26 },
+
+  // 资金流卡：普通卡 + 两张账户块 + 中间方向 IconButton；V2 内容卡统一 26 圆角（页面内覆盖共享 Card 的 20）
+  flowCard: { marginBottom: spacing.md, borderRadius: 26 },
+  flowHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 18,
-    marginTop: 2,
-    marginBottom: 6,
+    marginBottom: spacing.sm,
   },
-  sectionLabel: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
-  sectionLabelMuted: { fontSize: 12, color: colors.textTertiary },
-  // "全部"入口做成紫色药丸按钮，比纯文字明显得多
-  sectionMoreBtn: {
+  flowRow: { flexDirection: 'row', alignItems: 'center' },
+  // 账户块的外层（flex 直接子项）：PressableScale 把 style 放内层，flex 必须落在这一层
+  flowBlockWrap: { flex: 1, minWidth: 0 },
+  // 账户块：描边 + bg 底撑起"可选"的观感（与抽屉搜索框同一档）
+  flowBlock: {
+    minHeight: 56,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: semantic.bg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: semantic.hairline,
+  },
+  flowBlockLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.link + '14',
-    borderWidth: 1,
-    borderColor: colors.link + '33',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 13,
+    justifyContent: 'space-between',
+    marginBottom: spacing.xs,
   },
-  sectionMoreText: { fontSize: 12, fontWeight: '700', color: colors.link, marginRight: 2 },
-  // 分类网格容器：flexWrap 自动叠层；左右 18 与 hero 卡边距对齐，行间 6
-  categoryChipGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    paddingHorizontal: 18,
-    columnGap: 5,
-    rowGap: 6,
-    paddingBottom: 6,
-  },
-  categoryChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.bg,
-    borderRadius: 15, // TASK-011 三轮：圆角做方一些（19→15）——用户定版值，不随字号等比
-    borderWidth: 1,
-    borderColor: colors.dividerHair,
-    paddingHorizontal: 6,
-    paddingVertical: 3.5, // 字号 15 等比增高：3→3.5，总高 20座→23座+7+2 = 32
-    minHeight: 32, // 2026-09-25 字号15批次：胶囊总高 28→32（等比 ×1.154）
-  },
-  categoryChipIconBox: {
-    width: 23, // 字号 15 等比增高：20→23（图标 glyph 同步 13→15）
-    height: 23,
-    borderRadius: 7,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 4,
-  },
-  // 文字 14 号（2026-09-25 二批）：宽度自适应胶囊（minWidth 网格宽，长名加长），不再 flexShrink 截断
-  categoryChipLabel: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
-  // "全部"入口 Pill：尺寸/圆角/内边距与类别胶囊一致，紫色描边+紫色文字做入口区分；
-  // 宽度由 JSX 内联 categoryChipW 给出（与胶囊同一格宽）
-  morePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 15, // 与 categoryChip 同步（19→15）
-    borderWidth: 1,
-    borderColor: colors.link,
-    backgroundColor: colors.bg,
-    paddingHorizontal: 6,
-    paddingVertical: 3.5, // 与 categoryChip 同步等比增高
-    minHeight: 32, // 与新高胶囊对齐（殿后格不变矮）
-  },
-  morePillText: { fontSize: 14, fontWeight: '600', color: colors.link },
+  flowBlockMain: { flexDirection: 'row', alignItems: 'center', columnGap: spacing.sm },
+  // （V2：账户图标改用共享 IconCircle 42 圆，旧 flowIconSquare 已删）
+  // 账户名：最多 2 行、放不下换行不截断（flexShrink 让长名在块内折行）
+  flowBlockName: { flexShrink: 1 },
+  // 互换钮的外层：外边距必须落在 flex 直接子项上（同上）
+  flowSwapWrap: { marginHorizontal: spacing.sm },
 
-  // ---------- 转账/兑换新版整页排版 ----------
-  exchangeHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 18,
-    paddingTop: 4,
-    paddingBottom: 10,
-  },
-  exchangeBackBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.bg,
-    borderWidth: 1,
-    borderColor: colors.dividerHair,
-  },
-  exchangeHeaderCenter: { flex: 1, alignItems: 'center', marginLeft: -34 },
-  exchangeHeaderEyebrow: { fontSize: 9, fontWeight: '700', letterSpacing: 1.4, color: colors.textTertiary },
-  exchangeHeaderTitle: { fontSize: 18, fontWeight: '800', color: colors.textPrimary, marginTop: 1 },
-  exchangeHeaderSpacer: { width: 34 },
-  exchangePageContent: { paddingHorizontal: 18, paddingBottom: 26 },
-
-  transferRouteCard: {
-    backgroundColor: colors.bg,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: colors.dividerHair,
-    padding: 5,
-  },
-  transferRouteTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  transferRouteHint: { fontSize: 11, fontWeight: '700', color: colors.textSecondary, letterSpacing: 0.3 },
-  transferStatusPill: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 5, borderRadius: 12, backgroundColor: colors.card },
-  transferStatusDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.income, marginRight: 5 },
-  transferStatusText: { fontSize: 9, fontWeight: '700', color: colors.textSecondary },
-  transferRouteRow: { flexDirection: 'row', alignItems: 'center' },
-  transferAccountBlock: { flex: 1, minWidth: 0, minHeight: 46, padding: 8, borderRadius: 15, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.dividerHair },
-  transferAccountBlockRight: { alignItems: 'flex-end' },
-  transferAccountCaption: { fontSize: 10.5, fontWeight: '700', color: colors.textTertiary, letterSpacing: 0.8, marginBottom: 6 },
-  transferAccountCaptionRight: { textAlign: 'right' },
-  transferAccountMain: { flexDirection: 'row', alignItems: 'center' },
-  transferAccountIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  transferAccountInfo: { marginLeft: 10, flex: 1, minWidth: 0 },
-  transferAccountInfoRight: { marginRight: 10, flex: 1, minWidth: 0, alignItems: 'flex-end' },
-  transferAccountName: { fontSize: 13, fontWeight: '700', color: colors.textPrimary },
-  transferAccountChevron: { position: 'absolute', top: 1, right: 1 },
-  transferAccountChevronRight: { position: 'absolute', top: 1, left: 1 },
-  transferRouteArrow: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.dividerHair, alignItems: 'center', justifyContent: 'center', marginHorizontal: 8 },
-
-  // 合并卡：金额、汇率、手续费纵向三行叠在同一张卡里，用 padding 撑开呼吸感
-  exchangeRateCard: { marginTop: 6, backgroundColor: colors.bg, borderRadius: 18, borderWidth: 1, borderColor: colors.dividerHair, paddingHorizontal: 13, paddingVertical: 12 },
-  exchangeRateTitle: { fontSize: 15, fontWeight: '800', color: colors.textPrimary, textAlign: 'center' },
-
-  // 两行网格：每行左右各一格，中间一条竖线分隔，行与行之间用 exchangeRateDivider 横线分隔
-  // flexWrap：转出/转入任意一侧出现大金额放不下时，整格自动换到第二行（与兑换同样的行为），两种货币不撞
+  // 金额卡：V2 内容卡统一 26 圆角（页面内覆盖共享 Card 的 20）
+  rateCard: { paddingVertical: spacing.md, borderRadius: 26 },
+  rateCardTitle: { marginBottom: spacing.sm },
   rateGridRow: { flexDirection: 'row', alignItems: 'flex-start', flexWrap: 'wrap' },
-  rateGridDividerVertical: { width: 1, backgroundColor: colors.dividerHair, marginHorizontal: 12, alignSelf: 'stretch' },
-  rateGridCellLeft: { flex: 1, alignItems: 'flex-start', paddingVertical: 6 },
-  rateGridCellRight: { flex: 1, alignItems: 'flex-end', paddingVertical: 6 },
-  rateGridLabel: { fontSize: 12, fontWeight: '700', color: colors.textSecondary, marginBottom: 6 },
+  rateGridDividerVertical: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: semantic.hairline,
+    marginHorizontal: spacing.md,
+    alignSelf: 'stretch',
+  },
+  // onLayout 挂外层（fieldY 记账用），格子本体仍是 PressableScale
+  rateGridCellWrapLeft: { flex: 1, minWidth: 0 },
+  rateCenterCellWrap: { alignItems: 'center' },
+  // 数值行：数字与「×」/计算器图标同一基线
   rateGridValueRow: { flexDirection: 'row', alignItems: 'baseline' },
-  // 标签行：转出/转入标签与后置货币提示同排，右格整体靠右
-  rateGridLabelRow: { flexDirection: 'row', alignItems: 'center' },
-  // 后置货币提示「(MYR)」：小号淡色，贴在标签文字右侧（不与金额数字碰撞）
-  rateGridLabelSuffix: { fontSize: 11, fontWeight: '700', color: colors.textTertiary, marginLeft: 4 },
-  rateGridValue: { fontSize: 18, fontWeight: '800', color: colors.textPrimary },
-  // 到账金额用 income 色区分，一眼跟左边"要付出的钱"分开
-  rateGridValueTo: { color: colors.income },
-  // 普通转账的"转入金额"单独一个颜色，跟兑换的"到账"绿色区分开——想换颜色改这一行就行
-  rateGridValueTransfer: { color: colors.income },
-  // 汇率居中格：夹在转出金额和到账之间，小标签+汇率值纵向堆叠、整体水平垂直都居中
-  rateCenterCell: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10, paddingVertical: 6 },
-  rateCenterLabel: { fontSize: 11, fontWeight: '700', color: colors.textTertiary, marginBottom: 4 },
-
-  // 手续费扣费提示：小字说明"到账是扣完手续费后的金额换算出来的"
-  exchangeFeeHintRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8, paddingHorizontal: 2 },
-  exchangeFeeHintText: { flex: 1, fontSize: 10, color: colors.textTertiary, marginLeft: 4 },
-  rateGridCalcIcon: { marginLeft: 4 },
-  // 汇率数值：颜色用 link 强调色，保持"这里能点"的视觉权重
-  rateFieldValue: { fontSize: 18, fontWeight: '800', color: colors.link },
-  exchangeRateDivider: { height: 1, backgroundColor: colors.dividerHair, marginTop: 14 },
-
-  feeEntryCard: { marginTop: 10, minHeight: 64, paddingHorizontal: 13, paddingVertical: 10, borderRadius: 16, backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.dividerHair, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  feeEntryLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, minWidth: 0 },
-  feeIconCircle: { width: 34, height: 34, borderRadius: 11, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center', marginRight: 9 },
-  feeEntryTitle: { fontSize: 12, fontWeight: '800', color: colors.textPrimary },
-  feeEntrySubtitle: { fontSize: 8, color: colors.textTertiary, marginTop: 3 },
-  feeEntryRight: { flexDirection: 'row', alignItems: 'center', marginLeft: 8 },
-  feeEntryValue: { fontSize: 11, fontWeight: '700', color: colors.textTertiary, marginRight: 5 },
-  feeEntryValueActive: { color: colors.textPrimary },
-
-  transferMetaRow: { minHeight: 50, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  rateGridCellLeft: { flex: 1, alignItems: 'flex-start', paddingVertical: spacing.xs },
+  rateGridCellRight: { flex: 1, alignItems: 'flex-end', paddingVertical: spacing.xs },
+  rateGridLabelRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xs },
+  // 后置货币提示「(MYR)」：footnote（13pt，textTertiary 的下限）贴在标签右侧
+  rateGridLabelSuffix: { marginLeft: spacing.xs },
+  // 金额：等宽数字（tabular-nums）+ 令牌字重 700；到账/转入用收入绿区分"要付出的钱"
+  rateGridValue: { fontSize: 18, fontWeight: '700', fontVariant: ['tabular-nums'], color: semantic.textPrimary },
+  rateGridValueTo: { color: semantic.amountIncome },
+  rateGridCalcIcon: { marginLeft: spacing.xs },
+  rateCenterCell: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
+  rateCenterLabel: { marginBottom: spacing.xs },
+  // 汇率数值：accentText 强调色，保持"这里能点"的视觉权重
+  rateFieldValue: { fontSize: 18, fontWeight: '700', fontVariant: ['tabular-nums'], color: semantic.accentText },
+  exchangeRateDivider: { height: StyleSheet.hairlineWidth, backgroundColor: semantic.hairline, marginTop: spacing.md },
+  transferMetaNoteRow: { minHeight: 44, flexDirection: 'row', alignItems: 'center' },
   transferMetaLeft: { flexDirection: 'row', alignItems: 'center' },
-  transferMetaLabel: { fontSize: 12, fontWeight: '700', color: colors.textSecondary, marginLeft: 8 },
-  transferMetaNoteRow: { minHeight: 40, flexDirection: 'row', alignItems: 'center' },
-  transferFeeValueButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 8, paddingVertical: 10, borderRadius: 10, backgroundColor: colors.card },
-  transferFeeValue: { fontSize: 18, fontWeight: '800', color: colors.textTertiary, marginRight: 6 },
-  transferFeeValueActive: { color: colors.textPrimary },
-  transferBottomTip: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 8, paddingHorizontal: 12 },
-  transferBottomTipText: { fontSize: 9, color: colors.textTertiary, marginLeft: 5, textAlign: 'center' },
-  transferStickyFooter: { paddingTop: 9, borderTopWidth: 0 },
-  transferSaveBtn: { minHeight: 52, marginHorizontal: 0, marginTop: 0, borderRadius: 17, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
-  transferSaveIcon: { width: 25, height: 25, borderRadius: 12.5, borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', alignItems: 'center', justifyContent: 'center', marginRight: 7 },
+  transferMetaLabel: { marginLeft: spacing.sm },
+  transferFeeValueButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    columnGap: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: semantic.bg,
+  },
+  // 空态 = 灰色占位（原来写"选填"）：与汇率格 0.00 的惯例一致
+  transferFeeValue: { fontSize: 18, fontWeight: '700', fontVariant: ['tabular-nums'], color: semantic.textTertiary },
+  transferFeeValueActive: { color: semantic.textPrimary },
+  exchangeFeeHintRow: { flexDirection: 'row', alignItems: 'flex-start', columnGap: spacing.xs, marginTop: spacing.sm, paddingHorizontal: spacing.xs },
+  exchangeFeeHintText: { flex: 1 },
 
-  // ---------- 转账账户选择菜单 ----------
-  // 与支出/收入共用同一套树内弹层外壳样式（sheet/header/列表/底部按钮全部同款）
-  // 下拉收起的把手条：与日期选择面板同款视觉
-  accountPickerGrabber: {
-    alignSelf: 'center',
-    width: 44,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: colors.divider,
-    marginBottom: 10,
-  },
-  accountPickerSheet: {
-    // 树内覆盖层里的贴底面板：absolute 锚定屏幕底部，高度 82%（与原 Modal 版一致）
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: colors.card,
-    borderTopLeftRadius: 26,
-    borderTopRightRadius: 26,
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 9, // 底部留白减半：底部还有"添加新账户"按钮自身的安全区内边距
-    height: '82%',
-    borderWidth: 1,
-    borderColor: colors.dividerHair,
-  },
-  accountPickerHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, zIndex: 21 },
-  accountPickerHeaderRight: { flexDirection: 'row', alignItems: 'center' },
-  accountPickerTitle: { fontSize: 17, fontWeight: '800', color: colors.textPrimary },
-  accountPickerClose: { width: 30, height: 30, borderRadius: 15, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' },
-  accountSearchBox: {
-    height: 42,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    borderRadius: 13,
-    backgroundColor: colors.bg,
-    borderWidth: 1,
-    borderColor: colors.dividerHair,
-  },
-  accountSearchInput: { flex: 1, fontSize: 12, color: colors.textPrimary, marginLeft: 8, paddingVertical: 0 },
-  accountFilterRow: { flexDirection: 'row', marginTop: 10, marginBottom: 8 },
-  // 显眼外框：全部/现金/银行卡/信用卡/电子钱包每个芯片都有 1px 描边（选中态 fabBg 实底覆盖）
-  accountFilterChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.dividerHair, marginRight: 7 },
-  accountFilterChipActive: { backgroundColor: colors.fabBg },
-  // 字号与账户名（accountPickerName）一致，读起来不费劲
-  accountFilterText: { fontSize: 12, fontWeight: '700', color: colors.textSecondary },
-  accountFilterTextActive: { color: colors.bg },
-  accountPickerList: { flex: 1 }, // 固定高度面板内撑满剩余空间，列表自身滚动
-  accountPickerFooter: {
-    marginTop: 4,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: colors.dividerHair,
-  },
-  accountDefaultBadge: { fontSize: 7, fontWeight: '700', color: colors.income, marginLeft: 6, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 5, backgroundColor: colors.income + '18' },
-  // ---------- 账户弹层分组卡（资产页 currencyGroup* 同款）：一币一大卡、卡内小账户框 ----------
-  accountGroupShadow: {
-    borderRadius: 20,
-    shadowColor: '#1B1040',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.16,
-    shadowRadius: 20,
-    elevation: 5,
-    marginBottom: 5,
-  },
-  accountGroupCard: {
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    overflow: 'hidden',
-  },
-  accountGroupHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  accountGroupFlag: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: 'rgba(255,255,255,0.14)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  accountGroupFlagText: { fontSize: 13, fontWeight: '700', color: colors.netWorthValue },
-  accountGroupFlagEmoji: { fontSize: 22, marginTop: -2 },
-  accountGroupCode: { flex: 1, fontSize: 16, fontWeight: '700', color: colors.netWorthLabel, marginLeft: 10 },
-  accountGroupTotal: { fontSize: 20, fontWeight: '800', color: colors.netWorthValue, marginLeft: 6, fontVariant: ['tabular-nums'] },
-  accountGroupBody: {
-    paddingHorizontal: 10,
-    paddingBottom: 10,
-    paddingTop: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(255,255,255,0.18)',
-  },
-  // 卡内账户小框（资产页 assetRowOnGradient 同款）：半透明白底无边框
-  accountGroupRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.10)',
-    borderRadius: 12,
-    paddingVertical: 5,
-    paddingHorizontal: 9,
-    marginBottom: 3,
-  },
-  accountGroupRowActive: { backgroundColor: 'rgba(255,255,255,0.22)' },
-  accountGroupRowIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  accountGroupRowInfo: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', marginLeft: 12 },
-  accountGroupRowName: { fontSize: 15, fontWeight: '700', color: colors.netWorthValue, flexShrink: 1 },
-  accountGroupRowAmount: { fontSize: 16, fontWeight: '700', color: colors.netWorthValue, marginLeft: 8, fontVariant: ['tabular-nums'] },
-  addAccountPickerBtn: {
-    height: 48,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 14,
-    marginTop: 10,
-    borderWidth: 1,
-    borderColor: colors.dividerHair,
-    backgroundColor: colors.bg,
-  },
-  addAccountPickerText: { fontSize: 14, fontWeight: '700', color: colors.link, marginLeft: 7 },
-
-  feeModalRoot: { flex: 1, justifyContent: 'flex-end' },
-  feeModalBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.overlay },
-  feeModalSheet: { backgroundColor: colors.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingTop: 10, paddingBottom: 20, borderWidth: 1, borderColor: colors.dividerHair },
-  feeModalHandle: { alignSelf: 'center', width: 38, height: 4, borderRadius: 2, backgroundColor: colors.dividerHair, marginBottom: 15 },
-  feeModalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  feeModalEyebrow: { fontSize: 8, fontWeight: '800', letterSpacing: 1.1, color: colors.textTertiary },
-  feeModalTitle: { fontSize: 20, fontWeight: '800', color: colors.textPrimary, marginTop: 2 },
-  feeModalClose: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' },
-  feeModalHint: { fontSize: 10, color: colors.textTertiary, marginTop: 9, lineHeight: 15 },
-  feeModalInputCard: { flexDirection: 'row', alignItems: 'center', marginTop: 15, paddingHorizontal: 15, height: 64, borderRadius: 16, backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.link },
-  feeModalCurrency: { fontSize: 20, fontWeight: '800', color: colors.link, marginRight: 7 },
-  feeModalInput: { flex: 1, fontSize: 30, fontWeight: '800', color: colors.textPrimary, padding: 0 },
-  feeConfirmBtn: { height: 48, borderRadius: 15, backgroundColor: colors.fabBg, marginTop: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
-  feeConfirmText: { color: colors.bg, fontSize: 14, fontWeight: '800', marginRight: 7 },
   });
 }

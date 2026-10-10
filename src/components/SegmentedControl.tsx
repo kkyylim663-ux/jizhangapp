@@ -40,6 +40,11 @@ interface Props {
   selected: string;
   /** 点选项立即生效（含重复点已选中项，由调用方决定行为） */
   onSelect: (value: string) => void;
+  /**
+   * 等分撑满父容器宽度（T14：记一笔类型分段「支出/收入/转账/兑换」占满一整行，每段约 82dp）。
+   * 默认 false = 保持原来的「内容宽 + 左对齐」，现有调用方（设置页 / 日历卡）外观不变。
+   */
+  stretch?: boolean;
   /** 槽身材质：'solid'（默认，灰底）/ 'glass'（UI V2：玻璃底，落在渐变上） */
   appearance?: 'solid' | 'glass';
   /** 选中块：'white'（默认，白色胶囊）/ 'accent'（accent 渐变 + 白字，设置页深色模式用） */
@@ -61,6 +66,7 @@ export default function SegmentedControl({
   options,
   selected,
   onSelect,
+  stretch,
   appearance = 'solid',
   thumb = 'white',
 }: Props) {
@@ -146,7 +152,7 @@ export default function SegmentedControl({
         return (
           <TouchableOpacity
             key={opt.value}
-            style={styles.segment}
+            style={[styles.segment, stretch && styles.segmentStretch]}
             activeOpacity={0.75}
             onLayout={onSegmentLayout(opt.value)}
             hitSlop={{ top: SEGMENT_HIT_SLOP, bottom: SEGMENT_HIT_SLOP, left: 0, right: 0 }}
@@ -174,14 +180,14 @@ export default function SegmentedControl({
   );
 
   return (
-    <View style={styles.touchWrap}>
+    <View style={[styles.touchWrap, stretch && styles.touchWrapStretch]}>
       {isGlass ? (
         // 玻璃槽（UI V2）：半透明 + 1px 亮边 + 顶部内高光（GlassView 自带模糊回退）
-        <GlassView radius={radius.full} style={styles.trackBase}>
+        <GlassView radius={radius.full} style={stretch ? [styles.trackBase, styles.trackStretch] : styles.trackBase}>
           {rows}
         </GlassView>
       ) : (
-        <View style={styles.track}>{rows}</View>
+        <View style={stretch ? [styles.track, styles.trackStretch] : styles.track}>{rows}</View>
       )}
     </View>
   );
@@ -199,7 +205,11 @@ function makeStyles(semantic: SemanticColors, radius: Radius) {
   return StyleSheet.create({
     // 外侧留白：把触控区从 36 撑到 44，视觉轨道仍是 36
     touchWrap: { paddingVertical: (TOUCH_HEIGHT - TRACK_HEIGHT) / 2, alignSelf: 'flex-start' },
+    // stretch 档：外层撑满父容器（轨道随之等宽），段与段 flex:1 四等分
+    touchWrapStretch: { alignSelf: 'stretch' },
     trackBase,
+    // stretch 档：轨道本体也撑满（玻璃槽是 GlassView，不吃 track 的样式）
+    trackStretch: { alignSelf: 'stretch' },
     // 槽：中性灰底（hairline 在日夜两套里都是"浅一档的底"），minHeight 而非固定高度
     track: {
       ...trackBase,
@@ -222,5 +232,7 @@ function makeStyles(semantic: SemanticColors, radius: Radius) {
       alignItems: 'center',
       justifyContent: 'center',
     },
+    // stretch 档：每段等分（四段各占 1/4 行宽）
+    segmentStretch: { flex: 1 },
   });
 }

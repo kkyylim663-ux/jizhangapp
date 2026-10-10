@@ -127,10 +127,22 @@ export function formatMoney(value: number, options: FormatMoneyOptions = {}): st
   const raw = Number.isFinite(value) ? value : 0;
   const abs = Math.abs(raw);
 
-  const sign =
-    kind === 'expense' ? MINUS : kind === 'income' ? '+' : kind === 'transfer' ? '' : raw < 0 ? MINUS : '';
-
   const body = compact ? compactNumber(abs) : groupThousands(abs, decimals);
+
+  // 显示值全 0（"0.00" / 0.004 四舍五入成 "0.00"）一律不带符号 —— 修「−0.00」（用户退回 2026-10-10）：
+  // 信用卡欠款为 0 时支出语义会拼出 −0.00，读起来像欠了钱，实际是 0
+  const zeroShown = /^[0.,]+$/.test(body);
+  const sign = zeroShown
+    ? ''
+    : kind === 'expense'
+      ? MINUS
+      : kind === 'income'
+        ? '+'
+        : kind === 'transfer'
+          ? ''
+          : raw < 0
+            ? MINUS
+            : '';
 
   if (!showCurrency || !currency) return sign + body;
 

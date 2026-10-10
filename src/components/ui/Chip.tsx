@@ -40,6 +40,9 @@ export interface ChipProps {
   onPress?: () => void;
   /** 文字左侧小图标（Ionicons，16） */
   icon?: React.ComponentProps<typeof Ionicons>['name'];
+  /** 文字右侧小图标（Ionicons，16）——下拉选择器用 chevron-down（记一笔的币种 / 账户 / 日期 Chip）；
+   *  可选、默认无：现有调用方外观不变 */
+  trailingIcon?: React.ComponentProps<typeof Ionicons>['name'];
   disabled?: boolean;
   accessibilityLabel?: string;
   style?: StyleProp<ViewStyle>;
@@ -51,6 +54,7 @@ export function Chip({
   selected,
   onPress,
   icon,
+  trailingIcon,
   disabled,
   accessibilityLabel,
   style,
@@ -89,6 +93,7 @@ export function Chip({
         >
           {label}
         </AppText>
+        {!!trailingIcon && <Ionicons name={trailingIcon} size={CHIP_ICON_SIZE} color={foreground} />}
       </View>
     </PressableScale>
   );
