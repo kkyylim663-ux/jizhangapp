@@ -544,6 +544,16 @@ export type SemanticColors = {
   surface: string;
   /** 抽屉、弹层、浮动 Tab 栏（配 elevation.level2） */
   surfaceElevated: string;
+  /** 次级块：键盘日期键、输入框、内嵌凹底（UI V2 新档，比 surface 深/浅一档） */
+  surfaceSunken: string;
+  /** 记一笔键盘面板底（独立一档，日夜都是面板色） */
+  keypadPanel: string;
+  /** 悬浮 Tab 栏栏身（夜：不透明深面 / 日：近白半透明 94%） */
+  tabBar: string;
+  /** Tab 选中色（夜白 / 日紫）；未选中色见 tabInactive */
+  tabActive: string;
+  /** Tab 未选中色 */
+  tabInactive: string;
   /** 分割线、卡片描边 */
   hairline: string;
   /** 主文字 */
@@ -575,41 +585,53 @@ export type SemanticColors = {
 };
 
 export const lightSemantic: SemanticColors = {
-  bg: '#F6F5F9',
+  // UI V2 定稿数值（.zcode/design/UI_V2_SPEC.md 第 1 节，2026-10-10）
+  bg: '#F6F5FA',
   surface: '#FFFFFF',
   surfaceElevated: '#FFFFFF',
-  hairline: 'rgba(17,17,26,0.08)',
-  textPrimary: '#111118',
-  textSecondary: '#5E5E6E',
-  textTertiary: '#8E8E9A',
+  surfaceSunken: '#F3F2F8',
+  keypadPanel: '#FFFFFF',
+  tabBar: 'rgba(255,255,255,0.94)',
+  tabActive: '#5B3DF0',
+  tabInactive: '#8D8DA0',
+  hairline: 'rgba(20,20,40,0.06)',
+  textPrimary: '#15141C',
+  textSecondary: '#76768A',
+  textTertiary: '#8D8DA0',
   accent: '#6C4DF6',
   onAccent: '#FFFFFF',
   accentText: '#6C4DF6',
   accentSoft: 'rgba(108,77,246,0.10)',
-  amountExpense: '#111118', // = textPrimary
-  amountIncome: '#0E9F6E',
-  amountTransfer: '#5E5E6E', // = textSecondary
+  amountExpense: '#15141C', // = textPrimary
+  amountIncome: '#0B8F5E',
+  amountTransfer: '#76768A', // = textSecondary
   danger: '#E11D48',
   warning: '#D97706',
   scrim: 'rgba(10,8,20,0.40)',
 };
 
 export const darkSemantic: SemanticColors = {
-  // 夜间：bg < surface < surfaceElevated 逐级变亮（Apple 深色模式：底层后退、浮层前进），不靠阴影
-  bg: '#0B0B12',
-  surface: '#15151E',
+  // UI V2 定稿数值（.zcode/design/UI_V2_SPEC.md 第 1 节，2026-10-10）
+  // 夜间：bg < surface < surfaceElevated 逐级变亮（底层后退、浮层前进），不靠阴影
+  bg: '#0A0A0F',
+  surface: '#14141B',
   surfaceElevated: '#1E1E2A',
-  hairline: 'rgba(255,255,255,0.08)',
-  textPrimary: '#F4F4F7',
-  textSecondary: '#A3A3B2',
-  textTertiary: '#6E6E7E',
+  surfaceSunken: '#1A1A22',
+  keypadPanel: '#121219',
+  tabBar: '#1A1A22',
+  tabActive: '#FFFFFF',
+  tabInactive: '#73738A',
+  hairline: 'rgba(255,255,255,0.05)',
+  textPrimary: '#F2F2F7',
+  textSecondary: '#82829A',
+  textTertiary: '#73738A',
   accent: '#6C4DF6',
   onAccent: '#FFFFFF',
   accentText: '#A595FF',
   accentSoft: 'rgba(165,149,255,0.14)',
-  amountExpense: '#F4F4F7', // = textPrimary
-  amountIncome: '#34D399',
-  amountTransfer: '#A3A3B2', // = textSecondary
+  amountExpense: '#F2F2F7', // = textPrimary
+  amountIncome: '#3DDC97',
+  amountTransfer: '#82829A', // = textSecondary
   danger: '#FB7185',
   warning: '#FBBF24',
   scrim: 'rgba(0,0,0,0.55)',
@@ -752,30 +774,211 @@ export const darkElevation: Elevation = {
   level2: { boxShadow: '0px 8px 24px rgba(0,0,0,0.50)' },
 };
 
+/* ─────────────────────── UI V2：品牌渐变 / 玻璃（2026-10-10 定稿） ───────────────────────
+ * 数值来源：.zcode/design/UI_V2_SPEC.md 第 1 节（与 .zcode/design/mockups/*.dc.html 的内联样式一致）。
+ * 页面不直接拼色值 —— 一律经由 HeroGradient / GlassView 组件取这里。
+ */
+
 /**
- * 打包字体层（计划 8.2 第 1 条 / 任务 T01b）：Inter 4.1 静态字重，随 App 打包，
- * 数字 / RM / 英文在任何手机上完全一致；中文继续走系统字体（中文字体包几 MB，太大）。
- * 只带 400 / 500 / 600 / 700 四档（UI_RULES 第 2 节允许的全部字重）。
+ * expo-linear-gradient 参数（CSS 角度已按 390×580 的版面折算成 start/end 分数；
+ * start/end 都是相对容器宽高的比例，不是绝对坐标）。
+ */
+export type LinearGradientToken = {
+  colors: readonly [string, string, ...string[]];
+  locations?: number[];
+  start: { x: number; y: number };
+  end: { x: number; y: number };
+};
+
+/** Hero 径向光斑（SVG RadialGradient 的椭圆参数，圆心/半径都是容器分数；0.6 处淡到全透明） */
+export type HeroBlob = {
+  color: string;
+  cx: number;
+  cy: number;
+  rx: number;
+  ry: number;
+  /** 颜色淡出的半径位置（CSS radial-gradient 的 transparent 60%） */
+  fadeStop: number;
+};
+
+export type HeroGradientToken = LinearGradientToken & { blobs: HeroBlob[]; angle: number };
+
+/**
+ * CSS 渐变角 → expo-linear-gradient 的 start/end 分数（按容器实测宽高换算）。
+ * expo-linear-gradient 只有两点坐标：直接写分数会让角度随容器高宽漂移
+ * （实测 390×580 是 160°，220 高的演示块漂成 127°）。按 CSS 公式
+ * 「渐变线长 = |w·sinθ| + |h·cosθ|」换算后，任意框型都是同一个角度。
+ * @param angleDeg CSS 角度（0 = 向上，90 = 向右，180 = 向下）
+ */
+export function gradientAxis(
+  angleDeg: number,
+  width: number,
+  height: number
+): { start: { x: number; y: number }; end: { x: number; y: number } } {
+  const rad = (angleDeg * Math.PI) / 180;
+  const dx = Math.sin(rad);
+  const dy = -Math.cos(rad);
+  const len = Math.abs(width * dx) + Math.abs(height * dy);
+  const half = len / 2;
+  const cx = width / 2;
+  const cy = height / 2;
+  return {
+    start: { x: (cx - half * dx) / width, y: (cy - half * dy) / height },
+    end: { x: (cx + half * dx) / width, y: (cy + half * dy) / height },
+  };
+}
+
+/**
+ * 品牌渐变（UI V2 第 1 节）：
+ * - heroDark / heroLight：160° 主渐变 + 2 个径向光斑（暗紫→紫→粉紫→橘粉）；
+ * - accent：135°（中央「+」、完成键、选中三选一）。
+ */
+export const gradients: {
+  heroDark: HeroGradientToken;
+  heroLight: HeroGradientToken;
+  accent: LinearGradientToken;
+} = {
+  heroDark: {
+    colors: ['#2A1678', '#5B34C8', '#9A4FC9', '#D06C96', '#EE9A7C'],
+    locations: [0, 0.32, 0.58, 0.8, 1],
+    // 160°（CSS）；start/end 是 390×580 的折算值，运行时按实测宽高用 gradientAxis() 重算
+    angle: 160,
+    start: { x: 0.2, y: -0.05 },
+    end: { x: 0.8, y: 1.05 },
+    blobs: [
+      { color: '#D06C96', cx: 1, cy: 0.3, rx: 0.9, ry: 0.6, fadeStop: 0.6 },
+      { color: '#EE9A7C', cx: 0.3, cy: 0.7, rx: 0.8, ry: 0.5, fadeStop: 0.6 },
+    ],
+  },
+  heroLight: {
+    colors: ['#5B3DF0', '#8A63F2', '#B77CE2', '#E888B0', '#F7B89A'],
+    locations: [0, 0.32, 0.58, 0.8, 1],
+    // 160°（CSS）；同 heroDark
+    angle: 160,
+    start: { x: 0.2, y: -0.05 },
+    end: { x: 0.8, y: 1.05 },
+    blobs: [
+      { color: '#E888B0', cx: 1, cy: 0.3, rx: 0.9, ry: 0.6, fadeStop: 0.6 },
+      { color: '#F7B89A', cx: 0.3, cy: 0.7, rx: 0.8, ry: 0.5, fadeStop: 0.6 },
+    ],
+  },
+  accent: {
+    colors: ['#6C4DF6', '#9B5BD6', '#D06C96'],
+    locations: [0, 0.5, 1],
+    start: { x: 0, y: 0 },
+    end: { x: 1, y: 1 },
+  },
+};
+
+/** Hero 渐变底部淡出到页面底：从渐变高度 ~50% 处开始，92% 处已是实底 bg */
+export const heroFade = {
+  startFraction: 0.5,
+  solidAt: 0.92,
+} as const;
+
+/** 首页 Hero 上的 26dp 网格线（白色 6% 夜 / 12% 日，从 30% 处向下淡出到 90% 透明） */
+export const heroGrid = {
+  light: 'rgba(255,255,255,0.12)',
+  dark: 'rgba(255,255,255,0.06)',
+  size: 26,
+  fadeFrom: 0.3,
+  fadeTo: 0.9,
+} as const;
+
+/**
+ * 玻璃材质（UI V2 第 1 节）：所有落在渐变上的控件（账本胶囊 / 圆钮 / 分段槽 / 预算卡）统一用它。
+ * = 半透明填充 + 1px 亮边 + 顶部内高光；iOS 叠加 BlurView(intensity 30)，
+ * Android / Web 不支持模糊时退回纯 rgba（见 GlassView，绝不白屏）。
+ */
+export type GlassToken = {
+  /** 半透明填充 */
+  fill: string;
+  /** 1px 边 */
+  borderColor: string;
+  borderWidth: number;
+  /** 顶部内高光（贴顶细亮线） */
+  highlightColor: string;
+  highlightHeight: number;
+  /** expo-blur 强度（iOS 用） */
+  blurIntensity: number;
+};
+
+export const lightGlass: GlassToken = {
+  fill: 'rgba(255,255,255,0.22)',
+  borderColor: 'rgba(255,255,255,0.40)',
+  borderWidth: 1,
+  highlightColor: 'rgba(255,255,255,0.5)',
+  highlightHeight: 1,
+  blurIntensity: 30,
+};
+
+export const darkGlass: GlassToken = {
+  fill: 'rgba(255,255,255,0.14)',
+  borderColor: 'rgba(255,255,255,0.22)',
+  borderWidth: 1,
+  highlightColor: 'rgba(255,255,255,0.25)',
+  highlightHeight: 1,
+  blurIntensity: 30,
+};
+
+/** 玻璃变体：选中的白色胶囊（分段控件 / 语言开关用）+ 未选中文字色（R0 验收定稿：渐变上的白字档） */
+export const glassPill = {
+  light: { fill: '#FFFFFF', text: '#2A1678', muted: 'rgba(255,255,255,0.88)' },
+  dark: { fill: '#FFFFFF', text: '#0A0A0F', muted: 'rgba(255,255,255,0.75)' },
+} as const;
+
+/**
+ * 类别选中圆的外圈（UI V2 记一笔）：两层外圈 = 3dp 页面底色打底 + 5dp 外环；
+ * 日间外环用固定紫 #9B5BD6，夜间用类别色 60%（见 IconCircle）。
+ */
+export const categoryRing = {
+  light: '#9B5BD6',
+  darkAlpha: 0.6,
+  gapWidth: 3,
+  ringWidth: 5,
+} as const;
+
+/**
+ * 悬浮 Tab 栏 / 中央「+」的投影（UI V2 稿）：
+ * 栏身——夜 = 大黑软阴影 / 日 = 近距淡影 + 大范围淡紫灰；
+ * 「+」——粉紫光晕（稿里带负 spread，RN 用略低 alpha + 小模糊近似）。
+ */
+export const tabBarShadow = {
+  light: '0px 2px 4px rgba(20,20,40,0.05), 0px 14px 32px rgba(60,30,120,0.16)',
+  dark: '0px 14px 32px rgba(0,0,0,0.55)',
+} as const;
+
+export const centerButtonShadow = {
+  light: '0px 8px 18px rgba(194,103,143,0.60)',
+  dark: '0px 8px 18px rgba(194,103,143,0.75)',
+} as const;
+
+/**
+ * 打包字体层（UI V2 第 2 节，2026-10-10）：数字 / 英文从 Inter 换成 **Geist**
+ * （Vercel 官方开源 vercel/geist-font，OFL 许可），随 App 打包；中文继续走系统字体。
+ * 打包 Light 300 / Regular 400 / Medium 500 / SemiBold 600 四档 ttf（assets/fonts/Geist-*.ttf）。
  * ⚠ 这里的值 = 字体内部 PostScript 名，也是 App.tsx 里 useFonts 的键 —— 改一处必须同步另一处。
- * ⚠ 本任务只提供令牌，页面先别直接用：等 T03 的 AppText 统一按 canUseInterText() 判断后套用。
+ * ⚠ Geist 官方只有 300–900，没有 700 单档：'700' 键（旧令牌兼容）回落到 SemiBold。
  */
 export const fontFamily = {
-  regular: 'Inter-Regular',
-  medium: 'Inter-Medium',
-  semiBold: 'Inter-SemiBold',
-  bold: 'Inter-Bold',
+  light: 'Geist-Light',
+  regular: 'Geist-Regular',
+  medium: 'Geist-Medium',
+  semiBold: 'Geist-SemiBold',
+  bold: 'Geist-SemiBold',
 } as const;
 
 export type FontFamily = typeof fontFamily;
 
-/** fontFamily 令牌取值的联合（'Inter-Regular' | 'Inter-Medium' | 'Inter-SemiBold' | 'Inter-Bold'） */
+/** fontFamily 令牌取值的联合（'Geist-Light' | 'Geist-Regular' | 'Geist-Medium' | 'Geist-SemiBold'） */
 export type FontFamilyName = FontFamily[keyof FontFamily];
 
-/** typography 十一档里实际出现过的字重（UI_RULES 第 2 节：只用这四档） */
-export type FontWeightKey = '400' | '500' | '600' | '700';
+/** typography 十一档里实际出现过的字重 + UI V2 Hero 金额的 Light 300（RM / 小数） */
+export type FontWeightKey = '300' | '400' | '500' | '600' | '700';
 
-/** 字重 → Inter 家族：400→regular / 500→medium / 600→semiBold / 700→bold（新字体只认家族名，不认 fontWeight） */
+/** 字重 → Geist 家族：300→light / 400→regular / 500→medium / 600→semiBold / 700→semiBold（新字体只认家族名，不认 fontWeight） */
 export const fontFamilyByWeight: Record<FontWeightKey, FontFamilyName> = {
+  '300': fontFamily.light,
   '400': fontFamily.regular,
   '500': fontFamily.medium,
   '600': fontFamily.semiBold,
@@ -783,15 +986,18 @@ export const fontFamilyByWeight: Record<FontWeightKey, FontFamilyName> = {
 };
 
 /**
- * Inter 静态字体只有数字 / 拉丁字母 / 拉丁符号字形，没有中文、日文、emoji。
+ * Geist 静态字体只有数字 / 拉丁字母 / 拉丁符号字形，没有中文、日文、emoji。
  * 允许范围：空白 + ASCII 可见字符 + Latin-1 + Latin Extended-A/B + 常用标点 / 货币 / 箭头 / 上下标 / 数学符号。
  * 中文、日文、韩文、西里尔、泰文、emoji（含代理对）全部落在范围外 → 返回 false。
- * ⚠ 纯函数，供 T03 的 AppText 使用：返回 true 才套 Inter 家族名，false 走系统字体
- *   （否则中文/emoji 会被 Inter 盖掉，渲染成方框）。
+ * ⚠ 纯函数，供 AppText 使用：返回 true 才套 Geist 家族名，false 走系统字体
+ *   （否则中文/emoji 会被 Geist 盖掉，渲染成方框）。
  */
-const INTER_SAFE_RE = /^[\s\u0020-\u007E\u00A0-\u024F\u2000-\u206F\u20A0-\u20BF\u2190-\u21FF\u2070-\u209F\u2200-\u22FF]*$/;
+const LATIN_SAFE_RE = /^[\s\u0020-\u007E\u00A0-\u024F\u2000-\u206F\u20A0-\u20BF\u2190-\u21FF\u2070-\u209F\u2200-\u22FF]*$/;
 
-/** 这段文本能不能用 Inter：整段都是数字 / 拉丁字母 / 拉丁符号才 true，含任何非拉丁字符一律 false（空串视为 true） */
-export function canUseInterText(text: string): boolean {
-  return INTER_SAFE_RE.test(text);
+/** 这段文本能不能用打包的拉丁字体（Geist）：整段都是数字 / 拉丁字母 / 拉丁符号才 true，含任何非拉丁字符一律 false（空串视为 true） */
+export function canUseLatinText(text: string): boolean {
+  return LATIN_SAFE_RE.test(text);
 }
+
+/** @deprecated 旧名保留兼容（T01b 时代为 Inter）；新代码用 canUseLatinText */
+export const canUseInterText = canUseLatinText;
