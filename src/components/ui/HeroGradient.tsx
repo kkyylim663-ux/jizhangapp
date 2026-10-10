@@ -1,20 +1,21 @@
 // HeroGradient.tsx
-// UI V2 第 3 节第 1 条：页面顶部品牌渐变（全 App 页面共用，不要在页面里各写一份）。
+// UI V2.1 §1：页面背景渐变（全 App 页面共用，不要在页面里各写一份）。
+// 默认块高模式（旧页面的 hero 顶部块）；新页面一律用 fill 铺满整页，卡片直接浮在渐变上。
 //
 // 组成（自上而下 4 层，全部 pointerEvents="none"）：
-//   1. 主线性渐变（160°：暗紫 → 紫 → 粉紫 → 橘粉，令牌 gradients.heroDark / heroLight）
-//   2. 2 个径向光斑（SVG RadialGradient；原生端用 rx/ry 做椭圆，web 回退圆）
+//   1. 主线性渐变（165°；令牌 gradients.heroDark / heroLight）
+//   2. 3 个径向光斑（SVG RadialGradient；原生端用 rx/ry 做椭圆，web 回退圆）
 //   3. 26dp 网格线（可选，首页用；白色 6% 夜 / 12% 日，30% 处起向下淡出，Mask 实现）
-//   4. 底部淡出层（从渐变高度 50% 处 → 92% 处已是实底 bg，压在内容卡下面）
+//   4. 底部淡出层（块高模式专用：从渐变高度 50% 处 → 92% 处已是实底 bg；fill 模式没有这层）
 //
 // 用法（放在页面最外层容器的第一个子节点）：
 //   <View style={{ flex: 1 }}>
-//     <HeroGradient height={580} />
+//     <HeroGradient fill />
 //     ...页面内容
 //   </View>
 //
-// ⚠ 高度按 UI V2 定稿：首页 580 · 记一笔 400 · 资产 440 · 统计 460 · 设置 360（844 高屏；
-//   矮屏 ×0.9），渐变不能盖住第一张内容卡的文字。
+// ⚠ 块高模式的数值按 UI V2 定稿：首页 580 · 记一笔 400 · 资产 440 · 统计 460 · 设置 360（844 高屏；
+//   矮屏 ×0.9），渐变不能盖住第一张内容卡的文字。fill 模式不受此限。
 // ⚠ RNSVG 原生端两个坑（真机踩过、勿回退）：
 //   1) <Stop> 不认 stopColor 里的 rgba alpha —— 一律拆成 stopColor + stopOpacity；
 //   2) 渐变定义 id 必须带主题指纹（调色板变化即换 id），否则同实例切主题后原生端沿用旧定义。
@@ -29,8 +30,10 @@ import { gradientAxis } from '../../theme/theme';
 export interface HeroGradientProps {
   /** 'dark' | 'light' 显式指定；省略 = 跟随当前主题 */
   variant?: 'dark' | 'light';
-  /** 渐变块高度（dp） */
-  height: number;
+  /** 渐变块高度（dp）；fill=true 时忽略 */
+  height?: number;
+  /** UI V2.1 §1：铺满整页（top:0; bottom:0），不再淡出成纯色底 —— 页面所有卡片浮在渐变上 */
+  fill?: boolean;
   /** 网格线（UI V2：首页额外有 26dp 网格线） */
   grid?: boolean;
   style?: ViewStyle;
@@ -56,9 +59,10 @@ function transparentOf(hexColor: string): string {
   return `rgba(${r},${g},${b},0)`;
 }
 
-export function HeroGradient({ variant, height, grid = false, style }: HeroGradientProps) {
+export function HeroGradient({ variant, height, fill = false, grid = false, style }: HeroGradientProps) {
   const { isDark, gradients, semantic, heroFade, heroGrid } = useTheme();
   const spec = variant === 'dark' ? gradients.heroDark : variant === 'light' ? gradients.heroLight : gradients.hero;
+  const blockHeight = height ?? 0;
 
   // SVG（光斑 / 网格）需要实测尺寸：百分比在 Mask / 原生端不稳，全部用数值
   const [box, setBox] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
@@ -92,10 +96,19 @@ export function HeroGradient({ variant, height, grid = false, style }: HeroGradi
     return [...verticals, ...horizontals].join(' ');
   }, [grid, box, heroGrid.size]);
 
-  const fadeTop = Math.round(height * heroFade.startFraction);
+  const fadeTop = Math.round(blockHeight * heroFade.startFraction);
 
   return (
-    <View pointerEvents="none" style={[styles.root, { height }, style]} onLayout={onLayout}>
+    <View
+      pointerEvents="none"
+      style={[
+        styles.root,
+        // fill：铺满整页（父容器 flex:1 时 top/bottom 都贴边）；否则固定块高
+        fill ? styles.fill : { height: blockHeight },
+        style,
+      ]}
+      onLayout={onLayout}
+    >
       {/* 1. 主线性渐变 */}
       <LinearGradient
         colors={spec.colors}
@@ -147,20 +160,23 @@ export function HeroGradient({ variant, height, grid = false, style }: HeroGradi
         </Svg>
       ) : null}
 
-      {/* 4. 底部淡出到页面底（从 50% 处开始，92% 处已是实底 bg） */}
-      <LinearGradient
-        colors={[transparentOf(semantic.bg), semantic.bg, semantic.bg]}
-        locations={[0, heroFade.solidAt, 1]}
-        start={{ x: 0.5, y: 0 }}
-        end={{ x: 0.5, y: 1 }}
-        style={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          top: fadeTop,
-          height: height - fadeTop,
-        }}
-      />
+      {/* 4. 底部淡出到页面底（从 50% 处开始，92% 处已是实底 bg）—— fill 模式不要这层：
+          渐变本身就铺满整页（UI V2.1 §1），卡片直接浮在渐变上 */}
+      {fill ? null : (
+        <LinearGradient
+          colors={[transparentOf(semantic.bg), semantic.bg, semantic.bg]}
+          locations={[0, heroFade.solidAt, 1]}
+          start={{ x: 0.5, y: 0 }}
+          end={{ x: 0.5, y: 1 }}
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: fadeTop,
+            height: blockHeight - fadeTop,
+          }}
+        />
+      )}
     </View>
   );
 }
@@ -172,6 +188,10 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     overflow: 'hidden',
+  },
+  // fill 模式：四边贴满父容器（父容器是整页容器，页面内容照常叠在上面）
+  fill: {
+    bottom: 0,
   },
 });
 

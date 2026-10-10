@@ -199,11 +199,11 @@ export type ThemeColors = {
 };
 
 export const lightColors: ThemeColors = {
-  bg: '#F5F3FB',
-  // 极淡的薰衣草紫渐变：顶部稍带紫、向下渐近白，柔和不刺眼
-  bgGradientFrom: '#EFEBFC',
-  bgGradientTo: '#dcd5fa',
-  headerTint: '#e6dffb',
+  // UI V2.1 §1 日间（2026-10-10）：柔和粉紫 —— 渐变铺满整页，底色 = 线性段最后一停
+  bg: '#F5F2FB',
+  bgGradientFrom: '#DCD3FF',
+  bgGradientTo: '#F5F2FB',
+  headerTint: '#DCD3FF',
   card: '#f5f1fb',
   cardShadow: 'rgba(23,15,45,0.05)',
   cardBorder: 'rgba(23,15,45,0.14)',
@@ -276,12 +276,13 @@ export const lightColors: ThemeColors = {
   todayCardGradientFrom: '#FFFFFF',
   todayCardGradientTo: '#FFFFFF',
 
-  textPrimary: '#1B1B22',
-  textSecondary: '#6E6E7A',
-  textTertiary: '#A4A4B2',
+  // UI V2.1 §3：日间不再有白字压在浅色上；三级字/未选中 Tab 都提了对比度
+  textPrimary: '#17142A',
+  textSecondary: '#4F4A66',
+  textTertiary: '#6A6680',
   link: '#5B45E0',
 
-  income: '#0E9F6E',
+  income: '#0A7A50',
   expense: '#6C4DF6',
   expenseOver: '#E11D48',
   track: '#ECECF1',
@@ -366,10 +367,11 @@ export const lightColors: ThemeColors = {
 };
 
 export const darkColors: ThemeColors = {
-  bg: '#011525',
-  bgGradientFrom: '#2e2e4c',
-  bgGradientTo: '#02020d',
-  headerTint: '#080116',
+  // UI V2.1 §1 夜间（2026-10-10）：更深 —— 渐变铺满整页，底色 = 线性段最后一停
+  bg: '#06050C',
+  bgGradientFrom: '#140A3A',
+  bgGradientTo: '#140C22',
+  headerTint: '#140A3A',
   card: '#0b162e',
   cardShadow: 'transparent',
   // 比 card 亮半档的发丝线，在深底上撑起卡片轮廓（阴影在深色背景上不够用）
@@ -440,12 +442,13 @@ export const darkColors: ThemeColors = {
   todayCardGradientFrom: '#17171E',
   todayCardGradientTo: '#17171E',
 
-  textPrimary: '#F4F4F6',
-  textSecondary: '#A2A2B5',
-  textTertiary: '#6E6E80',
+  // UI V2.1 §3：夜间不再用 #73738A / #82829A 这类暗灰；三级字改白 56%
+  textPrimary: '#F2F0FA',
+  textSecondary: 'rgba(242,240,250,0.70)',
+  textTertiary: 'rgba(242,240,250,0.56)',
   link: '#A595FF',
 
-  income: '#34D399',
+  income: '#3DDC97',
   expense: '#A78BFA',
   expenseOver: '#FB7185',
   track: '#26262E',
@@ -585,53 +588,55 @@ export type SemanticColors = {
 };
 
 export const lightSemantic: SemanticColors = {
-  // UI V2 定稿数值（.zcode/design/UI_V2_SPEC.md 第 1 节，2026-10-10）
-  bg: '#F6F5FA',
+  // UI V2.1 定稿数值（.zcode/design/UI_V21_SPEC.md 第 1/2/3 节，2026-10-10）
+  bg: '#F5F2FB',
   surface: '#FFFFFF',
   surfaceElevated: '#FFFFFF',
   surfaceSunken: '#F3F2F8',
   keypadPanel: '#FFFFFF',
-  tabBar: 'rgba(255,255,255,0.94)',
+  // Tab 栏走唯一玻璃材质（§2）：栏身 = 日间玻璃填充
+  tabBar: 'rgba(255,255,255,0.55)',
   tabActive: '#5B3DF0',
-  tabInactive: '#8D8DA0',
+  tabInactive: '#6A6680', // = textTertiary（§3：Tab 未选中）
   hairline: 'rgba(20,20,40,0.06)',
-  textPrimary: '#15141C',
-  textSecondary: '#76768A',
-  textTertiary: '#8D8DA0',
+  textPrimary: '#17142A',
+  textSecondary: '#4F4A66',
+  textTertiary: '#6A6680',
   accent: '#6C4DF6',
   onAccent: '#FFFFFF',
   accentText: '#6C4DF6',
   accentSoft: 'rgba(108,77,246,0.10)',
-  amountExpense: '#15141C', // = textPrimary
-  amountIncome: '#0B8F5E',
-  amountTransfer: '#76768A', // = textSecondary
+  amountExpense: '#17142A', // = textPrimary
+  amountIncome: '#0A7A50',
+  amountTransfer: '#4F4A66', // = textSecondary
   danger: '#E11D48',
   warning: '#D97706',
   scrim: 'rgba(10,8,20,0.40)',
 };
 
 export const darkSemantic: SemanticColors = {
-  // UI V2 定稿数值（.zcode/design/UI_V2_SPEC.md 第 1 节，2026-10-10）
+  // UI V2.1 定稿数值（.zcode/design/UI_V21_SPEC.md 第 1/2/3 节，2026-10-10）
   // 夜间：bg < surface < surfaceElevated 逐级变亮（底层后退、浮层前进），不靠阴影
-  bg: '#0A0A0F',
+  bg: '#06050C',
   surface: '#14141B',
   surfaceElevated: '#1E1E2A',
   surfaceSunken: '#1A1A22',
   keypadPanel: '#121219',
-  tabBar: '#1A1A22',
+  // Tab 栏走唯一玻璃材质（§2）：栏身 = 夜间玻璃填充
+  tabBar: 'rgba(14,10,30,0.46)',
   tabActive: '#FFFFFF',
-  tabInactive: '#73738A',
+  tabInactive: 'rgba(242,240,250,0.56)', // = textTertiary（§3：Tab 未选中）
   hairline: 'rgba(255,255,255,0.05)',
-  textPrimary: '#F2F2F7',
-  textSecondary: '#82829A',
-  textTertiary: '#73738A',
+  textPrimary: '#F2F0FA',
+  textSecondary: 'rgba(242,240,250,0.70)',
+  textTertiary: 'rgba(242,240,250,0.56)',
   accent: '#6C4DF6',
   onAccent: '#FFFFFF',
   accentText: '#A595FF',
   accentSoft: 'rgba(165,149,255,0.14)',
-  amountExpense: '#F2F2F7', // = textPrimary
+  amountExpense: '#F2F0FA', // = textPrimary
   amountIncome: '#3DDC97',
-  amountTransfer: '#82829A', // = textSecondary
+  amountTransfer: 'rgba(242,240,250,0.70)', // = textSecondary
   danger: '#FB7185',
   warning: '#FBBF24',
   scrim: 'rgba(0,0,0,0.55)',
@@ -829,9 +834,10 @@ export function gradientAxis(
 }
 
 /**
- * 品牌渐变（UI V2 第 1 节）：
- * - heroDark / heroLight：160° 主渐变 + 2 个径向光斑（暗紫→紫→粉紫→橘粉）；
+ * 品牌渐变（UI V2.1 §1 —— 渐变铺满整页，配 HeroGradient 的 fill 模式）：
+ * - heroDark / heroLight：3 个径向光斑 + 165° 主渐变（夜间更深 / 日间柔和粉紫）；
  * - accent：135°（中央「+」、完成键、选中三选一）。
+ * 数值取样自 .zcode/design/mockups/v21/*.dc.html 的 .dk / .lt 变量。
  */
 export const gradients: {
   heroDark: HeroGradientToken;
@@ -839,27 +845,31 @@ export const gradients: {
   accent: LinearGradientToken;
 } = {
   heroDark: {
-    colors: ['#2A1678', '#5B34C8', '#9A4FC9', '#D06C96', '#EE9A7C'],
-    locations: [0, 0.32, 0.58, 0.8, 1],
-    // 160°（CSS）；start/end 是 390×580 的折算值，运行时按实测宽高用 gradientAxis() 重算
-    angle: 160,
-    start: { x: 0.2, y: -0.05 },
-    end: { x: 0.8, y: 1.05 },
+    // linear 165°: #140A3A 0% → #24125E 35% → #3B1A6E 60% → #4A1E52 82% → #140C22 100%
+    colors: ['#140A3A', '#24125E', '#3B1A6E', '#4A1E52', '#140C22'],
+    locations: [0, 0.35, 0.6, 0.82, 1],
+    // 165°（CSS）；start/end 是 390×844 的折算值，运行时按实测宽高用 gradientAxis() 重算
+    angle: 165,
+    start: { x: 0.2, y: -0.02 },
+    end: { x: 0.8, y: 1.02 },
     blobs: [
-      { color: '#D06C96', cx: 1, cy: 0.3, rx: 0.9, ry: 0.6, fadeStop: 0.6 },
-      { color: '#EE9A7C', cx: 0.3, cy: 0.7, rx: 0.8, ry: 0.5, fadeStop: 0.6 },
+      { color: '#3A1C9A', cx: 0, cy: 0, rx: 0.9, ry: 0.55, fadeStop: 0.6 },
+      { color: '#7A2E6A', cx: 1, cy: 0.35, rx: 0.8, ry: 0.5, fadeStop: 0.62 },
+      { color: '#2A1470', cx: 0.2, cy: 0.85, rx: 0.7, ry: 0.45, fadeStop: 0.6 },
     ],
   },
   heroLight: {
-    colors: ['#5B3DF0', '#8A63F2', '#B77CE2', '#E888B0', '#F7B89A'],
-    locations: [0, 0.32, 0.58, 0.8, 1],
-    // 160°（CSS）；同 heroDark
-    angle: 160,
-    start: { x: 0.2, y: -0.05 },
-    end: { x: 0.8, y: 1.05 },
+    // linear 165°: #DCD3FF 0% → #E9DEFF 35% → #F5DDF0 60% → #FFE4D8 82% → #F5F2FB 100%
+    colors: ['#DCD3FF', '#E9DEFF', '#F5DDF0', '#FFE4D8', '#F5F2FB'],
+    locations: [0, 0.35, 0.6, 0.82, 1],
+    // 165°（CSS）；同 heroDark
+    angle: 165,
+    start: { x: 0.2, y: -0.02 },
+    end: { x: 0.8, y: 1.02 },
     blobs: [
-      { color: '#E888B0', cx: 1, cy: 0.3, rx: 0.9, ry: 0.6, fadeStop: 0.6 },
-      { color: '#F7B89A', cx: 0.3, cy: 0.7, rx: 0.8, ry: 0.5, fadeStop: 0.6 },
+      { color: '#C9BDFF', cx: 0, cy: 0, rx: 0.9, ry: 0.55, fadeStop: 0.6 },
+      { color: '#F7C6DE', cx: 1, cy: 0.35, rx: 0.8, ry: 0.5, fadeStop: 0.62 },
+      { color: '#D8CCFF', cx: 0.2, cy: 0.85, rx: 0.7, ry: 0.45, fadeStop: 0.6 },
     ],
   },
   accent: {
@@ -886,9 +896,11 @@ export const heroGrid = {
 } as const;
 
 /**
- * 玻璃材质（UI V2 第 1 节）：所有落在渐变上的控件（账本胶囊 / 圆钮 / 分段槽 / 预算卡）统一用它。
- * = 半透明填充 + 1px 亮边 + 顶部内高光；iOS 叠加 BlurView(intensity 30)，
- * Android / Web 不支持模糊时退回纯 rgba（见 GlassView，绝不白屏）。
+ * 唯一毛玻璃材质（UI V2.1 §2，2026-10-10）：按钮、分段、卡片、列表、表单、
+ * BottomSheet、AppDialog、Tab 栏全部用它（旧的「白 22% 玻璃 + 白字」「surface 实色卡」都删）。
+ * = 半透明填充 + 1px 亮边 + 顶部内高光 + 投影；iOS / Web 叠加 BlurView(blur 24)，
+ * Android 不支持模糊时退回纯 rgba（见 GlassView，绝不白屏；对比度仍按 §4 达标）。
+ * ⚠ CSS 的 saturate(150%) expo-blur 做不了，模糊层只用 tint 固定材质（视觉差在饱和度，颜色由 fill 决定）。
  */
 export type GlassToken = {
   /** 半透明填充 */
@@ -899,32 +911,43 @@ export type GlassToken = {
   /** 顶部内高光（贴顶细亮线） */
   highlightColor: string;
   highlightHeight: number;
-  /** expo-blur 强度（iOS 用） */
+  /** 投影（稿：0 12 32 -20 rgba(20,10,60,.55)，日夜同值） */
+  shadow: string;
+  /**
+   * expo-blur 强度（稿是 CSS blur 24px）。
+   * expo-blur 的 web 映射 = blur(${min(intensity,100) × 0.2}px) → 100 才到 20px（库上限，最接近 24）；
+   * iOS 的 100 ≈ 系统最厚材质，与稿里的磨砂观感一致。
+   */
   blurIntensity: number;
 };
 
 export const lightGlass: GlassToken = {
-  fill: 'rgba(255,255,255,0.22)',
-  borderColor: 'rgba(255,255,255,0.40)',
+  fill: 'rgba(255,255,255,0.55)',
+  borderColor: 'rgba(255,255,255,0.85)',
   borderWidth: 1,
-  highlightColor: 'rgba(255,255,255,0.5)',
+  highlightColor: 'rgba(255,255,255,0.90)',
   highlightHeight: 1,
-  blurIntensity: 30,
+  shadow: '0px 12px 32px -20px rgba(20,10,60,0.55)',
+  blurIntensity: 100,
 };
 
 export const darkGlass: GlassToken = {
-  fill: 'rgba(255,255,255,0.14)',
-  borderColor: 'rgba(255,255,255,0.22)',
+  fill: 'rgba(14,10,30,0.46)',
+  borderColor: 'rgba(255,255,255,0.10)',
   borderWidth: 1,
-  highlightColor: 'rgba(255,255,255,0.25)',
+  highlightColor: 'rgba(255,255,255,0.12)',
   highlightHeight: 1,
-  blurIntensity: 30,
+  shadow: '0px 12px 32px -20px rgba(20,10,60,0.55)',
+  blurIntensity: 100,
 };
 
-/** 玻璃变体：选中的白色胶囊（分段控件 / 语言开关用）+ 未选中文字色（R0 验收定稿：渐变上的白字档） */
+/**
+ * 分段控件的选中块（UI V2.1 §2）：夜 = 白胶囊 + 深字；日 = 紫胶囊 + 白字。
+ * fill = 胶囊底 / text = 选中字色 / muted = 未选中字色（玻璃上，取 text.secondary 保证对比）
+ */
 export const glassPill = {
-  light: { fill: '#FFFFFF', text: '#2A1678', muted: 'rgba(255,255,255,0.88)' },
-  dark: { fill: '#FFFFFF', text: '#0A0A0F', muted: 'rgba(255,255,255,0.75)' },
+  light: { fill: '#5B3DF0', text: '#FFFFFF', muted: '#4F4A66' },
+  dark: { fill: '#FFFFFF', text: '#1A1040', muted: 'rgba(242,240,250,0.70)' },
 } as const;
 
 /**

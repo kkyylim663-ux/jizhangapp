@@ -8,7 +8,7 @@
 //
 // 本版变化
 // - 遮罩改用全 App 唯一遮罩色 semantic.scrim（原写死 rgba(0,0,0,0.55)）；
-// - 卡片换新样式：surfaceElevated + radius.lg(20) + elevation.level2 + 令牌字号；
+// - 卡片 = UI V2.1 §2 唯一玻璃材质（GlassView：填充 / 描边 / 顶部内高光 / 投影 / 模糊回退）+ radius.lg；
 // - 按钮高 50（≥44）、圆角 14、色调与 ui/Button 一致（取消=描边、默认=实心紫、危险=红字淡红底）；
 // - 点遮罩 = 取消：有 cancel 按钮就触发它的回调，没有就只是关掉（原来点遮罩只关、不回调）。
 // - 按钮仍竖排全宽、危险钮最下（用户定版：横排长文案会被截断）。
@@ -22,6 +22,7 @@ import { Modal, Pressable, StyleSheet, View } from 'react-native';
 import { useTheme } from '../theme/useTheme';
 import { useT } from '../i18n/LanguageContext';
 import AppText from './ui/AppText';
+import GlassView from './ui/GlassView';
 import { withAlpha } from './ui/color';
 
 export interface DialogButton {
@@ -138,7 +139,7 @@ function DialogHost({
   onPress: (btn: DialogButton) => void;
   onScrimPress: () => void;
 }) {
-  const { semantic, radius, layout, elevation, spacing } = useTheme();
+  const { semantic, radius, layout, spacing } = useTheme();
   const tr = useT();
   return (
     <Modal visible={!!request} transparent animationType="fade" onRequestClose={onClose}>
@@ -149,75 +150,71 @@ function DialogHost({
         //   web 渲染出「button 套 button」的非法结构（读屏用卡里的取消钮做退出路径）
         accessible={false}
       >
-        <View
-          style={[
-            styles.card,
-            {
-              backgroundColor: semantic.surfaceElevated,
-              borderRadius: radius.lg,
-              padding: layout.card,
-            },
-            elevation.level2,
-          ]}
-          // 卡内点击不穿透到遮罩
-          onStartShouldSetResponder={() => true}
-          accessibilityViewIsModal
-        >
-          {request && (
-            <>
-              <AppText variant="headline" align="center">
-                {request.title}
-              </AppText>
-              {!!request.message && (
-                <AppText variant="subhead" color={semantic.textSecondary} align="center" style={{ marginTop: spacing.sm }}>
-                  {request.message}
+        {/* 卡片 = UI V2.1 §2 唯一玻璃材质（填充 / 描边 / 顶部内高光 / 投影 / 模糊回退） */}
+        <GlassView radius={radius.lg} style={[styles.card, { padding: layout.card }]}>
+          {/* 卡内点击不穿透到遮罩（响应者挂在内容层；材质层只画材质） */}
+          <View onStartShouldSetResponder={() => true} accessibilityViewIsModal>
+            {request && (
+              <>
+                <AppText variant="headline" align="center">
+                  {request.title}
                 </AppText>
-              )}
-              {/* 按钮竖排全宽：横排三个时长文案（如「清除二级密码」）会被截断成"清除二…"。
-                  顺序按 iOS 习惯（验收退回第 6 条）：主要操作 → 危险操作 → 取消放最下 */}
-              <View style={[styles.buttonColumn, { gap: spacing.md, marginTop: spacing.lg }]}>
-                {orderedButtons(request.buttons).map((btn, idx) => {
-                  const isCancel = btn.style === 'cancel';
-                  const isDestructive = btn.style === 'destructive';
-                  const label = btn.text || tr('common.confirm');
-                  const background = isCancel
-                    ? 'transparent'
-                    : isDestructive
-                      ? withAlpha(semantic.danger, 0.1)
-                      : semantic.accent;
-                  const foreground = isCancel
-                    ? semantic.textPrimary
-                    : isDestructive
-                      ? semantic.danger
-                      : semantic.onAccent;
-                  return (
-                    <Pressable
-                      key={`${idx}-${label}`}
-                      style={[
-                        styles.button,
-                        {
-                          backgroundColor: background,
-                          borderRadius: radius.md,
-                          paddingHorizontal: spacing.lg,
-                          paddingVertical: spacing.md,
-                          borderColor: isCancel ? semantic.hairline : 'transparent',
-                          borderWidth: isCancel ? StyleSheet.hairlineWidth : 0,
-                        },
-                      ]}
-                      onPress={() => onPress(btn)}
-                      accessibilityRole="button"
-                      accessibilityLabel={label}
-                    >
-                      <AppText variant="headline" color={foreground} align="center">
-                        {label}
-                      </AppText>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </>
-          )}
-        </View>
+                {!!request.message && (
+                  <AppText
+                    variant="subhead"
+                    color={semantic.textSecondary}
+                    align="center"
+                    style={{ marginTop: spacing.sm }}
+                  >
+                    {request.message}
+                  </AppText>
+                )}
+                {/* 按钮竖排全宽：横排三个时长文案（如「清除二级密码」）会被截断成"清除二…"。
+                    顺序按 iOS 习惯（验收退回第 6 条）：主要操作 → 危险操作 → 取消放最下 */}
+                <View style={[styles.buttonColumn, { gap: spacing.md, marginTop: spacing.lg }]}>
+                  {orderedButtons(request.buttons).map((btn, idx) => {
+                    const isCancel = btn.style === 'cancel';
+                    const isDestructive = btn.style === 'destructive';
+                    const label = btn.text || tr('common.confirm');
+                    const background = isCancel
+                      ? 'transparent'
+                      : isDestructive
+                        ? withAlpha(semantic.danger, 0.1)
+                        : semantic.accent;
+                    const foreground = isCancel
+                      ? semantic.textPrimary
+                      : isDestructive
+                        ? semantic.danger
+                        : semantic.onAccent;
+                    return (
+                      <Pressable
+                        key={`${idx}-${label}`}
+                        style={[
+                          styles.button,
+                          {
+                            backgroundColor: background,
+                            borderRadius: radius.md,
+                            paddingHorizontal: spacing.lg,
+                            paddingVertical: spacing.md,
+                            borderColor: isCancel ? semantic.hairline : 'transparent',
+                            borderWidth: isCancel ? StyleSheet.hairlineWidth : 0,
+                          },
+                        ]}
+                        onPress={() => onPress(btn)}
+                        accessibilityRole="button"
+                        accessibilityLabel={label}
+                      >
+                        <AppText variant="headline" color={foreground} align="center">
+                          {label}
+                        </AppText>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </>
+            )}
+          </View>
+        </GlassView>
       </Pressable>
     </Modal>
   );

@@ -47,7 +47,7 @@ import {
   TAB_CENTER_BUTTON_BOTTOM,
 } from './src/hooks/useTabClearance';
 // 标签文字走统一文字组件（令牌字号 caption2 = 11pt；英文自动走打包 Geist）
-import { AppText } from './src/components/ui';
+import { AppText, GlassView } from './src/components/ui';
 // 启动占位页只需要"现有主题底色"这一个令牌：此时 ThemeModeProvider 还没挂载，
 // useTheme() 用不了（它会抛错），只能直接引 token
 import { lightColors, darkColors } from './src/theme/theme';
@@ -247,6 +247,7 @@ function SlidingTabBar(props: any) {
 function SlidingTabBarInner(props: any) {
   const insets = useSafeAreaInsets();
   const { translateY, opacity } = useTabBarAutoHide();
+  const { radius } = useTheme();
   const { state, navigation } = props;
 
   // 中央「+」的按压：与 react-navigation 内层 BottomTabItem 的行为逐字一致
@@ -277,11 +278,12 @@ function SlidingTabBarInner(props: any) {
         },
       ]}
     >
-      {/* 内层栏（react-navigation 自带）：底色 / 发丝线 / 圆角 / 阴影全在 screenOptions 的
-          tabBarStyle 里（库内部把 tabBarStyle 排在样式数组最后，能压过它自带的底色/描边）；
-          这里只把它的 54pt 内容区摆到外壳下缘（上缘留给凸起的圆钮） */}
+      {/* 内层栏（react-navigation 自带）：几何（高度 / 全圆角）留在 screenOptions 的 tabBarStyle；
+          材质（填充 / 描边 / 顶部内高光 / 投影 / 模糊回退）统一走 UI V2.1 §2 的 GlassView */}
       <View style={styles.tabBarRow}>
-        <BottomTabBar {...props} />
+        <GlassView radius={radius.full} style={styles.tabBarGlass}>
+          <BottomTabBar {...props} />
+        </GlassView>
       </View>
 
       {/* 中央「+」：绝对定位在外壳之内（整圆都在可点区里），横向居中对齐五个槽位的中缝 */}
@@ -329,7 +331,7 @@ function resetToRootOnTabPress(tabName: string) {
 // App() 自己不行——ThemeModeProvider 是 App() 渲染出来的，
 // useTheme() 得在它渲染出的子孙组件里调用才能读到值。
 function AppContent() {
-  const { isDark, colors, semantic, spacing, radius, tabBarShadow } = useTheme();
+  const { isDark, colors, semantic, spacing, radius } = useTheme();
   const t = useT();
   const tabAutoHide = useCreateTabBarAutoHide();
 
@@ -415,7 +417,8 @@ function AppContent() {
                 {tabLabels[route.name] ?? route.name}
               </AppText>
             ),
-            // 栏身材质（UI V2 §3.4）：悬浮胶囊（全圆角）+ 栏身色（夜 #1A1A22 / 日 白 94%）+ 稿里的投影；
+            // 栏身材质（UI V2.1 §2）：浮空胶囊的填充 / 描边 / 顶部内高光 / 投影 / 模糊回退
+            // 统一由外层 GlassView 画，这里只留几何（高度 / 全圆角 / 裁切）——底色与描边清空；
             // 几何（左右 16 / 距底 18）由 SlidingTabBar 外壳负责
             tabBarStyle: {
               height: TAB_BAR_HEIGHT,
@@ -423,16 +426,15 @@ function AppContent() {
               // 外壳已经用 bottom: TAB_BAR_GAP + insets.bottom 避开过安全区，库内部再 pad 一次
               // 会把内容区压扁，导致 Tab 文字下半截被挤出卡片
               paddingBottom: 0,
-              backgroundColor: semantic.tabBar,
+              backgroundColor: 'transparent',
+              borderTopWidth: 0,
               // 全圆角胶囊（UI V2：不再用 20 圆角方框，也不再画发丝描边）
               borderRadius: radius.full,
               // 圆角要裁掉内容（历史上按渐变出血的装饰层会漏出来出直角）
               overflow: 'hidden',
-              // 稿里的栏身投影（夜 = 大黑软阴影 / 日 = 近距淡影 + 大范围淡紫灰）
-              boxShadow: tabBarShadow,
               // ⚠库的 BottomTabBar 自带 styles.bottom.elevation: 8（安卓默认"黑"阴影）——
               // 半透明/浅色栏身上会透出一条中性暗带（=用户追过的"白条"暗半）；清零，
-              // 阴影统一交给这里的 boxShadow
+              // 阴影统一交给外层 GlassView 的令牌投影
               elevation: 0,
             },
             // 自定义 tab 按钮：去掉 Android 默认的灰色水波纹（和紫色水滴叠在一起很脏）。
@@ -582,6 +584,8 @@ const styles = StyleSheet.create({
     top: TAB_BAR_SHELL_HEIGHT - TAB_BAR_HEIGHT,
     height: TAB_BAR_HEIGHT,
   },
+  // 栏身材质层（UI V2.1 §2 的 GlassView）：铺满内容区，全圆角由组件 radius='full' 给
+  tabBarGlass: { height: '100%' },
   // 中央圆钮槽：整圆都在槽内（槽高 = 圆径），横向居中 → 圆钮对准五个槽位的中缝
   centerButtonSlot: {
     position: 'absolute',

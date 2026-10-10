@@ -48,6 +48,41 @@ export function mixWithWhite(color: string, t: number): string {
   return rgbToHex(mix(rgb.r), mix(rgb.g), mix(rgb.b));
 }
 
+/** 与黑色混合（t=0 原色，t=1 纯黑）：V2.1 立体球暗面用（基色混黑 32%） */
+export function mixWithBlack(color: string, t: number): string {
+  const rgb = parseHex(color);
+  if (!rgb) return color;
+  const mix = (c: number) => Math.round(c * (1 - t));
+  return rgbToHex(mix(rgb.r), mix(rgb.g), mix(rgb.b));
+}
+
+/** 压暗：HSL 明度 ×(1 - amount)（V2.1 §5：白图标对比 < 3:1 的浅色基色加深 15%） */
+export function darken(color: string, amount: number): string {
+  const hsl = hexToHsl(color);
+  if (!hsl) return color;
+  return hslToHex(hsl.h, hsl.s, hsl.l * (1 - amount));
+}
+
+/** 相对亮度（WCAG 2.x；解析失败返回 null） */
+export function relativeLuminance(color: string): number | null {
+  const rgb = parseHex(color);
+  if (!rgb) return null;
+  const channel = (v: number) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b);
+}
+
+/** 对比度（WCAG 2.x；任一侧解析失败返回 null）—— UI V2.1 §4 的硬指标自测用 */
+export function contrastRatio(a: string, b: string): number | null {
+  const la = relativeLuminance(a);
+  const lb = relativeLuminance(b);
+  if (la === null || lb === null) return null;
+  const [hi, lo] = la >= lb ? [la, lb] : [lb, la];
+  return (hi + 0.05) / (lo + 0.05);
+}
+
 /** RGB（0-255）→ '#rrggbb' */
 export function rgbToHex(r: number, g: number, b: number): string {
   const to2 = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');

@@ -2,6 +2,7 @@
 // 全 App 唯一的底部抽屉（T05 / 计划 4.5、10.1 —— 取代现在 7 种弹层写法）。
 //
 // 统一提供
+// - 面板底 = UI V2.1 §2 唯一玻璃材质（GlassView：填充 / 描边 / 顶部内高光 / 投影 / 模糊回退）；
 // - 遮罩：全 App 唯一遮罩色 semantic.scrim，拖动时随下拉距离变淡；
 // - 拖动把手 + 下拉关闭：跟手下拉，松手按「下拉超过 30% 或速度够快」收起，
 //   **松手速度传给出场弹簧**（计划 4.3 的 velocity handoff），不会突然一顿；
@@ -34,6 +35,7 @@ import { useTheme } from '../../theme/useTheme';
 import { useT } from '../../i18n/LanguageContext';
 import { useTabBarForceHide } from '../../context/TabBarAutoHideContext';
 import AppText from './AppText';
+import GlassView from './GlassView';
 import IconButton from './IconButton';
 
 export interface BottomSheetProps {
@@ -228,7 +230,6 @@ export function BottomSheet({
         style={[
           styles.sheet,
           {
-            backgroundColor: semantic.surfaceElevated,
             // 只有顶部两个角是圆角（抽屉顶部 28）；底部直角、贴住屏幕底边（验收退回第 5 条）
             borderTopLeftRadius: radius.xl,
             borderTopRightRadius: radius.xl,
@@ -247,6 +248,20 @@ export function BottomSheet({
         accessibilityViewIsModal
         accessibilityLabel={accessibilityLabel}
       >
+        {/* 面板底 = UI V2.1 §2 唯一玻璃材质（填充 + 描边 + 顶部内高光 + 投影 + 模糊回退）。
+            背景层不吃触摸（pointerEvents none），交互全部交给内容 */}
+        <GlassView
+          radius={0}
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              borderTopLeftRadius: radius.xl,
+              borderTopRightRadius: radius.xl,
+              borderBottomWidth: 0,
+            },
+          ]}
+        />
         {/* 手势只挂在把手 / 标题行：内容里有列表或横向滑动时不会跟内部滚动抢手势 */}
         <GestureDetector gesture={panGesture}>
           {/* collapsable=false：安卓视图拍平会把手势节点吃掉 */}
