@@ -46,3 +46,16 @@ export type { EmptyStateProps } from './EmptyState';
 
 export { TransactionRow } from './TransactionRow';
 export type { TransactionRowProps } from './TransactionRow';
+
+// ── UI V2 地基件（2026-10-10）：渐变 / 玻璃 / 圆形图标托 ──
+export { HeroGradient } from './HeroGradient';
+export type { HeroGradientProps } from './HeroGradient';
+
+export { GlassView } from './GlassView';
+export type { GlassViewProps } from './GlassView';
+
+export { IconCircle } from './IconCircle';
+export type { IconCircleProps } from './IconCircle';
+
+// 色值小工具（类别色推导等）：withAlpha / mixWithWhite / categoryIconTint …
+export { withAlpha, mixWithWhite, hexToHsl, hslToHex, categoryIconTint } from './color';
