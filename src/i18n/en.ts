@@ -421,6 +421,8 @@ export const en = {
     budgetOverLabel: 'Over',
     // T09: month divider label in the transaction list (%{m} from date.months, e.g. 'Oct')
     monthSep: '%{m} %{y}',
+    // T10: a11y suffix for the selected ledger row (ListRow does not forward `selected`)
+    selected: 'Selected',
     // T09: empty state action when there are no transactions
     addFirst: 'Record first',
     // T12: a11y labels for the calendar ‹ › month nav buttons

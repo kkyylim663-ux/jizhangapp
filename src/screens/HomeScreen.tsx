@@ -17,6 +17,7 @@ import { useT } from '../i18n/LanguageContext';
 import { getCategoryLabel } from '../i18n/categories';
 import { useLanguage } from '../i18n/LanguageContext';
 import { i18n } from '../i18n';
+import type { LangMode } from '../i18n';
 import { useTheme } from '../theme/useTheme';
 import { useLayout } from '../theme/useLayout';
 import { useTabClearance } from '../hooks/useTabClearance';
@@ -24,10 +25,11 @@ import { useTabBarScrollHandler, useTabBarForceHide } from '../context/TabBarAut
 import { ThemeColors, Elevation, Layout, Radius, SemanticColors, Spacing } from '../theme/theme';
 import { formatMoney as fmtMoney, HIDDEN_AMOUNT } from '../utils/formatMoney';
 import { formatDate } from '../utils/formatDate';
-import type { Transaction } from '../types';
+import type { Ledger, Transaction } from '../types';
 import { UNCATEGORIZED_ICON, UNCATEGORIZED_NAME, UNCATEGORIZED_COLOR } from '../constants/uncategorized';
 import PressableScale from '../components/PressableScale';
-import { AppText, Card, EmptyState, IconButton, ListRow, ListSection, MoneyText, TransactionRow } from '../components/ui';
+import { AppText, BottomSheet, Button, Card, EmptyState, IconButton, ListRow, ListSection, MoneyText, TransactionRow } from '../components/ui';
+import { withAlpha } from '../components/ui/color';
 import { AmountSheen, HeroCardSheen, HeroCardShadow, HeroEdgeSheen, useHeroSheen } from '../components/HeroMetalSheen';
 import AuroraFlowShader from '../components/AuroraFlowShader';
 import { AmountCalculatorKeypad } from '../components/AmountCalculatorKeypad';
@@ -49,6 +51,8 @@ const CARD_ENTER = [0, 1, 2].map((i) => FadeInDown.duration(240).delay(i * 60));
 const HERO_SMALL_OPACITY = 0.7;
 /** 滚动停止多久后恢复卡下辉光呼吸（毫秒；T08 用一次性定时器取代原 400ms 轮询） */
 const SCROLL_QUIET_MS = 1100;
+/** 账本图标兜底色（旧数据无 color 时显示蓝，与 addLedger / 默认账本一致） */
+const DEFAULT_LEDGER_COLOR = '#4C9AFF';
 /** 从记一笔返回后，新增行「闪一下」的时长（T09 / H8：500ms 淡紫底） */
 const FLASH_ROW_MS = 500;
 
@@ -138,15 +142,211 @@ function formatDateTs(ts: number) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** 把 #RRGGBB 颜色调暗 amount（0~1），做图标渐变底的深端（同色系渐变，不引入新依赖） */
-function shadeColor(hex: string, amount: number) {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return hex;
-  const num = parseInt(m[1], 16);
-  const r = Math.max(0, Math.min(255, Math.round(((num >> 16) & 0xff) * (1 + amount))));
-  const g = Math.max(0, Math.min(255, Math.round(((num >> 8) & 0xff) * (1 + amount))));
-  const b = Math.max(0, Math.min(255, Math.round((num & 0xff) * (1 + amount))));
-  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+// ── 账本抽屉的单行（T10 / H11）──
+// 结构：ui/ListRow（图标方块 + 名称/副标题 + 分币种结余 + 选中勾）+ 右侧「铅笔改名 / 垃圾桶删除」。
+// ⚠ 改名与删除两个 IconButton 必须放在 ListRow **外面**（同级的动作列）：ListRow 可点时整行是
+//   Pressable（Web 上是 <button>），按钮放进去会变成 button 套 button（读屏重复 + 控制台 hydration 报错，
+//   此前日历药丸踩过一次）。动作列宽度固定（默认账本用等宽占位），保证各行结余数字对齐。
+// ⚠ 默认账本不渲染删除键（H11：默认账本不可删，就不该显示删除键）。
+type LedgerRowProps = {
+  ledger: Ledger;
+  active: boolean;
+  isDefault: boolean;
+  /** 该账本的分币种结余（[币种代码, 金额]） */
+  totals: [string, number][];
+  renaming: boolean;
+  renameValue: string;
+  renameInputRef: React.RefObject<TextInput | null>;
+  onRenameValueChange: (v: string) => void;
+  onCommitRename: () => void;
+  onStartRename: () => void;
+  onDelete: () => void;
+  onSelect: () => void;
+};
+
+function LedgerRow({
+  ledger,
+  active,
+  isDefault,
+  totals,
+  renaming,
+  renameValue,
+  renameInputRef,
+  onRenameValueChange,
+  onCommitRename,
+  onStartRename,
+  onDelete,
+  onSelect,
+}: LedgerRowProps) {
+  const { semantic, spacing, layout } = useTheme();
+  const t = useT();
+  const { langMode } = useLanguage();
+  const baseColor = ledger.color ?? DEFAULT_LEDGER_COLOR;
+  const styles2 = useMemo(() => makeLedgerRowStyles(semantic, spacing, layout), [semantic, spacing, layout]);
+
+  // 改名态：这一行换成行内输入（与旧交互一致：点铅笔 → 名字变输入框，失焦 / 回车提交）
+  if (renaming) {
+    return (
+      <View style={styles2.renameRow}>
+        <TextInput
+          ref={renameInputRef}
+          style={[
+            styles2.renameInput,
+            { color: semantic.textPrimary, borderColor: semantic.accent, backgroundColor: semantic.bg },
+          ]}
+          value={renameValue}
+          onChangeText={onRenameValueChange}
+          onBlur={onCommitRename}
+          onSubmitEditing={onCommitRename}
+          selectTextOnFocus
+          returnKeyType="done"
+          autoFocus
+          accessibilityLabel={t('home.editLedger')}
+        />
+        <Button title={t('common.save')} size="sm" fullWidth={false} onPress={onCommitRename} />
+      </View>
+    );
+  }
+
+  return (
+    <View style={[styles2.row, active && { backgroundColor: semantic.accentSoft }]}>
+      {/* 主区（整块可点 = 切换账本）：左图标方块 + 中间三行（名称 / 余额 / 预设或创建于）。
+          三行结构对长短名字都一致：名字最多 2 行、余额逐行列出，不会被挤到别处 */}
+      <PressableScale
+        onPress={onSelect}
+        activeScale={0.98}
+        hitSlop={0}
+        style={styles2.main}
+        accessibilityRole="button"
+        accessibilityLabel={active ? `${ledger.name}，${t('home.selected')}` : ledger.name}
+        testID={`ledger-row-${ledger.id}`}
+      >
+        <View style={[styles2.iconBox, { backgroundColor: withAlpha(baseColor, 0.12) }]}>
+          <Ionicons name={ledger.icon as IconName} size={20} color={baseColor} />
+        </View>
+        <View style={styles2.col}>
+          <AppText variant="headline" numberOfLines={2}>
+            {ledger.name}
+          </AppText>
+          {totals.length === 0 ? (
+            <AppText variant="subhead" color={semantic.textSecondary}>
+              {t('home.noAssets')}
+            </AppText>
+          ) : (
+            totals.map(([code, amount]) => (
+              // 抽屉是「看不出是什么钱」的地方 → 带币种代码（计划 4.4）；金额走 MoneyText 永不截断
+              <View key={code} style={styles2.balanceLine}>
+                <AppText variant="subhead" color={semantic.textSecondary}>
+                  {code}
+                </AppText>
+                <MoneyText value={amount} variant="subhead" color={semantic.textPrimary} />
+              </View>
+            ))
+          )}
+          <AppText variant="caption" color={semantic.textSecondary} numberOfLines={1}>
+            {isDefault
+              ? t('home.defaultLedger')
+              : t('home.createdOn', { date: ledgerCreatedLabel(ledger.createdAt, langMode) })}
+          </AppText>
+        </View>
+      </PressableScale>
+      {/* 动作列放在可点区之外（ListRow 可点时整行是 button，按钮放进去会 button 套 button）。
+          默认账本只有铅笔，但用等宽占位保证铅笔的横向位置与其它行一致 */}
+      <View style={styles2.actions}>
+        <IconButton
+          icon="pencil"
+          size={20}
+          accessibilityLabel={t('home.editLedger')}
+          onPress={onStartRename}
+          testID={`ledger-rename-${ledger.id}`}
+        />
+        {isDefault ? (
+          <View style={styles2.actionSpacer} />
+        ) : (
+          <IconButton
+            icon="trash-outline"
+            size={20}
+            color={semantic.danger}
+            accessibilityLabel={t('home.deleteLedger')}
+            onPress={onDelete}
+            testID={`ledger-delete-${ledger.id}`}
+          />
+        )}
+      </View>
+    </View>
+  );
+
+}
+
+/** 账本抽屉单行的样式（令牌进、StyleSheet 出；LedgerRow 自己 useMemo 一份）。
+ *  结构对齐 ui/ListRow 的规格（minHeight / 内边距 / 按压 / 图标方块），
+ *  只是中间列要放「名称 + 余额 + 预设·创建于」三行 —— ListRow 的槽位（title 1 行 + subtitle 1 行）
+ *  放不下，所以这一行按同规格自绘；行内没有第二种画风。 */
+function makeLedgerRowStyles(semantic: SemanticColors, spacing: Spacing, layout: Layout) {
+  return StyleSheet.create({
+    // 一行 = 可点主区 + 动作列；选中底色铺满整行
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      minHeight: layout.rowMinHeight,
+      paddingHorizontal: layout.card,
+      paddingVertical: spacing.sm,
+    },
+    main: {
+      flex: 1,
+      flexShrink: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      columnGap: spacing.md,
+    },
+    // 图标方块（全 App 同一种画法：40 方块 + radius.md + 账本色 12% 底），永远在左、垂直居中
+    iconBox: {
+      width: 40,
+      height: 40,
+      borderRadius: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexShrink: 0,
+    },
+    // 中间列：名称 → 余额（逐币种一行）→ 预设 / 创建于
+    col: { flex: 1, flexShrink: 1, rowGap: 2 },
+    balanceLine: { flexDirection: 'row', alignItems: 'baseline', columnGap: spacing.xs },
+    // 动作列：铅笔 + 垃圾桶；默认账本用等宽占位，铅笔横向位置与其它行对齐
+    actions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      flexShrink: 0,
+    },
+    actionSpacer: { width: 44 },
+    // 改名态：行内输入 + 保存按钮（与旧交互一致：失焦 / 回车提交）
+    renameRow: {
+      minHeight: layout.rowMinHeight,
+      flexDirection: 'row',
+      alignItems: 'center',
+      columnGap: spacing.sm,
+      paddingHorizontal: layout.card,
+      paddingVertical: spacing.sm,
+    },
+    renameInput: {
+      flex: 1,
+      flexShrink: 1,
+      minHeight: 40,
+      fontSize: 15,
+      fontWeight: '600',
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      borderWidth: 1,
+      borderRadius: 10,
+    },
+  });
+}
+
+/** 账本创建时间：今年的只写月日（10月8日 周四），跨年带上年份（2025年10月8日 周三）——
+ *  两种都走 formatDate 的既有档位，不自己拼字符串 */
+function ledgerCreatedLabel(createdAt: number, lang: LangMode): string {
+  const d = new Date(createdAt);
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return formatDate(d, lang, { style: sameYear ? 'full' : 'fullWithYear' });
 }
 
 /** 账单行的 key：交易 id（稳定函数，放模块作用域避免每次渲染换身份） */
@@ -601,98 +801,11 @@ export default function HomeScreen({ navigation }: any) {
   // ── 日夜切换：圆心扩散换肤 + 三合一胶囊里的「日/夜」段已按 T08 删除 ──
   // 主题改为跟随系统（T01e，设置页可手动指定），首页不再放切换按钮，也不再需要那套遮罩动画。
   const [ledgerPickerOpen, setLedgerPickerOpen] = useState(false);
-  // 账本选择弹窗——完全照搬「记一笔 → 账户选择弹层」的定版模式（该模式真机验证滚动+下拉收起共存无冲突）：
-  // - 列表 = Reanimated.ScrollView + useAnimatedScrollHandler 把滚动偏移写进 sharedValue（UI 线程零延迟）
-  // - Pan = manualActivation 挂在面板外层，判定时【列表不在顶部直接 return 不接管】→ 滚动永远优先；
-  //   列表在顶部时下拖 12px 接管收起，上拖/横向永远不碰
-  const ledgerPickerPanY = useSharedValue(0);
-  const ledgerScrim = useSharedValue(0);
-  const ledgerListOffset = useSharedValue(0);
-  const ledgerListScrollHandler = useAnimatedScrollHandler((e) => {
-    ledgerListOffset.value = e.contentOffset.y;
-  });
-  const ledgerDragStart = useSharedValue({ x: 0, y: 0 });
-
-  // 收起：滑出屏幕后真正关闭弹窗。
-  const finishLedgerClose = () => {
-    setLedgerPickerOpen(false);
-  };
-  // 统一收起入口：✕ / 选中账本 / 点遮罩 / 列表顶部下拖超阈值
-  const dismissLedgerPickerSheet = () => {
-    ledgerScrim.value = withTiming(0, { duration: 150 });
-    ledgerPickerPanY.value = withTiming(
-      800,
-      { duration: 200 },
-      (finished) => {
-        if (finished) runOnJS(finishLedgerClose)();
-      }
-    );
-  };
-  // 弹窗打开期间强制收起浮空 Tab 栏（覆盖层在屏幕树内，Tab 栏会盖在它上面）
-  const forceHideTabBar = useTabBarForceHide();
-  useEffect(() => {
-    if (ledgerPickerOpen) forceHideTabBar(true);
-    return () => forceHideTabBar(false);
-  }, [ledgerPickerOpen, forceHideTabBar]);
-
-  // 下拉收起手势（账户弹层同款 manualActivation）：与 Reanimated.ScrollView 是
-  // 父子关系而非包裹关系，滚动偏移在 UI 线程判定——不在顶部绝不接管。
-  // 手势对象必须 useMemo——每次渲染重建会让 RNGH 反复拆装手势处理器
-  const ledgerPickerGesture = useMemo(
-    () =>
-      Gesture.Pan()
-        .manualActivation(true)
-        .onTouchesDown((e) => {
-          const touch = e.allTouches[0];
-          ledgerDragStart.value = { x: touch?.absoluteX ?? 0, y: touch?.absoluteY ?? 0 };
-        })
-        .onTouchesMove((e, stateManager) => {
-          const touch = e.allTouches[0];
-          if (!touch) return;
-          if (ledgerListOffset.value > 0) return; // 列表不在顶部：不接管，让它正常滚
-          const dy = touch.absoluteY - ledgerDragStart.value.y;
-          const dx = touch.absoluteX - ledgerDragStart.value.x;
-          if (dy > 12 && Math.abs(dy) > Math.abs(dx) * 1.2) stateManager.activate();
-        })
-        .onUpdate((e) => {
-          ledgerPickerPanY.value = Math.max(0, e.translationY);
-          ledgerScrim.value = Math.min(0.4, Math.max(0, e.translationY) / 500 + 0.15);
-        })
-        .onEnd((e) => {
-          if (e.translationY > 120 || e.velocityY > 800) {
-            runOnJS(dismissLedgerPickerSheet)();
-          } else {
-            ledgerPickerPanY.value = withTiming(0, { duration: 180 });
-            ledgerScrim.value = withTiming(0.4, { duration: 150 });
-          }
-        }),
-    []
-  );
-
-  // 跟手位移：只动 translateY 一个属性（入场动画复用 panY）。
-  // 刻意不加 scale / borderRadius / overflow 动画——含 ScrollView 的整层在 Android 上
-  // 做这类属性动画会留下硬件层残影（"缠影"），纯位移则干净。
-  const ledgerSheetAnimStyle = useAnimatedStyle(
-    () => ({ transform: [{ translateY: ledgerPickerPanY.value }] }),
-    []
-  );
-  // 入场：不用 Reanimated 的 entering 布局动画（它和 animated style 的 transform 同属性，
-  // 挂载瞬间会打架留鬼影）——直接复用 panY：挂载时从屏幕外滑到位；panY 同时在这里复位。
-  // 打开时列表滚动偏移一并清零（上次滚到中间残留会让下拉收起失灵，账户弹层同款处理）
-  useEffect(() => {
-    if (ledgerPickerOpen) {
-      ledgerListOffset.value = 0;
-      ledgerPickerPanY.value = 900;
-      ledgerScrim.value = 0;
-      ledgerPickerPanY.value = withTiming(0, { duration: 260 });
-      ledgerScrim.value = withTiming(0.4, { duration: 260 });
-    }
-  }, [ledgerPickerOpen, ledgerPickerPanY, ledgerScrim, ledgerListOffset]);
-  // 底层遮罩：入场淡入、收起淡出
-  const ledgerScrimAnimStyle = useAnimatedStyle(
-    () => ({ opacity: ledgerScrim.value }),
-    []
-  );
+  // 账本抽屉（T10 / H11）：改用 ui/BottomSheet —— 拖动把手下拉关闭、点遮罩关闭、安全区、
+  // 打开期间强制收起浮空 Tab 栏都由它内部处理，原来这套自绘（scrim / pan / 入场位移动画 /
+  // manualActivation 手势 / Reanimated.ScrollView + 滚动偏移判定）整体退役。
+  // 行改用 ui/ListRow（图标方块 + 名称/副标题 + 结余 + 铅笔/垃圾桶），默认账本不再显示删除键。
+  const closeLedgerPicker = () => setLedgerPickerOpen(false);
   // 账本改名：点击账本名字变成输入框（重命名中的账本 id），失焦/确认时保存
   const [renamingLedgerId, setRenamingLedgerId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -1039,14 +1152,19 @@ export default function HomeScreen({ navigation }: any) {
       map.set(g.date, {
         expense: g.expense,
         income: g.income,
-        // 逐笔明细（点日期展开）：标题拼接与账单列表完全同款——类别 · 计划名/备注
+        // 逐笔明细（点日期展开）：字段与首页列表行一一对应，回落规则也一致——
+        // 标题 = 备注（计划名也当备注用），无备注时标题落到类别名、副标题只留账户（与 T09 小修同款）
         items: g.items.map((item) => {
           const cat = getCategoryById(item.categoryId);
           const catName = cat ? getCategoryLabel(cat, t) : UNCATEGORIZED_NAME;
-          const extra = item.note?.trim() || item.displayName?.trim() || '';
+          const ownTitle = item.note?.trim() || item.displayName?.trim() || '';
           return {
             id: item.id,
-            title: extra ? `${catName} · ${extra}` : catName,
+            note: ownTitle.length > 0 ? ownTitle : catName,
+            categoryName: ownTitle.length > 0 ? catName : '',
+            categoryIcon: (cat?.icon ?? UNCATEGORIZED_ICON) as IconName,
+            categoryColor: cat?.color ?? UNCATEGORIZED_COLOR,
+            accountName: item.assetId ? getAssetById(item.assetId)?.name : undefined,
             amount: item.amount,
             type: item.type as 'expense' | 'income',
           };
@@ -1055,7 +1173,7 @@ export default function HomeScreen({ navigation }: any) {
     );
     return map;
     // ⚠ t 是全局稳定引用，依赖必须带 langMode，切语言明细标题才会重算
-  }, [dayGroups, getCategoryById, t, homeLang]);
+  }, [dayGroups, getCategoryById, getAssetById, t, homeLang]);
   // 当月合计：只加总 viewMonth 当月的日子（dayGroups 含跨月历史，需按月份前缀过滤）
   const calendarMonthTotals = useMemo(() => {
     const prefix = `${viewMonth.year}-${String(viewMonth.month).padStart(2, '0')}-`;
@@ -1633,6 +1751,11 @@ export default function HomeScreen({ navigation }: any) {
                   monthIncome={calendarMonthTotals.income}
                   onPrevMonth={() => shiftCalendarMonth(-1)}
                   onNextMonth={() => shiftCalendarMonth(1)}
+                  // 日历明细点一行 = 进编辑（与首页列表行同一个现有入口）
+                  onPressItem={(id) => {
+                    const tx = ledgerTransactions.find((x) => x.id === id);
+                    if (tx) navigation.navigate(ROUTES.ADD_TX, { editTransaction: tx });
+                  }}
                 />
               </Card>
             </View>
@@ -1646,127 +1769,64 @@ export default function HomeScreen({ navigation }: any) {
 
       {/* 吸顶日期头（自绘，见 pinnedSection 的注释）：钉在列表视口顶部，与内容里的日期头同款；
           Hero 还占着顶部（首项是 Hero）时不显示 —— 只覆盖列表，不盖弹层（zIndex 低于弹层） */}
-      {Platform.OS === 'web' && heroPassed && pinnedSection && (
+      {/* 只在列表视图显示：切到日历视图时列表（含吸顶条）必须完全不显示（验收退回第 2 条） */}
+      {Platform.OS === 'web' && viewMode === 'detail' && heroPassed && pinnedSection && (
         <View style={styles.pinnedHeader} pointerEvents="none" testID="home-pinned-header">
           {renderDayHeader({ section: pinnedSection })}
         </View>
       )}
 
-      {/* 多账本切换：树内全屏覆盖层。不用 RN Modal——它是独立原生窗口，
-          Reanimated 的 UI 线程动画在里面（Android）会渲染出第二份幽灵副本（两份重影的根源）。
-          同一窗口渲染后物理上只有一个副本；打开期间浮空 Tab 栏被强制收起，不会盖在弹窗上。
-          手势结构照搬「记一笔 → 账户选择弹层」定版模式：
-          遮罩点击关闭 + Pan 挂面板外层（列表在顶部时下拖收起，否则让列表滚） */}
-      {ledgerPickerOpen && (
-        <View style={[StyleSheet.absoluteFill, { zIndex: 100, elevation: 100, top: -insets.top }]}>
-          {/* 底层遮罩：位于弹窗卡片之下、首页之上（入场淡入、收起淡出），点击关闭 */}
-          <Pressable style={StyleSheet.absoluteFill} onPress={dismissLedgerPickerSheet}>
-            <Reanimated.View style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }, ledgerScrimAnimStyle]} />
-          </Pressable>
-          {/* 手势挂在面板外层（账户弹层同款）：面板内 Reanimated.ScrollView 正常滚动，
-              列表在顶部时下拖由 Pan 接管收起 */}
-          <GestureDetector gesture={ledgerPickerGesture}>
-          <Reanimated.View style={[styles.ledgerPickerSheet, ledgerSheetAnimStyle]}>
-          {/* 把手条（账户弹层同款视觉），面板打开时它就是永远可拖的收起区 */}
-          <View style={styles.ledgerPickerGrabber} pointerEvents="none" />
-          <SafeAreaView style={styles.ledgerPickerScreen} edges={['bottom']}>
-          <View style={{ flex: 1 }}>
-          <View style={styles.ledgerPickerHeader}>
-            <PressableScale
-              onPress={dismissLedgerPickerSheet}
-              activeScale={0.90}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons name="close" size={24} color={colors.icon} />
-            </PressableScale>
-            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-              <Text style={styles.ledgerPickerTitle}>{t('home.selectLedger')}</Text>
-            </View>
-            {/* 右侧齿轮入口及其跳转设置页的逻辑已移除;用同宽占位 View 保持标题居中 */}
-            <View style={{ width: 24 }} />
-          </View>
-
-          <Reanimated.ScrollView
-            // flex:1 约束在标题栏与底栏之间的剩余空间里——不约束的话 ScrollView 会按
-            // 内容自然长高，账本一多整个菜单就超出屏幕、底部按钮被顶出去。
-            // Reanimated.ScrollView + scrollHandler：滚动偏移进 shared value，
-            // Pan 的 manualActivation 判定在 UI 线程实时读到（账户弹层定版方案）
-            onScroll={ledgerListScrollHandler}
-            scrollEventThrottle={16}
-            style={{ flex: 1 }}
-            contentContainerStyle={styles.ledgerPickerListContent}
-            showsVerticalScrollIndicator={false}
-          >
-            {sortedLedgers.map((l) => {
-              const active = l.id === activeLedgerId;
-              const totals = ledgerTotals[l.id] ?? [];
-              const isDefault = l.id === 'default';
-              // 图标渐变底跟随创建时选的颜色（用户定版：选了绿色就显示绿色渐变）。
-              // 兜底用 #4C9AFF（与 addLedger/默认账本一致）——旧数据无 color 时显示蓝
-              // 而非紫，避免和"写死紫色"的旧行为混淆难以排查（Verify Agent 建议）
-              const base = l.color ?? '#4C9AFF';
-              const iconFrom = base;
-              const iconTo = shadeColor(base, isDefault ? -0.28 : -0.42);
-              return (
-                <LedgerCardInner
-                  key={l.id}
-                  l={l}
-                  active={active}
-                  isDefault={isDefault}
-                  totals={totals}
-                  iconFrom={iconFrom}
-                  iconTo={iconTo}
-                  renamingLedgerId={renamingLedgerId}
-                  renameValue={renameValue}
-                  renameInputRef={renameInputRef}
-                  setRenameValue={setRenameValue}
-                  commitRenameLedger={commitRenameLedger}
-                  startRenameLedger={startRenameLedger}
-                  onCardPress={() => {
-                    hapticLight();
-                    setActiveLedgerId(l.id);
-                    dismissLedgerPickerSheet();
-                  }}
-                  onEditPress={() => startRenameLedger(l.id, l.name)}
-                  onDeletePress={() => requestDeleteLedger(l)}
-                  styles={styles}
-                  colors={colors}
-                  t={t}
-                />
-              );
-            })}
-          </Reanimated.ScrollView>
-
-          <View style={styles.ledgerPickerFooter}>
-            <LinearGradient
-              colors={[colors.fabHighlight, colors.fabBg, colors.fabShadow]}
-              locations={[0, 0.55, 1]}
-              start={{ x: 0.3, y: 0 }}
-              end={{ x: 0.7, y: 1 }}
-              style={styles.ledgerPickerAddBtn}
-            >
-              <TouchableOpacity
-                style={StyleSheet.absoluteFill}
-                onPress={() => {
-                  dismissLedgerPickerSheet();
-                  navigation.navigate(ROUTES.LEDGER);
+      {/* 账本抽屉（T10 / H11）：改用 ui/BottomSheet —— 拖动把手下拉 / 点遮罩 / 关闭键三条路径
+          都先播出场动画再卸载，安全区与「打开期间强制收起浮空 Tab 栏」都由组件内部处理；
+          行 = ui/ListRow（见模块作用域的 LedgerRow）；列表滚动交给抽屉内的 ScrollView。
+          改名 / 新建 / 删除（含二级密码）/ 切换 的行为与旧版一致，一行没改 */}
+      <BottomSheet
+        visible={ledgerPickerOpen}
+        onClose={closeLedgerPicker}
+        title={t('home.selectLedger')}
+        testID="ledger-sheet"
+      >
+        <ScrollView
+          style={styles.ledgerSheetScroll}
+          contentContainerStyle={styles.ledgerSheetListContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <ListSection cardStyle={styles.ledgerSheetSection}>
+            {sortedLedgers.map((l) => (
+              <LedgerRow
+                key={l.id}
+                ledger={l}
+                active={l.id === activeLedgerId}
+                isDefault={l.id === 'default'}
+                totals={ledgerTotals[l.id] ?? []}
+                renaming={renamingLedgerId === l.id}
+                renameValue={renameValue}
+                renameInputRef={renameInputRef}
+                onRenameValueChange={setRenameValue}
+                onCommitRename={commitRenameLedger}
+                onStartRename={() => startRenameLedger(l.id, l.name)}
+                onDelete={() => requestDeleteLedger(l)}
+                onSelect={() => {
+                  hapticLight();
+                  setActiveLedgerId(l.id);
+                  closeLedgerPicker();
                 }}
-                activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityLabel={t('home.addLedger')}
               />
-              <View style={styles.ledgerPickerAddBtnInner} pointerEvents="none">
-                <Ionicons name="add" size={18} color={colors.fabIcon} />
-                <Text style={styles.ledgerPickerAddBtnText}>{t('home.addLedger')}</Text>
-              </View>
-            </LinearGradient>
-          </View>
-          </View>
-        </SafeAreaView>
-          </Reanimated.View>
-          </GestureDetector>
+            ))}
+          </ListSection>
+        </ScrollView>
+        {/* 新增账本：标准主按钮（旧渐变按钮退役）；逻辑不变 = 关抽屉 + 进「开设账本」页 */}
+        <View style={styles.ledgerSheetFooter}>
+          <Button
+            title={t('home.addLedger')}
+            icon="add"
+            onPress={() => {
+              closeLedgerPicker();
+              navigation.navigate(ROUTES.LEDGER);
+            }}
+          />
         </View>
-      )}
+      </BottomSheet>
 
       {/* 预算调整弹窗：自绘计算器键盘常驻（资产页编辑同款「我的计算机」）——
           预填当前预算值，可直接按算式（如 500+300），「完成」求值保存，点遮罩取消不保存；
@@ -1896,138 +1956,6 @@ export default function HomeScreen({ navigation }: any) {
       />
     </SafeAreaView>
     </>
-  );
-}
-
-// 账本卡片内容（弹层列表共用）：渐变图标 + 名称/副标题 + 右上角编辑/删除钮 + 单选圈 + 结余区。
-// 选中态的渐变描边由外层（LinearGradient 包裹）承担；本组件只负责卡面本身。
-type LedgerCardInnerProps = {
-  l: { id: string; name: string; icon: string; createdAt: number };
-  active: boolean;
-  isDefault: boolean;
-  totals: [string, number][];
-  iconFrom: string;
-  iconTo: string;
-  renamingLedgerId: string | null;
-  renameValue: string;
-  renameInputRef: React.RefObject<TextInput | null>;
-  setRenameValue: (v: string) => void;
-  commitRenameLedger: () => void;
-  startRenameLedger: (id: string, name: string) => void;
-  onCardPress: () => void;
-  onEditPress: () => void;
-  onDeletePress: () => void;
-  styles: ReturnType<typeof makeStyles>;
-  colors: ThemeColors;
-  t: (key: string, params?: Record<string, string | number>) => string;
-};
-
-function LedgerCardInner({
-  l,
-  active,
-  isDefault,
-  totals,
-  iconFrom,
-  iconTo,
-  renamingLedgerId,
-  renameValue,
-  renameInputRef,
-  setRenameValue,
-  commitRenameLedger,
-  startRenameLedger,
-  onCardPress,
-  onEditPress,
-  onDeletePress,
-  styles,
-  colors,
-  t,
-}: LedgerCardInnerProps) {
-  // 删除入口 = 编辑铅笔右侧的垃圾桶按钮（用户定版：侧滑删除手势会与纵向滚动抢触摸，
-  // 卡片上不再挂任何手势，滚动保持干净）。
-  return (
-    <PressableScale
-      style={[styles.ledgerPickerCard, active && styles.ledgerPickerCardActive]}
-      activeScale={0.97}
-      onPress={onCardPress}
-      accessibilityRole="button"
-      accessibilityLabel={l.name}
-      accessibilityState={{ selected: active }}
-    >
-      <View style={styles.ledgerPickerCardTop}>
-        <LinearGradient
-          colors={[iconFrom, iconTo]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.ledgerPickerIconWrap}
-        >
-          <Ionicons name={l.icon as IconName} size={22} color="#FFFFFF" />
-        </LinearGradient>
-        <View style={{ flex: 1, marginLeft: 12 }}>
-          {renamingLedgerId === l.id ? (
-            <TextInput
-              ref={renameInputRef}
-              style={[styles.ledgerRenameInput, { borderColor: colors.link }]}
-              value={renameValue}
-              onChangeText={setRenameValue}
-              onBlur={commitRenameLedger}
-              onSubmitEditing={commitRenameLedger}
-              selectTextOnFocus
-              returnKeyType="done"
-              autoFocus
-            />
-          ) : (
-            <View style={styles.ledgerRenameBox}>
-              {/* 名称 + 铅笔同框格：整体点击进入改名（用户定版：铅笔要有框格框住名称） */}
-              <TouchableOpacity
-                style={styles.ledgerRenameBoxInner}
-                onPress={onEditPress}
-                accessibilityRole="button"
-                accessibilityLabel={t('home.editLedger')}
-              >
-                <Text style={[styles.ledgerPickerName, { flex: 1 }]} numberOfLines={1}>
-                  {l.name}
-                </Text>
-                <Ionicons name="pencil" size={15} color={colors.link} />
-              </TouchableOpacity>
-            </View>
-          )}
-          <Text style={styles.ledgerPickerSub}>
-            {isDefault ? t('home.defaultLedger') : t('home.createdOn', { date: formatDate(l.createdAt) })}
-          </Text>
-        </View>
-        {/* 右上角操作区：只剩删除垃圾桶（用户定版：铅笔编辑钮整个去除，
-            改名仍走名称框格内的铅笔） */}
-        {renamingLedgerId !== l.id && (
-          <TouchableOpacity
-            style={styles.ledgerCardActionBtn}
-            onPress={onDeletePress}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            accessibilityRole="button"
-            accessibilityLabel={t('home.deleteLedger')}
-          >
-            <Ionicons name="trash-outline" size={17} color={colors.expenseOver} />
-          </TouchableOpacity>
-        )}
-        <Ionicons
-          name={active ? 'checkmark-circle' : 'ellipse-outline'}
-          size={22}
-          color={active ? colors.link : colors.dividerHair}
-        />
-      </View>
-      <View style={styles.ledgerPickerBalanceBlock}>
-        <Text style={styles.ledgerPickerBalanceLabel}>{t('home.balanceLabel')}</Text>
-        {totals.length === 0 ? (
-          <Text style={styles.ledgerPickerBalanceEmpty}>{t('home.noAssets')}</Text>
-        ) : (
-          totals.map(([code, amount]) => (
-            <View key={code} style={styles.ledgerPickerBalanceLine}>
-              <Text style={styles.ledgerPickerBalanceCode}>{code}</Text>
-              <Text style={styles.ledgerPickerBalanceValue}>{formatMoney(amount)}</Text>
-            </View>
-          ))
-        )}
-      </View>
-    </PressableScale>
   );
 }
 
@@ -2304,141 +2232,17 @@ function makeStyles(
     budgetKeypadBleed: { marginHorizontal: -16, marginBottom: -16 },
     modalFieldLabel: { fontSize: 12, color: colors.textSecondary, marginTop: 12, marginBottom: 6 },
     requiredMark: { color: colors.expense, fontWeight: '700' },
-    // 全屏账本快速切换弹窗（参照 LedgerScreen 的卡片样式，保持视觉一致）
-    // 贴底面板（账户弹层 accountPickerSheet 同款结构）：absolute 锚底、85% 高、
-    // 顶部圆角、发丝描边。下滑收起手势挂在这一层外层
-    ledgerPickerSheet: {
-      position: 'absolute',
-      bottom: 0,
-      left: 0,
-      right: 0,
-      height: '85%',
-      backgroundColor: colors.bg,
-      borderTopLeftRadius: 24,
-      borderTopRightRadius: 24,
-      overflow: 'hidden',
+    // 账本抽屉（T10 / H11）：BottomSheet 内的内容 —— 贴边列表（不套四角圆角卡，避免「抽屉里浮一张卡」）
+    // + 底部通栏「新增账本」主按钮；列表需要滚动时在抽屉内滚动（flexShrink 让它在 maxHeight 内收缩）
+    ledgerSheetScroll: { flexGrow: 0, flexShrink: 1 },
+    ledgerSheetListContent: { paddingVertical: spacing.md },
+    ledgerSheetSection: { borderRadius: 0, borderWidth: 0 },
+    ledgerSheetFooter: {
+      paddingHorizontal: layout.card,
+      paddingTop: spacing.sm,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: semantic.hairline,
     },
-    // 把手条（账户弹层 grabber 同款）：面板打开时它所在的头部区域永远可拖收起
-    ledgerPickerGrabber: {
-      alignSelf: 'center',
-      width: 44,
-      height: 5,
-      borderRadius: 3,
-      backgroundColor: colors.divider,
-      marginTop: 8,
-      marginBottom: 2,
-    },
-    ledgerPickerScreen: { flex: 1, backgroundColor: colors.bg },
-    ledgerPickerHeader: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: 20,
-      paddingVertical: 14,
-    },
-    ledgerPickerTitle: { fontSize: 17, fontWeight: '700', color: colors.textPrimary },
-    ledgerPickerListContent: { padding: 20, paddingTop: 4, gap: 12 },
-    ledgerPickerCard: {
-      backgroundColor: colors.card,
-      borderRadius: 16,
-      padding: 14,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.cardBorder,
-      marginBottom: 12,
-    },
-    // 选中卡片：2px 主题紫实色描边（用户要求去掉渐变外框后保留清晰选中态）
-    ledgerPickerCardActive: {
-      borderWidth: 2,
-      borderColor: colors.link,
-    },
-    ledgerPickerCardTop: { flexDirection: 'row', alignItems: 'center' },
-    ledgerPickerIconWrap: {
-      width: 48,
-      height: 48,
-      borderRadius: 12,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    ledgerPickerName: { fontSize: 17, fontWeight: '700', color: colors.textPrimary },
-    // 名称 + 铅笔同框格：发丝描边圆角长条，整体点击进入改名（用户定版交互）
-    ledgerRenameBox: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.cardBorder,
-      borderRadius: 8,
-      backgroundColor: colors.bg,
-    },
-    ledgerRenameBoxInner: {
-      flex: 1,
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 6,
-      minHeight: 34,
-      paddingHorizontal: 10,
-      paddingVertical: 4,
-    },
-    // 改名输入框：编辑中在名称位置原位展开，主题色高亮
-    ledgerRenameInput: {
-      flex: 1,
-      minHeight: 34,
-      fontSize: 15,
-      fontWeight: '700',
-      color: colors.textPrimary,
-      paddingVertical: 6,
-      paddingHorizontal: 10,
-      borderWidth: 1,
-      borderRadius: 8,
-    },
-    ledgerPickerSub: { fontSize: 12, color: colors.textTertiary, marginTop: 2 },
-    // 结余区改为竖排：「结余」标签在左上角，下面每行一个币种
-    ledgerPickerBalanceBlock: {
-      marginTop: 10,
-      paddingTop: 10,
-      borderTopWidth: 1,
-      borderTopColor: colors.dividerHair,
-    },
-    ledgerPickerBalanceLabel: { fontSize: 12, fontWeight: '600', color: colors.textTertiary, marginBottom: 4 },
-    ledgerPickerBalanceEmpty: { fontSize: 13, color: colors.textTertiary },
-    // 金额行：货币代码与金额同款字重字号，代码在左、金额贴行尾靠右
-    ledgerPickerBalanceLine: {
-      flexDirection: 'row',
-      alignItems: 'flex-end',
-      justifyContent: 'space-between',
-    },
-    // 用户定版：货币/金额用主题紫（代表色）、600 字重；字号=缩小版基础上各加大 2 号
-    ledgerPickerBalanceValue: { fontSize: 18, fontWeight: '600', color: colors.link, lineHeight: 22 },
-    ledgerPickerBalanceCode: { fontSize: 15, fontWeight: '600', color: colors.link, lineHeight: 20 },
-    // 卡片右上角删除钮（用户定版：铅笔编辑钮已去除，改名走名称框格内的铅笔）
-    ledgerCardActionBtn: {
-      width: 30,
-      height: 30,
-      borderRadius: 15,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    ledgerPickerFooter: {
-      paddingHorizontal: 20,
-      paddingTop: 8,
-      paddingBottom: 12,
-      borderTopWidth: 1,
-      borderTopColor: colors.dividerHair,
-    },
-    // 新增账本：通栏渐变主按钮（FAB 同款三段渐变），内容层叠在渐变上
-    ledgerPickerAddBtn: {
-      borderRadius: 14,
-      paddingVertical: 14,
-      alignItems: 'center',
-      justifyContent: 'center',
-      overflow: 'hidden',
-    },
-    ledgerPickerAddBtnInner: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 6,
-    },
-    ledgerPickerAddBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
     modalInput: {
       backgroundColor: colors.bg,
       borderRadius: 10,

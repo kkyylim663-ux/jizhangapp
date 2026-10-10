@@ -16,18 +16,38 @@ import SegmentedControl from './SegmentedControl';
 import AppText from './ui/AppText';
 import MoneyText from './ui/MoneyText';
 import { IconButton } from './ui/IconButton';
+import TransactionRow from './ui/TransactionRow';
+import { Ionicons } from '@expo/vector-icons';
 import { withAlpha } from './ui/color';
 import { useTheme } from '../theme/useTheme';
 import { useT } from '../i18n/LanguageContext';
 import { useLanguage } from '../i18n/LanguageContext';
 import type { MoneyKind } from '../utils/formatMoney';
+import { formatDate } from '../utils/formatDate';
 import type { Radius, SemanticColors, Spacing } from '../theme/theme';
+
+/** 当日逐笔账单（点日期在下方展开的明细行）：字段与首页列表的 TransactionRow 一一对应
+ *  —— 明细行要求和首页列表行一模一样（验收退回第 3 条）。
+ *  ⚠ note 由调用方做和首页列表相同的回落：有备注/计划名时 = 该文本、无则 = 类别名，
+ *    同时 categoryName 传空串，这样副标题只剩账户（不把类别写第二遍）。 */
+export interface CalendarDayItem {
+  id: string;
+  /** 标题（备注；无备注时为类别名） */
+  note?: string;
+  /** 类别名（副标题第一段；与 note 同为类别名时传空串） */
+  categoryName: string;
+  categoryIcon?: React.ComponentProps<typeof Ionicons>['name'];
+  categoryColor?: string;
+  accountName?: string;
+  amount: number;
+  type: 'expense' | 'income';
+}
 
 export interface CalendarDayTotals {
   expense: number;
   income: number;
   /** 当日逐笔账单（点日期在下方展示明细用）；与账单列表同源，顺序=列表顺序 */
-  items?: { id: string; title: string; amount: number; type: 'expense' | 'income' }[];
+  items?: CalendarDayItem[];
 }
 
 type SegKey = 'expense' | 'income' | 'net';
@@ -42,6 +62,8 @@ interface Props {
   monthIncome: number;
   onPrevMonth: () => void;
   onNextMonth: () => void;
+  /** 点明细行 → 交给页面走「进入编辑」的现有入口（与首页列表行同一入口） */
+  onPressItem?: (id: string) => void;
 }
 
 const MONTH_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -54,7 +76,7 @@ const PILL_TINT_ALPHA = 0.12;
 // （1.5k / 1.2M / 3.4B），本文件的 compactAmount / scaledNum / bigEnUnit / totalsText
 // 一并删除 —— formatMoney 头注释里「迁移要单独派任务」指的就是本任务（仅限本文件）。
 
-export default function MonthCalendarCard({ year, month, days, monthExpense, monthIncome, onPrevMonth, onNextMonth }: Props) {
+export default function MonthCalendarCard({ year, month, days, monthExpense, monthIncome, onPrevMonth, onNextMonth, onPressItem }: Props) {
   const { semantic, spacing, radius } = useTheme();
   const t = useT();
   const { langMode } = useLanguage();
@@ -67,15 +89,12 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
   }, [year, month]);
   const selectedDay = selectedDate ? days.get(selectedDate) : undefined;
   const isEn = langMode === 'en';
-  // 明细区标头：9/25周五 形态（与账单列表日期标签同款；t 稳定引用，依赖带 langMode）
-  const selectedDateLabel = useMemo(() => {
-    if (!selectedDate) return '';
-    const d = new Date(Number(selectedDate.slice(0, 4)), Number(selectedDate.slice(5, 7)) - 1, Number(selectedDate.slice(8, 10)));
-    const wd = t('home.weekdays').split(',')[d.getDay()];
-    return isEn
-      ? `${d.getMonth() + 1}/${d.getDate()} ${wd}`
-      : `${d.getMonth() + 1}/${d.getDate()}周${wd}`;
-  }, [selectedDate, t, langMode, isEn]);
+  // 明细区标头：与首页列表的日期头同一写法（今天 / 昨天 / 10月8日 周四 · Today / Oct 8, Thu），
+  // 不再手拼 9/25周五 那种另一种写法（验收退回第 3 条）
+  const selectedDateLabel = useMemo(
+    () => (selectedDate ? formatDate(selectedDate, langMode) : ''),
+    [selectedDate, langMode]
+  );
 
   // 标题：中文 2026年9月 / 英文 September 2026（英文月份名单独维护，
   // report.monthLabel 的英文格式 %{m}/%{y} 不适合日历标题）
@@ -208,27 +227,17 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
                 // 读屏读出「已选中」（UI_RULES 第 8 节：选中态必须可读）
                 accessibilityState={isSelected ? { selected: true } : undefined}
               >
-                {/* 选中标记=数字外的圆环。⚠ 实现铁律：两层圆从挂载起就**常驻实底**，
-                    选中只「换色」——绝不出现 无填充 View 翻入 border/bg（Fabric Android
-                    重建背景 drawable 丢圆角 → 方形，真机 bug）或条件挂载新圆（新建
-                    drawable 同样丢圆角）。App 内所有正常圆环（色点选中环/头像徽章）均此构。
-                    三态同构：普通=外卡色隐形/内卡色；今天=外卡色/内 accent 底 + onAccent 字；
-                    选中非今天=外 accent/内卡色（3px accent 环）+ accentText 字；
-                    选中今天=外 textPrimary/内 accent 底 + onAccent 字（今天优先级高于选中） */}
-                <View
-                  style={[
-                    styles.dayRingOuter,
-                    isSelected && !isToday && styles.dayRingOuterSel,
-                    isSelected && isToday && styles.dayRingOuterSelToday,
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.dayRingInner,
-                      // 内圆常驻卡色（见样式注释）；今天翻 accent 实底
-                      isToday && styles.dayRingInnerToday,
-                    ]}
-                  >
+                {/* 选中标记 = 数字外的圆环。⚠ 实现铁律：三层圆从挂载起就**常驻实底**、几何不变，
+                    选中 / 今天只「换色」——绝不出现 无填充 View 翻入 border/bg（Fabric Android
+                    重建背景 drawable 丢圆角 → 方形，真机 bug）或条件挂载新圆（同样丢圆角）。
+                    三态（验收退回第 4 条，不得出现黑 / 白圈）：
+                      普通 = 外/中/内全卡色（隐形）
+                      今天 = 内 accent 实心圆 + onAccent 字
+                      选中 = 外 accent（2pt 描边圈）+ 内卡色 + accentText 字
+                      今天且选中 = accent 实心圆 + 2pt 间隙（中圈卡色）+ accent 外圈 */}
+                <View style={[styles.dayRingOuter, isSelected && styles.dayRingOuterSel]}>
+                  <View style={styles.dayRingMid}>
+                    <View style={[styles.dayRingInner, isToday && styles.dayRingInnerToday]}>
                     <AppText
                       variant="footnote"
                       // 今天 / 选中加粗走 AppText 的 weight 分流（不能写 style.fontWeight：
@@ -243,6 +252,7 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
                     >
                       {cell.day}
                     </AppText>
+                    </View>
                   </View>
                 </View>
                 {pill && (
@@ -269,14 +279,19 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
             {selectedDateLabel}
           </AppText>
           {selectedDay.items.map((it) => (
-            <View key={it.id} style={styles.dayDetailRow}>
-              <AppText variant="footnote" weight="600" style={styles.dayDetailTitle} numberOfLines={1}>
-                {it.title}
-              </AppText>
-              {/* 明细金额交给 MoneyText：不再 adjustsFontSizeToFit / 手拼正负号，
-                  放不下自动走紧凑格式 + 长按看全文（UI_RULES 第 5 节：金额永不截断） */}
-              <MoneyText value={it.amount} kind={it.type} variant="footnote" style={styles.dayDetailAmount} />
-            </View>
+            // 明细行 = 首页列表同款 TransactionRow（图标方块 + 标题=备注 + 副标题 类别 · 账户 +
+            // MoneyText）；点一下走页面的现有「进入编辑」入口（验收退回第 3 条）
+            <TransactionRow
+              key={it.id}
+              note={it.note}
+              categoryName={it.categoryName}
+              categoryIcon={it.categoryIcon}
+              categoryColor={it.categoryColor}
+              accountName={it.accountName}
+              amount={it.amount}
+              kind={it.type}
+              onPress={onPressItem ? () => onPressItem(it.id) : undefined}
+            />
           ))}
         </View>
       )}
@@ -291,25 +306,25 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
         </View>
       </View>
 
-      {/* 当月合计行：总额 / 收入 / 支出。金额走 MoneyText：完整金额放不下时自动
-          降级为紧凑格式（不再截断），长按可看完整金额（旧的自造缩写阶梯已删） */}
+      {/* 当月合计行：支出 · 收入 · 总额（与上面分段控件同顺序；数值与计算逻辑不变 —— 验收退回第 5 条）
+          金额走 MoneyText：完整金额放不下时自动降级紧凑格式，长按看完整金额 */}
       <View style={styles.totalsRow}>
         <View style={styles.totalsCol}>
-          <MoneyText value={netTotal} variant="headline" />
+          <MoneyText value={monthExpense} variant="headline" color={semantic.amountExpense} />
           <AppText variant="caption2" color={semantic.textSecondary} style={styles.totalsLabel}>
-            {t('home.calNet')}
+            {t('report.expense')}
           </AppText>
         </View>
         <View style={styles.totalsCol}>
-          <MoneyText value={monthIncome} kind="income" variant="headline" />
+          <MoneyText value={monthIncome} variant="headline" color={semantic.amountIncome} />
           <AppText variant="caption2" color={semantic.textSecondary} style={styles.totalsLabel}>
             {t('report.income')}
           </AppText>
         </View>
         <View style={styles.totalsCol}>
-          <MoneyText value={monthExpense} kind="expense" variant="headline" />
+          <MoneyText value={netTotal} variant="headline" />
           <AppText variant="caption2" color={semantic.textSecondary} style={styles.totalsLabel}>
-            {t('report.expense')}
+            {t('home.calNet')}
           </AppText>
         </View>
       </View>
@@ -364,32 +379,34 @@ function makeStyles(semantic: SemanticColors, spacing: Spacing, radius: Radius) 
     dayDetailTitle: { flex: 1, marginRight: spacing.sm },
     // 明细金额（MoneyText）：只留左边距；flexShrink 由 MoneyText 自带（金额永不被挤压）
     dayDetailAmount: { marginLeft: spacing.sm },
+    // 三层圆（外 32 / 中 28 / 内 24）：选中 → 外翻 accent（2pt 描边圈）；
+    // 今天 → 内翻 accent 实心圆；中圈恒卡色 = 今天+选中时天然形成「2pt 间隙」。
+    // ⚠ 三层从挂载起常驻实底、几何不变，只换色（见 JSX 注释的真机铁律）
     dayRingOuter: {
-      width: 30,
-      height: 30,
-      borderRadius: 15,
+      width: 32,
+      height: 32,
+      borderRadius: 16,
       alignItems: 'center',
       justifyContent: 'center',
-      // ⚠ 常驻实底 semantic.surface：与外层卡面同色=未选中时隐形。
-      // 三态只换色不换几何，绝不出现「无填充→border/bg」或「条件挂载新圆」
-      // （两种都会让 Fabric Android 重建背景 drawable 丢圆角画成方形）
       backgroundColor: semantic.surface,
     },
-    // 选中非今天：外圆翻 accent（内圆保持卡色）→ 3px accent 环 + accentText 字
     dayRingOuterSel: { backgroundColor: semantic.accent },
-    // 选中今天：外圆翻 textPrimary（内圆翻 accent 底）→ 环套实心 accent 圆 + onAccent 字
-    dayRingOuterSelToday: { backgroundColor: semantic.textPrimary },
+    dayRingMid: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: semantic.surface,
+    },
     dayRingInner: {
       width: 24,
       height: 24,
       borderRadius: 12,
       alignItems: 'center',
       justifyContent: 'center',
-      // ⚠ 常驻实底 semantic.surface：与外圆默认卡色一致=未选中隐形；选中非今天时
-      // 外圆翻 accent、内圆保持卡色 → 差出 3px accent 环。内圆若透明，accent 外圆整个透出
       backgroundColor: semantic.surface,
     },
-    // 今天：内圆 accent 实底（数字 onAccent 色见 dayTextToday）
     dayRingInnerToday: { backgroundColor: semantic.accent },
     // 日期数字（footnote 档，加粗由 JSX 的 weight 给）：四态颜色互斥——
     // 普通 / 周末 textPrimary、灰显 textTertiary、今天 onAccent、选中非今天 accentText

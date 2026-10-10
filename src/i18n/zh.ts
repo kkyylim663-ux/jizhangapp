@@ -423,6 +423,8 @@ export const zh = {
     budgetOverLabel: '超支',
     // T09：账单列表跨月分隔的月份标签（%{m} 取 date.months，中文如「10月」）
     monthSep: '%{y}年%{m}',
+    // T10：账本行的「已选中」读屏后缀（ListRow 不透传 selected，并进标签里）
+    selected: '已选中',
     // T09：无交易空状态的按钮
     addFirst: '记第一笔',
     // T12：日历卡 ‹ › 翻月按钮的读屏标签（图标按钮无文字，标签必须说明动作）
