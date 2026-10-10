@@ -45,9 +45,11 @@ import { AmountCalculatorKeypad } from '../components/AmountCalculatorKeypad';
 import { CursorAmountText } from '../components/CursorAmountText';
 import { ReceiptCameraModal } from '../components/ReceiptCameraModal';
 import AppText from '../components/ui/AppText';
+import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import Chip from '../components/ui/Chip';
+import IconButton from '../components/ui/IconButton';
 import ScreenHeader from '../components/ui/ScreenHeader';
 import { withAlpha } from '../components/ui/color';
 import PressableScale from '../components/PressableScale';
@@ -1214,54 +1216,59 @@ export default function AddTransactionScreen({ navigation, route }: any) {
             { paddingBottom: amountKeypadOpen ? 16 : tabClearance + 36 },
           ]}
         >
-          {/* FROM / TO 账户卡：对应参考图顶部的资金流向卡 */}
-          <View style={styles.transferRouteCard}>
-            <View style={styles.transferRouteTopRow}>
-              <Text style={styles.transferRouteHint}>{t('addTx.fundFlow')}</Text>
-              <View style={styles.transferStatusPill}>
-                <View style={styles.transferStatusDot} />
-                <Text style={styles.transferStatusText}>{t('addTx.instantRecord')}</Text>
-              </View>
+          {/* 资金流卡（T16 / A6）：转出账户 → 转入账户，中间方向 IconButton 互换两边；
+              点账户块开账户抽屉；账户名放不下换行、不截断；标签 ≥12pt */}
+          <Card style={styles.flowCard}>
+            <View style={styles.flowHeader}>
+              <AppText variant="caption" color={semantic.textSecondary}>
+                {t('addTx.fundFlow')}
+              </AppText>
+              <Badge label={t('addTx.instantRecord')} tone="success" dot />
             </View>
 
-            <View style={styles.transferRouteRow}>
-              <TouchableOpacity
-                style={styles.transferAccountBlock}
-                activeOpacity={0.72}
-                // 实测转账账户块的真实渲染宽度，同步给支出/收入页的账户选择框——
-                // 两页切换时框格宽度像素级一致（手算公式会被描边/字渲染等细节带偏）
-                onLayout={(e) => {
-                  const w = e.nativeEvent.layout.width;
-                  setTransferBlockW((prev) => (Math.abs(prev - w) > 0.5 ? w : prev));
-                }}
+            <View style={styles.flowRow}>
+              {/* 转出账户块 */}
+              <PressableScale
+                style={styles.flowBlock}
+                activeScale={0.98}
+                hitSlop={0}
                 onPress={() => {
                   setAccountPickerRole('from');
                   setAccountPickerOpen(true);
                 }}
+                accessibilityRole="button"
+                accessibilityLabel={`${t('addTx.outAccount')} ${fromAsset?.name ?? t('common.notSelected')}`}
               >
-                <Text style={styles.transferAccountCaption}>{t('addTx.outAccount')}</Text>
-                <View style={styles.transferAccountMain}>
-                  <View style={[styles.transferAccountIcon, { backgroundColor: (fromAsset?.color ?? colors.link) + '20' }]}>
-                    <Ionicons name={(fromAsset?.icon as IconName) ?? 'wallet-outline'} size={20} color={fromAsset?.color ?? colors.link} />
-                  </View>
-                  <View style={styles.transferAccountInfo}>
-                    {/* 与 Hero 同策略：窄框英文按词两行（可用宽 = 块实测宽 - padding 16 - 图标 40 - 名字间距 10 - 描边 2） */}
-                    <Text
-                      style={styles.transferAccountName}
-                      numberOfLines={2}
-                      textBreakStrategy={Platform.OS === 'android' ? 'simple' : undefined}
-                    >
-                      {fromAsset?.name ?? twoLineLabel(t('common.notSelected'), transferBlockW - 68, 100)}
-                    </Text>
-                  </View>
+                <View style={styles.flowBlockLabelRow}>
+                  <AppText variant="caption" color={semantic.textSecondary}>
+                    {t('addTx.outAccount')}
+                  </AppText>
+                  <Ionicons name="chevron-down" size={16} color={semantic.textTertiary} />
                 </View>
-                <Ionicons name="chevron-down" size={12} color={colors.textTertiary} style={styles.transferAccountChevron} />
-              </TouchableOpacity>
+                <View style={styles.flowBlockMain}>
+                  <View
+                    style={[
+                      styles.flowIconSquare,
+                      { backgroundColor: withAlpha(fromAsset?.color ?? semantic.accent, 0.12) },
+                    ]}
+                  >
+                    <Ionicons
+                      name={(fromAsset?.icon as IconName) ?? 'wallet-outline'}
+                      size={20}
+                      color={fromAsset?.color ?? semantic.accent}
+                    />
+                  </View>
+                  <AppText variant="headline" numberOfLines={2} style={styles.flowBlockName}>
+                    {fromAsset?.name ?? t('common.notSelected')}
+                  </AppText>
+                </View>
+              </PressableScale>
 
-              {/* 中间按钮：点击互换转出/转入两个账户 */}
-              <TouchableOpacity
-                style={styles.transferRouteArrow}
-                activeOpacity={0.7}
+              {/* 中间方向按钮：互换转出/转入两个账户（原逻辑不变） */}
+              <IconButton
+                icon="swap-horizontal"
+                variant="soft"
+                accessibilityLabel={t('addTx.swapAccounts')}
                 onPress={() => {
                   hapticLight();
                   // 互换是显式操作，之后转出账户不再自动跟随默认账户变化
@@ -1269,169 +1276,220 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                   setFromAssetId(toAssetId);
                   setToAssetId(fromAssetId);
                 }}
-              >
-                <Ionicons name="swap-horizontal" size={18} color={colors.link} />
-              </TouchableOpacity>
+                style={styles.flowSwap}
+              />
 
-              <TouchableOpacity
-                style={[styles.transferAccountBlock, styles.transferAccountBlockRight]}
-                activeOpacity={0.72}
+              {/* 转入账户块 */}
+              <PressableScale
+                style={styles.flowBlock}
+                activeScale={0.98}
+                hitSlop={0}
                 onPress={() => {
                   setAccountPickerRole('to');
                   setAccountPickerOpen(true);
                 }}
+                accessibilityRole="button"
+                accessibilityLabel={`${t('addTx.inAccount')} ${toAsset?.name ?? t('common.notSelected')}`}
               >
-                <Text style={[styles.transferAccountCaption, styles.transferAccountCaptionRight]}>{t('addTx.inAccount')}</Text>
-                <View style={styles.transferAccountMain}>
-                  <View style={styles.transferAccountInfoRight}>
-                    <Text
-                      style={styles.transferAccountName}
-                      numberOfLines={2}
-                      textBreakStrategy={Platform.OS === 'android' ? 'simple' : undefined}
-                    >
-                      {toAsset?.name ?? twoLineLabel(t('common.notSelected'), transferBlockW - 68, 100)}
-                    </Text>
-                  </View>
-                  <View style={[styles.transferAccountIcon, { backgroundColor: (toAsset?.color ?? colors.link) + '20' }]}>
-                    <Ionicons name={(toAsset?.icon as IconName) ?? 'wallet-outline'} size={20} color={toAsset?.color ?? colors.link} />
-                  </View>
+                <View style={styles.flowBlockLabelRow}>
+                  <AppText variant="caption" color={semantic.textSecondary}>
+                    {t('addTx.inAccount')}
+                  </AppText>
+                  <Ionicons name="chevron-down" size={16} color={semantic.textTertiary} />
                 </View>
-                <Ionicons name="chevron-down" size={12} color={colors.textTertiary} style={styles.transferAccountChevronRight} />
-              </TouchableOpacity>
+                <View style={styles.flowBlockMain}>
+                  <View
+                    style={[
+                      styles.flowIconSquare,
+                      { backgroundColor: withAlpha(toAsset?.color ?? semantic.accent, 0.12) },
+                    ]}
+                  >
+                    <Ionicons
+                      name={(toAsset?.icon as IconName) ?? 'wallet-outline'}
+                      size={20}
+                      color={toAsset?.color ?? semantic.accent}
+                    />
+                  </View>
+                  <AppText variant="headline" numberOfLines={2} style={styles.flowBlockName}>
+                    {toAsset?.name ?? t('common.notSelected')}
+                  </AppText>
+                </View>
+              </PressableScale>
             </View>
+          </Card>
 
-          </View>
-
-          {/* 转账和兑换/跨币种转账统一用同一套网格排版：
+          {/* 转账和兑换/跨币种转账统一用同一套网格排版（T16 令牌化）：
               第一行左边永远是可编辑的"转出金额"，右边是根据 converted 算出来的只读金额
               （兑换叫"到账"、普通转账叫"转入金额"，本质是同一个数——普通转账走 !showRateField
               时 converted 就是 amount 本身，天然 1:1，不用额外分支处理数值）。
-              第二行：有汇率就分左右两格（汇率/手续费）；普通转账没有汇率，手续费独占一整行。 */}
+              第二行：手续费独占一整行（有汇率时汇率在中间格）；金额等宽数字、标签 ≥12pt；
+              手续费空态 = 灰色 0.00 占位（原来写"选填"） */}
           <View
-            style={styles.exchangeRateCard}
             onLayout={(e) => {
               fieldY.current['cardTop'] = e.nativeEvent.layout.y;
             }}
           >
-            <Text style={styles.exchangeRateTitle}>{showRateField ? t('addTx.exchangeRate') : t('addTx.transfer')}</Text>
+            <Card style={styles.rateCard}>
+              <AppText variant="subhead" weight="600" align="center" style={styles.rateCardTitle}>
+                {showRateField ? t('addTx.exchangeRate') : t('addTx.transfer')}
+              </AppText>
 
-            {/* 第一行：左边转出金额输入框，右边到账/转入金额（只读展示） */}
-            <View style={styles.rateGridRow}>
-              <TouchableOpacity
-                style={styles.rateGridCellLeft}
-                activeOpacity={0.8}
-                onPress={() => openTransferCalculator('amount')}
+              {/* 第一行：左边转出金额输入框，右边到账/转入金额（只读展示） */}
+              <View style={styles.rateGridRow}>
+                <PressableScale
+                  style={styles.rateGridCellLeft}
+                  activeScale={0.98}
+                  hitSlop={0}
+                  onPress={() => openTransferCalculator('amount')}
+                  onLayout={(e) => {
+                    const cardY = fieldY.current['cardTop'] ?? 0;
+                    fieldY.current['amount'] = cardY + e.nativeEvent.layout.y;
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('addTx.outAmount')}
+                >
+                  <View style={styles.rateGridLabelRow}>
+                    <AppText variant="caption" color={semantic.textSecondary}>
+                      {t('addTx.outAmount')}
+                    </AppText>
+                    {/* 后置货币提示贴在"转出金额"标签右侧：选了转出账户才显示，不与金额数字碰撞 */}
+                    {fromAsset && (
+                      <AppText variant="footnote" color={semantic.textTertiary} style={styles.rateGridLabelSuffix}>
+                        ({fromAsset.currency})
+                      </AppText>
+                    )}
+                  </View>
+                  <View style={styles.rateGridValueRow}>
+                    <CursorAmountText
+                      display={calculatorTarget === 'amount' && amountKeypadOpen ? amountExpr.displayValue : amount || '0.00'}
+                      enabled={calculatorTarget === 'amount' && amountKeypadOpen}
+                      cursorFromEnd={amountCursor}
+                      onCursorChange={setAmountCursor}
+                      style={styles.rateGridValue}
+                      cursorStyle={styles.rateCursor}
+                    />
+                  </View>
+                </PressableScale>
+
+                {/* 分隔竖线：兑换/普通转账都渲染——转账没有汇率时这条线就是转出与转入的分界；
+                    大金额换行时线跟随格子布局，两种货币不会撞在一起 */}
+                <View style={styles.rateGridDividerVertical} />
+
+                {showRateField ? (
+                  <>
+                    <PressableScale
+                      style={styles.rateCenterCell}
+                      activeScale={0.96}
+                      hitSlop={0}
+                      onPress={() => openTransferCalculator('rate')}
+                      onLayout={(e) => {
+                        const cardY = fieldY.current['cardTop'] ?? 0;
+                        fieldY.current['rate'] = cardY + e.nativeEvent.layout.y;
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel={t('addTx.rate')}
+                    >
+                      <AppText variant="caption" color={semantic.textSecondary} style={styles.rateCenterLabel}>
+                        {t('addTx.rate')}
+                      </AppText>
+                      <View style={styles.rateGridValueRow}>
+                        <Text style={styles.rateFieldValue}>×</Text>
+                        <CursorAmountText
+                          display={calculatorTarget === 'rate' && amountKeypadOpen ? rateExpr.displayValue : exchangeRate || '0.00'}
+                          enabled={calculatorTarget === 'rate' && amountKeypadOpen}
+                          cursorFromEnd={rateCursor}
+                          onCursorChange={setRateCursor}
+                          style={styles.rateFieldValue}
+                          cursorStyle={styles.rateCursor}
+                        />
+                        <Ionicons name="calculator-outline" size={16} color={semantic.accentText} style={styles.rateGridCalcIcon} />
+                      </View>
+                    </PressableScale>
+                    <View style={styles.rateGridDividerVertical} />
+                  </>
+                ) : null}
+
+                <View style={styles.rateGridCellRight}>
+                  <View style={styles.rateGridLabelRow}>
+                    <AppText variant="caption" color={semantic.textSecondary}>
+                      {showRateField ? t('addTx.receivedLabel') : t('addTx.inAmountLabel')}
+                    </AppText>
+                    {/* 后置货币提示贴在标签右侧：选了转入账户才显示，不与金额数字碰撞 */}
+                    {toAsset && (
+                      <AppText variant="footnote" color={semantic.textTertiary} style={styles.rateGridLabelSuffix}>
+                        ({toAsset.currency})
+                      </AppText>
+                    )}
+                  </View>
+                  <View style={styles.rateGridValueRow}>
+                    <Text
+                      style={[
+                        styles.rateGridValue,
+                        styles.rateGridValueTo,
+                        { fontVariant: ['tabular-nums'] },
+                      ]}
+                    >
+                      {converted}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.exchangeRateDivider} />
+
+              {/* 第二行：手续费独占一整行——兑换和普通转账统一用同一套整行布局，大小完全一致 */}
+              <View
+                style={styles.transferMetaNoteRow}
                 onLayout={(e) => {
                   const cardY = fieldY.current['cardTop'] ?? 0;
-                  fieldY.current['amount'] = cardY + e.nativeEvent.layout.y;
+                  fieldY.current['fee'] = cardY + e.nativeEvent.layout.y;
                 }}
               >
-                <View style={styles.rateGridLabelRow}>
-                  <Text style={styles.rateGridLabel}>{t('addTx.outAmount')}</Text>
-                  {/* 后置货币提示贴在"转出金额"标签右侧：选了转出账户才显示，不与金额数字碰撞 */}
-                  {fromAsset && <Text style={styles.rateGridLabelSuffix}>({fromAsset.currency})</Text>}
+                <View style={styles.transferMetaLeft}>
+                  <Ionicons name="receipt-outline" size={16} color={semantic.textSecondary} />
+                  <AppText variant="caption" color={semantic.textSecondary} style={styles.transferMetaLabel}>
+                    {t('addTx.fee')}
+                  </AppText>
                 </View>
-                <View style={styles.rateGridValueRow}>
+                <PressableScale
+                  style={styles.transferFeeValueButton}
+                  activeScale={0.97}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  onPress={() => openTransferCalculator('fee')}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('addTx.fee')}
+                >
                   <CursorAmountText
-                    display={calculatorTarget === 'amount' && amountKeypadOpen ? amountExpr.displayValue : amount || '0.00'}
-                    enabled={calculatorTarget === 'amount' && amountKeypadOpen}
-                    cursorFromEnd={amountCursor}
-                    onCursorChange={setAmountCursor}
-                    style={styles.rateGridValue}
-                    cursorStyle={styles.rateCursor}
+                    display={
+                      calculatorTarget === 'fee' && amountKeypadOpen
+                        ? feeExpr.displayValue
+                        : feeNum > 0
+                          ? `${fromSymbol}${feeNum.toFixed(2)}`
+                          : '0.00'
+                    }
+                    enabled={calculatorTarget === 'fee' && amountKeypadOpen}
+                    cursorFromEnd={feeCursor}
+                    onCursorChange={setFeeCursor}
+                    style={[styles.transferFeeValue, ...(feeNum > 0 ? [styles.transferFeeValueActive] : [])]}
+                    cursorStyle={styles.feeCursor}
                   />
-                </View>
-              </TouchableOpacity>
-
-              {/* 分隔竖线：兑换/普通转账都渲染——转账没有汇率时这条线就是转出与转入的分界；
-                  大金额换行时线跟随格子布局，两种货币不会撞在一起 */}
-              <View style={styles.rateGridDividerVertical} />
-
-              {showRateField ? (
-                <>
-                  <TouchableOpacity
-                    style={styles.rateCenterCell}
-                    activeOpacity={0.75}
-                    onPress={() => openTransferCalculator('rate')}
-                    onLayout={(e) => {
-                      const cardY = fieldY.current['cardTop'] ?? 0;
-                      fieldY.current['rate'] = cardY + e.nativeEvent.layout.y;
-                    }}
-                  >
-                    <Text style={styles.rateCenterLabel}>{t('addTx.rate')}</Text>
-                    <View style={styles.rateGridValueRow}>
-                      <Text style={styles.rateFieldValue}>×</Text>
-                      <CursorAmountText
-                        display={calculatorTarget === 'rate' && amountKeypadOpen ? rateExpr.displayValue : exchangeRate || '0.00'}
-                        enabled={calculatorTarget === 'rate' && amountKeypadOpen}
-                        cursorFromEnd={rateCursor}
-                        onCursorChange={setRateCursor}
-                        style={styles.rateFieldValue}
-                        cursorStyle={styles.rateCursor}
-                      />
-                      <Ionicons name="calculator-outline" size={12} color={colors.link} style={styles.rateGridCalcIcon} />
-                    </View>
-                  </TouchableOpacity>
-                  <View style={styles.rateGridDividerVertical} />
-                </>
-              ) : null}
-
-              <View style={styles.rateGridCellRight}>
-                <View style={styles.rateGridLabelRow}>
-                  <Text style={styles.rateGridLabel}>{showRateField ? t('addTx.receivedLabel') : t('addTx.inAmountLabel')}</Text>
-                  {/* 后置货币提示贴在标签右侧：选了转入账户才显示，不与金额数字碰撞 */}
-                  {toAsset && <Text style={styles.rateGridLabelSuffix}>({toAsset.currency})</Text>}
-                </View>
-                <View style={styles.rateGridValueRow}>
-                  <Text style={[styles.rateGridValue, showRateField ? styles.rateGridValueTo : styles.rateGridValueTransfer]}>{converted}</Text>
-                </View>
+                  <Ionicons name="calculator-outline" size={16} color={semantic.textTertiary} />
+                </PressableScale>
               </View>
-            </View>
 
-            <View style={styles.exchangeRateDivider} />
-
-            {/* 第二行：手续费独占一整行——兑换和普通转账统一用同一套整行布局，大小完全一致 */}
-            <View
-              style={styles.transferMetaNoteRow}
-              onLayout={(e) => {
-                const cardY = fieldY.current['cardTop'] ?? 0;
-                fieldY.current['fee'] = cardY + e.nativeEvent.layout.y;
-              }}
-            >
-              <View style={styles.transferMetaLeft}>
-                <Ionicons name="receipt-outline" size={16} color={colors.textSecondary} />
-                <Text style={styles.transferMetaLabel}>{t('addTx.fee')}</Text>
-              </View>
-              <TouchableOpacity
-                style={styles.transferFeeValueButton}
-                activeOpacity={0.75}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                onPress={() => openTransferCalculator('fee')}
-              >
-                <CursorAmountText
-                  display={calculatorTarget === 'fee' && amountKeypadOpen ? feeExpr.displayValue : (feeNum > 0 ? `${fromSymbol}${feeNum.toFixed(2)}` : t('common.optional'))}
-                  enabled={calculatorTarget === 'fee' && amountKeypadOpen}
-                  cursorFromEnd={feeCursor}
-                  onCursorChange={setFeeCursor}
-                  style={[styles.transferFeeValue, ...(feeNum > 0 ? [styles.transferFeeValueActive] : [])]}
-                  cursorStyle={styles.feeCursor}
-                />
-                <Ionicons name="calculator-outline" size={15} color={colors.textTertiary} />
-              </TouchableOpacity>
-            </View>
-
-            {/* 填了手续费就提示：手续费先从转出金额里扣掉——兑换的到账是"扣完再按汇率换算"，
-                普通转账则直接按扣完的金额到账 */}
-            {liveFeeNum > 0 && (
-              <View style={styles.exchangeFeeHintRow}>
-                <Ionicons name="information-circle-outline" size={12} color={colors.textTertiary} />
-                <Text style={styles.exchangeFeeHintText} numberOfLines={2}>
-                  {showRateField
-                    ? t('addTx.feeDeductExchange', { fee: `${fromSymbol}${liveFeeNum.toFixed(2)}`, net: `${fromSymbol}${netAmount.toFixed(2)}` })
-                    : t('addTx.feeDeductTransfer', { fee: `${fromSymbol}${liveFeeNum.toFixed(2)}`, net: `${toSymbol}${netAmount.toFixed(2)}` })}
-                </Text>
-              </View>
-            )}
+              {/* 填了手续费就提示：手续费先从转出金额里扣掉——兑换的到账是"扣完再按汇率换算"，
+                  普通转账则直接按扣完的金额到账 */}
+              {liveFeeNum > 0 && (
+                <View style={styles.exchangeFeeHintRow}>
+                  <Ionicons name="information-circle-outline" size={16} color={semantic.textSecondary} />
+                  <AppText variant="caption" color={semantic.textSecondary} numberOfLines={2} style={styles.exchangeFeeHintText}>
+                    {showRateField
+                      ? t('addTx.feeDeductExchange', { fee: `${fromSymbol}${liveFeeNum.toFixed(2)}`, net: `${fromSymbol}${netAmount.toFixed(2)}` })
+                      : t('addTx.feeDeductTransfer', { fee: `${fromSymbol}${liveFeeNum.toFixed(2)}`, net: `${toSymbol}${netAmount.toFixed(2)}` })}
+                  </AppText>
+                </View>
+              )}
+            </Card>
           </View>
         </ScrollView>
         </View>
@@ -2495,75 +2553,84 @@ function makeStyles(colors: ThemeColors, isDark: boolean, semantic: SemanticColo
   },
   // 矮屏：整行再收 4（标签行不占多余高度，给类别格留位置）
 
-  // ---------- 转账/兑换新版整页排版 ----------
-  exchangePageContent: { paddingHorizontal: 18, paddingBottom: 26 },
+  // ---------- 转账/兑换（T16 / A6）：资金流卡 + 汇率卡，全部令牌化 ----------
+  exchangePageContent: { paddingHorizontal: layout.page, paddingBottom: 26 },
 
-  transferRouteCard: {
-    backgroundColor: colors.bg,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: colors.dividerHair,
-    padding: 5,
+  // 资金流卡：普通卡 + 两张账户块 + 中间方向 IconButton
+  flowCard: { marginBottom: spacing.md },
+  flowHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
   },
-  transferRouteTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  transferRouteHint: { fontSize: 11, fontWeight: '700', color: colors.textSecondary, letterSpacing: 0.3 },
-  transferStatusPill: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 5, borderRadius: 12, backgroundColor: colors.card },
-  transferStatusDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.income, marginRight: 5 },
-  transferStatusText: { fontSize: 9, fontWeight: '700', color: colors.textSecondary },
-  transferRouteRow: { flexDirection: 'row', alignItems: 'center' },
-  transferAccountBlock: { flex: 1, minWidth: 0, minHeight: 46, padding: 8, borderRadius: 15, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.dividerHair },
-  transferAccountBlockRight: { alignItems: 'flex-end' },
-  transferAccountCaption: { fontSize: 10.5, fontWeight: '700', color: colors.textTertiary, letterSpacing: 0.8, marginBottom: 6 },
-  transferAccountCaptionRight: { textAlign: 'right' },
-  transferAccountMain: { flexDirection: 'row', alignItems: 'center' },
-  transferAccountIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  transferAccountInfo: { marginLeft: 10, flex: 1, minWidth: 0 },
-  transferAccountInfoRight: { marginRight: 10, flex: 1, minWidth: 0, alignItems: 'flex-end' },
-  transferAccountName: { fontSize: 13, fontWeight: '700', color: colors.textPrimary },
-  transferAccountChevron: { position: 'absolute', top: 1, right: 1 },
-  transferAccountChevronRight: { position: 'absolute', top: 1, left: 1 },
-  transferRouteArrow: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.dividerHair, alignItems: 'center', justifyContent: 'center', marginHorizontal: 8 },
+  flowRow: { flexDirection: 'row', alignItems: 'center' },
+  // 账户块：flex 均分；描边 + bg 底撑起"可选"的观感（与抽屉搜索框同一档）
+  flowBlock: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 56,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: semantic.bg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: semantic.hairline,
+  },
+  flowBlockLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.xs,
+  },
+  flowBlockMain: { flexDirection: 'row', alignItems: 'center', columnGap: spacing.sm },
+  // 图标方块：全 App 同一种 40 方块（类别/账户色 12% 底 + 100% 图标）
+  flowIconSquare: { width: 40, height: 40, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
+  // 账户名：最多 2 行、放不下换行不截断（flexShrink 让长名在块内折行）
+  flowBlockName: { flexShrink: 1 },
+  flowSwap: { marginHorizontal: spacing.sm },
 
-  // 合并卡：金额、汇率、手续费纵向三行叠在同一张卡里，用 padding 撑开呼吸感
-  exchangeRateCard: { marginTop: 6, backgroundColor: colors.bg, borderRadius: 18, borderWidth: 1, borderColor: colors.dividerHair, paddingHorizontal: 13, paddingVertical: 12 },
-  exchangeRateTitle: { fontSize: 15, fontWeight: '800', color: colors.textPrimary, textAlign: 'center' },
-
-  // 两行网格：每行左右各一格，中间一条竖线分隔，行与行之间用 exchangeRateDivider 横线分隔
-  // flexWrap：转出/转入任意一侧出现大金额放不下时，整格自动换到第二行（与兑换同样的行为），两种货币不撞
+  rateCard: { paddingVertical: spacing.md },
+  rateCardTitle: { marginBottom: spacing.sm },
   rateGridRow: { flexDirection: 'row', alignItems: 'flex-start', flexWrap: 'wrap' },
-  rateGridDividerVertical: { width: 1, backgroundColor: colors.dividerHair, marginHorizontal: 12, alignSelf: 'stretch' },
-  rateGridCellLeft: { flex: 1, alignItems: 'flex-start', paddingVertical: 6 },
-  rateGridCellRight: { flex: 1, alignItems: 'flex-end', paddingVertical: 6 },
-  rateGridLabel: { fontSize: 12, fontWeight: '700', color: colors.textSecondary, marginBottom: 6 },
-  rateGridValueRow: { flexDirection: 'row', alignItems: 'baseline' },
-  // 标签行：转出/转入标签与后置货币提示同排，右格整体靠右
-  rateGridLabelRow: { flexDirection: 'row', alignItems: 'center' },
-  // 后置货币提示「(MYR)」：小号淡色，贴在标签文字右侧（不与金额数字碰撞）
-  rateGridLabelSuffix: { fontSize: 11, fontWeight: '700', color: colors.textTertiary, marginLeft: 4 },
-  rateGridValue: { fontSize: 18, fontWeight: '800', color: colors.textPrimary },
-  // 到账金额用 income 色区分，一眼跟左边"要付出的钱"分开
-  rateGridValueTo: { color: colors.income },
-  // 普通转账的"转入金额"单独一个颜色，跟兑换的"到账"绿色区分开——想换颜色改这一行就行
-  rateGridValueTransfer: { color: colors.income },
-  // 汇率居中格：夹在转出金额和到账之间，小标签+汇率值纵向堆叠、整体水平垂直都居中
-  rateCenterCell: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10, paddingVertical: 6 },
-  rateCenterLabel: { fontSize: 11, fontWeight: '700', color: colors.textTertiary, marginBottom: 4 },
-
-  // 手续费扣费提示：小字说明"到账是扣完手续费后的金额换算出来的"
-  exchangeFeeHintRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8, paddingHorizontal: 2 },
-  exchangeFeeHintText: { flex: 1, fontSize: 10, color: colors.textTertiary, marginLeft: 4 },
-  rateGridCalcIcon: { marginLeft: 4 },
-  // 汇率数值：颜色用 link 强调色，保持"这里能点"的视觉权重
-  rateFieldValue: { fontSize: 18, fontWeight: '800', color: colors.link },
-  exchangeRateDivider: { height: 1, backgroundColor: colors.dividerHair, marginTop: 14 },
-
-
+  rateGridDividerVertical: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: semantic.hairline,
+    marginHorizontal: spacing.md,
+    alignSelf: 'stretch',
+  },
+  rateGridCellLeft: { flex: 1, alignItems: 'flex-start', paddingVertical: spacing.xs },
+  rateGridCellRight: { flex: 1, alignItems: 'flex-end', paddingVertical: spacing.xs },
+  rateGridLabelRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xs },
+  // 后置货币提示「(MYR)」：footnote（13pt，textTertiary 的下限）贴在标签右侧
+  rateGridLabelSuffix: { marginLeft: spacing.xs },
+  // 金额：等宽数字（tabular-nums）+ 令牌字重 700；到账/转入用收入绿区分"要付出的钱"
+  rateGridValue: { fontSize: 18, fontWeight: '700', fontVariant: ['tabular-nums'], color: semantic.textPrimary },
+  rateGridValueTo: { color: semantic.amountIncome },
+  rateGridCalcIcon: { marginLeft: spacing.xs },
+  rateCenterCell: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
+  rateCenterLabel: { marginBottom: spacing.xs },
+  // 汇率数值：accentText 强调色，保持"这里能点"的视觉权重
+  rateFieldValue: { fontSize: 18, fontWeight: '700', fontVariant: ['tabular-nums'], color: semantic.accentText },
+  exchangeRateDivider: { height: StyleSheet.hairlineWidth, backgroundColor: semantic.hairline, marginTop: spacing.md },
+  transferMetaNoteRow: { minHeight: 44, flexDirection: 'row', alignItems: 'center' },
   transferMetaLeft: { flexDirection: 'row', alignItems: 'center' },
-  transferMetaLabel: { fontSize: 12, fontWeight: '700', color: colors.textSecondary, marginLeft: 8 },
-  transferMetaNoteRow: { minHeight: 40, flexDirection: 'row', alignItems: 'center' },
-  transferFeeValueButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 8, paddingVertical: 10, borderRadius: 10, backgroundColor: colors.card },
-  transferFeeValue: { fontSize: 18, fontWeight: '800', color: colors.textTertiary, marginRight: 6 },
-  transferFeeValueActive: { color: colors.textPrimary },
+  transferMetaLabel: { marginLeft: spacing.sm },
+  transferFeeValueButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    columnGap: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: semantic.bg,
+  },
+  // 空态 = 灰色占位（原来写"选填"）：与汇率格 0.00 的惯例一致
+  transferFeeValue: { fontSize: 18, fontWeight: '700', fontVariant: ['tabular-nums'], color: semantic.textTertiary },
+  transferFeeValueActive: { color: semantic.textPrimary },
+  exchangeFeeHintRow: { flexDirection: 'row', alignItems: 'flex-start', columnGap: spacing.xs, marginTop: spacing.sm, paddingHorizontal: spacing.xs },
+  exchangeFeeHintText: { flex: 1 },
 
   });
 }
