@@ -476,6 +476,8 @@ export const en = {
     typeEwallet: 'E-Wallet',
     typeInvestment: 'Investment',
     typeOther: 'Other',
+    // Default marker in the account-row subtitle ("Bank Card · Default")
+    defaultTag: 'Default',
     deleteAssetTitle: 'Delete asset "%{name}"?',
     deleteAssetMsg: 'Related transfer records are kept, but the asset balance can no longer be viewed',
     liabilityLabel: 'Liabilities (credit card debt)',
@@ -520,16 +522,23 @@ export const en = {
     calculator: 'Calculator',
     calculatorSub: 'Loan, compound interest and other finance tools',
     subscribe: 'Subscription',
+    // Badge on the subscription row (feature not available yet; the row is not pressable)
     subscribeSub: 'Coming soon',
+    // Section title for the biometric lock + secondary PIN rows
+    security: 'Security',
     language: 'Language',
     languageSwitchHint: 'Tap a language to switch instantly',
     languageHint: 'Choose the display language',
     appearance: 'Appearance',
     darkMode: 'Dark Mode',
     darkModeHint: 'Choose how the app looks',
+    // General settings that are not about appearance (language etc.)
+    general: 'General',
     support: 'Support',
     help: 'Help & Feedback',
     about: 'About',
+    // Footer version line (Chinese reads「版本 1.0.0」)
+    version: 'Version %{version}',
   },
   theme: {
     system: 'System default',
@@ -685,7 +694,7 @@ export const en = {
     save: 'Save',
     noCategory: 'Other',
     todayDue: 'Due today',
-    dueInDays: 'in {n} days',
+    dueInDays: 'in %{n} days',
     overdue: '{n} days overdue',
     incomeLabel: 'Income',
     expenseLabel: 'Expense',

@@ -478,6 +478,8 @@ export const zh = {
     typeEwallet: '电子钱包',
     typeInvestment: '投资',
     typeOther: '其他',
+    // 账户行副行里的默认标记（「银行卡 · 默认」）
+    defaultTag: '默认',
     deleteAssetTitle: '删除资产"%{name}"？',
     deleteAssetMsg: '与该资产相关的转账记录仍会保留，但资产余额将无法再查看',
     liabilityLabel: '负债（信用卡欠款）',
@@ -514,7 +516,8 @@ export const zh = {
     create: '创建账本',
   },
   profile: {
-    title: '个人设置',
+    // Tab 根页大标题（与 Tab 名「设置」一致；改成根页后去掉返回键，不再叫「个人设置」）
+    title: '设置',
     myAccount: '我的账户',
     myAccountSub: '查看与编辑个人资料',
     aiZone: 'AI专区',
@@ -522,16 +525,23 @@ export const zh = {
     calculator: '计算器',
     calculatorSub: '贷款、复利等理财计算工具',
     subscribe: '订阅',
-    subscribeSub: '敬请期待',
+    // 订阅行右侧徽章（功能未开放，行不可点）
+    subscribeSub: '即将推出',
+    // 生物识别锁 + 二级密码所在分组标题
+    security: '安全',
     language: '语言',
     languageSwitchHint: '点一下语言立即切换',
     languageHint: '选择应用的显示语言',
     appearance: '应用外观',
     darkMode: '深色模式',
     darkModeHint: '选择应用的显示方式',
+    // 语言等「与外观无关」的通用设置
+    general: '通用',
     support: '支持',
     help: '帮助与反馈',
     about: '关于应用',
+    // 页脚版本号（中文按用户定版写「版本 1.0.0」）
+    version: '版本 %{version}',
   },
   theme: {
     system: '跟随系统',
@@ -688,7 +698,7 @@ export const zh = {
     save: '保存',
     noCategory: '其他',
     todayDue: '今天到期',
-    dueInDays: '{n} 天后',
+    dueInDays: '还有 %{n} 天',
     overdue: '逾期 {n} 天',
     incomeLabel: '收入',
     expenseLabel: '支出',

@@ -27,7 +27,7 @@ import { useDialog } from '../components/AppDialog';
 import PressableScale from '../components/PressableScale';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../theme/useTheme';
-import { ThemeColors } from '../theme/theme';
+import type { SemanticColors, ThemeColors } from '../theme/theme';
 import { useT } from '../i18n/LanguageContext';
 import DateRangePickerSheet from '../components/DateRangePickerSheet';
 import { AmountCalculatorKeypad } from '../components/AmountCalculatorKeypad';
@@ -39,6 +39,10 @@ import { getAssetDisplayBalance } from '../utils/creditCard';
 import { getCategoryLabel } from '../i18n/categories';
 import { hapticSuccess, hapticWarning } from '../utils/haptics';
 import { ROUTES } from '../navigation/routes';
+import { GlassView, HeroGradient } from '../components/ui';
+
+/** 页面顶部品牌渐变高度（本页没有定稿图，按 V2 同一套元素取 360，矮屏 ×0.9） */
+const HERO_HEIGHT = 360;
 
 function fmt(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -46,13 +50,15 @@ function fmt(d: Date): string {
 
 export default function PlanFormScreen({ route, navigation }: any) {
   const { addPaymentPlan, updatePaymentPlan, deletePaymentPlan, assets, paymentPlans, activeLedgerId, categories, currency, getAssetBalance } = useApp();
-  const { colors } = useTheme();
+  const { colors, semantic } = useTheme();
   const tr = useT();
   const dialog = useDialog(); // 主题化弹窗（替代系统 Alert）
   const insets = useSafeAreaInsets();
+  // 渐变高度：844 高屏 360，矮屏 ×0.9（UI V2 第 1 节）
+  const heroHeight = Math.round(HERO_HEIGHT * (Dimensions.get('window').height - insets.top < 700 ? 0.9 : 1));
   const isFocused = useIsFocused();
   const setTabBarForceHidden = useTabBarForceHide();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const styles = useMemo(() => makeStyles(colors, semantic), [colors, semantic]);
 
   const editPlan = route?.params?.planId ? paymentPlans.find((p) => p.id === route.params.planId) : undefined;
   const isEdit = !!editPlan;
@@ -331,19 +337,25 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
   const amountCurrency = selectedAsset?.currency ?? currency;
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      {/* 头部:圆框返回键 + 标题居中 + (编辑模式)删除 */}
-      <View style={styles.header}>
-        <PressableScale onPress={() => navigation.goBack()} style={styles.backBtn} activeScale={0.92}>
-          <Ionicons name="chevron-back" size={22} color={colors.textPrimary} />
+    // UI V2：整页通顶 —— 顶部品牌渐变（360 / 矮屏 ×0.9）压在内容下面，页头落在渐变上
+    <SafeAreaView style={styles.container} edges={[]}>
+      <HeroGradient height={heroHeight} />
+      {/* 头部（V2）：玻璃圆返回键 + 白色标题 + (编辑模式)玻璃圆删除；入口与行为一字未动 */}
+      <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
+        <PressableScale onPress={() => navigation.goBack()} activeScale={0.94} hitSlop={0}>
+          <GlassView radius={999} style={styles.glassHeaderBtn}>
+            <Ionicons name="chevron-back" size={18} color={semantic.onAccent} />
+          </GlassView>
         </PressableScale>
         <Text style={styles.headerTitle}>{isEdit ? tr('finance.editPlan') : tr('finance.addPlan')}</Text>
         {isEdit ? (
-          <PressableScale onPress={handleDelete} style={styles.headerDeleteBtn} activeScale={0.92}>
-            <Ionicons name="trash-outline" size={19} color={colors.expense} />
+          <PressableScale onPress={handleDelete} activeScale={0.94} hitSlop={0}>
+            <GlassView radius={999} style={styles.glassHeaderBtn}>
+              <Ionicons name="trash-outline" size={18} color={semantic.onAccent} />
+            </GlassView>
           </PressableScale>
         ) : (
-          <View style={{ width: 40 }} />
+          <View style={{ width: 36 }} />
         )}
       </View>
 
@@ -767,16 +779,18 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
   );
 }
 
-function makeStyles(colors: ThemeColors) {
+function makeStyles(colors: ThemeColors, semantic: SemanticColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.bg },
     header: {
-      height: 56,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
       paddingHorizontal: 20,
+      paddingBottom: 6,
     },
+    // 页头上的玻璃圆钮（V2）：36 圆，与资产 / 统计页的玻璃圆钮同一规格
+    glassHeaderBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
     backBtn: {
       width: 40,
       height: 40,
@@ -787,7 +801,7 @@ function makeStyles(colors: ThemeColors) {
       alignItems: 'center',
       justifyContent: 'center',
     },
-    headerTitle: { fontSize: 18, fontWeight: '700', color: colors.textPrimary },
+    headerTitle: { fontSize: 18, fontWeight: '700', color: semantic.onAccent },
     headerDeleteBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
     // 框到框之间的上下纯留白统一 4px（标签的上下外边距）；表单标签统一 12px/500
     formLabel: { fontSize: 12, fontWeight: '500', color: colors.textSecondary, marginBottom: 4, marginTop: 4 },

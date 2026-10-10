@@ -16,7 +16,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import type { StyleProp, ViewStyle } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   interpolate,
@@ -43,32 +43,55 @@ import {
   Card,
   Chip,
   EmptyState,
-  IconButton,
+  GlassView,
+  HeroGradient,
+  IconCircle,
   MoneyText,
-  ScreenHeader,
 } from '../components/ui';
-import { withAlpha } from '../components/ui/color';
 import { TransactionType, Transaction } from '../types';
 import { UNCATEGORIZED_ICON, UNCATEGORIZED_NAME, UNCATEGORIZED_COLOR } from '../constants/uncategorized';
 import { useT, useLanguage } from '../i18n/LanguageContext';
 import { getCategoryLabel } from '../i18n/categories';
 import { formatDate } from '../utils/formatDate';
+import { formatMoney } from '../utils/formatMoney';
 import { hapticSelection } from '../utils/haptics';
 
 type IconName = keyof typeof Ionicons.glyphMap;
 type RangeType = 'year' | 'month' | 'week' | 'custom';
 
 // 环的几何：DonutChart 的绘制与「点扇区命中判定」共用这三个数，改一处必须两处一起改
-// 环放大：205 直径；粗厚环形环宽 50（圆孔 = 205 − 2×50 = 105pt）；渲染角度微调 -15° 让
-// 扇区边界错开最挤的正上方。
-const DONUT_SIZE = 205;
-const DONUT_STROKE = 50;
+// UI V2 定稿：直径 200；环带厚度按稿的内联样式换算（稿里 viewBox 42 / stroke-width 4.6 →
+// 10.95% 直径，200 × 0.1095 ≈ 22）；圆孔 = 200 − 2×22 = 156pt；
+// 渲染角度微调 -15° 让扇区边界错开最挤的正上方。
+const DONUT_SIZE = 200;
+const DONUT_STROKE = 22;
 const DONUT_ROTATION_DEG = -15;
 
-/** 占比细条高度（2pt）—— 纯几何常量（与资产页额度使用率细条同一规格） */
-const SHARE_BAR_HEIGHT = 2;
-/** 排行行图标方块边长（40，UI_RULES 第 7 节统一规格） */
-const CATEGORY_ICON_BOX = 40;
+/**
+ * 环心金额的档位（UI V2 定稿：30 → 26 → 22）。
+ *
+ * 为什么在页面里定档、而不是交给 MoneyText 自己的 shrinkLadder：
+ * MoneyText 的「放不下就降档」判定用的是**组件当帧自己的盒宽**；圆孔这里是「内容居中、
+ * 盒子 = 内容宽」的容器，加上它内置的估算表比 Geist 实测宽约 10%，首档永远会被自己判成放不下
+ * ——实测三档阶梯会一路停到第二档（T21 的 22/18 同样停在 18，用户看到的「约 18 号」就是这个）。
+ * 圆孔是固定 156pt（环 200 − 2×22），与屏幕宽无关，所以按「字号 → 156pt 能放几个字符」直接定档：
+ * 30 号每字约 14.5pt（Geist 数字 + 千分位 + 负字距）→ 10 字以内；26 号约 12.6pt → 12 字以内；再多给 22。
+ */
+const DONUT_CENTER_SIZES = [30, 26, 22] as const;
+
+function donutCenterSize(text: string): number {
+  if (text.length <= 10) return DONUT_CENTER_SIZES[0];
+  if (text.length <= 12) return DONUT_CENTER_SIZES[1];
+  return DONUT_CENTER_SIZES[2];
+}
+
+/** 页面顶部品牌渐变高度（UI V2 定稿统计 460 @844 高屏；矮屏 ×0.9） */
+const HERO_HEIGHT = 460;
+
+/** 占比细条高度（UI V2 定稿 4pt）—— 纯几何常量（与资产页额度使用率细条同一规格） */
+const SHARE_BAR_HEIGHT = 4;
+/** 排行行圆形图标直径（IconCircle 默认 42，与资产页账户行同规格） */
+const CATEGORY_ICON_BOX = 42;
 
 // 周期类型标签：在组件内用 t() 翻译（zh/en 字典 report.range*）
 const RANGE_TYPE_KEYS: Record<RangeType, string> = {
@@ -125,29 +148,63 @@ function buildRange(type: Exclude<RangeType, 'custom'>, anchor: Date, tr: (k: st
 }
 
 /**
- * 类别图标方块（UI_RULES 第 7 节统一规格：40 方块、radius.md 圆角、类别色 12% 底 + 100% 图标）。
- * 与资产页的账户图标方块同规格，统计页的每一项排行都从这里出。
+ * 类别图标（UI V2 第 1 节「形状」：类别图标改圆形）。
+ * 42 圆 + 底色 = 类别色 15%（夜）/ 近白淡底（日）—— 由 IconCircle 按主题推导；
+ * 圆色取类别自带的数据色（与扇区同色，饼图去标签后列表就是图例），不是写死的设计色。
  */
 function CategoryIcon({ color, icon }: { color: string; icon: IconName }) {
-  const { radius } = useTheme();
+  return <IconCircle size={CATEGORY_ICON_BOX} color={color} icon={icon} />;
+}
+
+/**
+ * 渐变上的玻璃圆钮（UI V2 稿：统计页周期行「‹ ›」/ 日历钮，36 圆 + 16 图标）。
+ * 为什么不用共享 IconButton：IconButton 是「透明触控区 + 语义色图标」——落在渐变上就没有
+ * 承托材质了；稿里这三颗都是玻璃圆钮（.gl + 36 圆），所以按 GlassView 的规格页内组合一次
+ * （材质 / 圆角 / 尺寸取 GlassView 与令牌，图标色取 onAccent，不写死）。
+ */
+function GlassRoundButton({
+  icon,
+  accessibilityLabel,
+  onPress,
+  disabled,
+  testID,
+}: {
+  icon: IconName;
+  accessibilityLabel: string;
+  onPress: () => void;
+  disabled?: boolean;
+  testID?: string;
+}) {
+  const { semantic, radius } = useTheme();
   return (
-    <View
-      style={{
-        width: CATEGORY_ICON_BOX,
-        height: CATEGORY_ICON_BOX,
-        borderRadius: radius.md,
-        backgroundColor: withAlpha(color, 0.12),
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
+    <PressableScale
+      onPress={onPress}
+      disabled={disabled}
+      activeScale={0.94}
+      hitSlop={0}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={{ disabled: !!disabled }}
+      testID={testID}
     >
-      <Ionicons name={icon} size={20} color={color} />
-    </View>
+      <GlassView
+        radius={radius.full}
+        style={{
+          width: 36,
+          height: 36,
+          alignItems: 'center',
+          justifyContent: 'center',
+          opacity: disabled ? 0.45 : 1,
+        }}
+      >
+        <Ionicons name={icon} size={16} color={semantic.onAccent} />
+      </GlassView>
+    </PressableScale>
   );
 }
 
 /**
- * 占比细条（R3 / 验收退回第 4 条）：2pt 高、hairline 底 + **类别自己的颜色**填充
+ * 占比细条（R3 / 验收退回第 4 条）：4pt 高（UI V2 稿）、hairline 底 + **类别自己的颜色**填充
  * —— 饼图去掉引线标签后，下面这份列表就是图例，颜色必须和扇区一一对上。
  * 宽度 = onLayout 实测的轨道宽 × 占比（不写死像素）；进场按 motion.timing.numberRoll（600ms）
  * 「长」出来，与扇区绘制同一档时长；系统「减弱动态效果」时直接落终态。
@@ -254,7 +311,8 @@ function RankRow({
         {/* 金额（中性色、不带正负号）+ 百分比统一 1 位小数；flexShrink:0，永不被标题挤走 */}
         <View style={{ flexShrink: 0, marginLeft: spacing.sm, alignItems: 'flex-end' }}>
           <MoneyText value={amount} variant="body" />
-          <AppText variant="footnote" color={semantic.textTertiary} align="right" style={{ marginTop: spacing.xs }}>
+          {/* 百分比 12pt（稿）→ caption 档；次要色（稿 #82829A）→ textSecondary */}
+          <AppText variant="caption" color={semantic.textSecondary} align="right" style={{ marginTop: spacing.xs }}>
             {pctText}
           </AppText>
         </View>
@@ -268,8 +326,11 @@ function RankRow({
 
 export default function ReportScreen() {
   const { transactions, categories, getAssetById, currency, activeLedgerId } = useApp();
-  const { semantic, spacing, layout, radius } = useTheme();
-  const { pagePadding, contentMaxWidth } = useLayout();
+  const { semantic, spacing, layout, radius, isDark, glass } = useTheme();
+  const { pagePadding, contentMaxWidth, isShort } = useLayout();
+  // 渐变高度：844 高屏 460，矮屏 ×0.9（UI V2 第 1 节）
+  const heroHeight = Math.round(HERO_HEIGHT * (isShort ? 0.9 : 1));
+  const insets = useSafeAreaInsets();
   const tr = useT();
   const { langMode } = useLanguage();
   const navigation = useNavigation<any>();
@@ -547,57 +608,149 @@ export default function ReportScreen() {
     setRangeType('custom');
   };
 
+  // 饼图卡内容（夜间玻璃卡 / 日间白卡共用同一份内容，只是外层材质不同）
+  const donutCardBody = (
+    <>
+      <GestureDetector gesture={donutAreaGesture}>
+        <Animated.View style={[styles.donutArea, donutDragStyle]} testID="report-donut">
+          <DonutChart
+            data={categoryBreakdown.map((c) => ({ value: c.value, color: c.color }))}
+            size={DONUT_SIZE}
+            strokeWidth={DONUT_STROKE}
+            rotation={DONUT_ROTATION_DEG}
+            selectedIndex={selectedRingIndex}
+            // 底环（稿）：夜间 = 半透明白档 / 日间 = hairline（白卡上就是那圈浅灰）
+            trackColor={isDark ? glass.fill : semantic.hairline}
+          />
+          {/* 环心：默认 = 「总支出 · 币种」+ 总额（UI V2 稿）；
+              选中 = 类名 + 该类金额 + 该类占比 */}
+          <View style={styles.donutCenter} pointerEvents="none">
+            {selectedCategory ? (
+              <>
+                {/* 小标签：稿 12.5 号次要色（caption 档 12 + 字号微调） */}
+                <AppText
+                  variant="caption"
+                  color={semantic.textSecondary}
+                  align="center"
+                  numberOfLines={2}
+                  style={styles.donutCenterLabel}
+                >
+                  {selectedCategory.name}
+                </AppText>
+                <View style={styles.donutCenterAmountWrap}>
+                  <MoneyText
+                    value={selectedCategory.value}
+                    // 同总额档位：600 字重（display）+ 字号 30 → 26 → 22（按孔径定档，见 donutCenterSize）
+                    variant="display"
+                    // 汇总数字中性色、不带正负号（方向由上面的支出/收入分段说明）；
+                    // 不用 12.3k 紧凑格式（看不出具体钱数）；读屏仍读完整金额
+                    shrinkLadder={[donutCenterSize(formatMoney(selectedCategory.value))]}
+                    compactFallback={false}
+                    style={styles.donutCenterValue}
+                  />
+                </View>
+                <AppText variant="caption2" color={semantic.textSecondary} align="center">
+                  {selectedSharePct.toFixed(1)}%
+                </AppText>
+              </>
+            ) : (
+              <>
+                {/* 币种与标题同一行（稿里就是「总支出 · MYR」），不再单独占第三行 */}
+                <AppText
+                  variant="caption"
+                  color={semantic.textSecondary}
+                  align="center"
+                  numberOfLines={2}
+                  style={styles.donutCenterLabel}
+                >
+                  {`${
+                    type === 'expense' ? tr('report.totalExpense') : tr('report.totalIncome')
+                  } · ${selectedReportCurrency}`}
+                </AppText>
+                <View style={styles.donutCenterAmountWrap}>
+                  <MoneyText
+                    value={periodTotal}
+                    // 字重取 display 档（600，稿要的档），字号按孔径定档（30 → 26 → 22，见 donutCenterSize）
+                    variant="display"
+                    shrinkLadder={[donutCenterSize(formatMoney(periodTotal))]}
+                    compactFallback={false}
+                    style={styles.donutCenterValue}
+                  />
+                </View>
+              </>
+            )}
+          </View>
+        </Animated.View>
+      </GestureDetector>
+      <GestureDetector gesture={stripGesture}>
+        <View style={styles.swipeStrip} />
+      </GestureDetector>
+    </>
+  );
+
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    // 全出血（同首页 / 资产页）：渐变通到屏幕顶，内容自己用 insets.top 让开状态栏
+    <SafeAreaView style={styles.container} edges={[]}>
+      {/* UI V2 第 4 节统计：顶部品牌渐变 460（矮屏 ×0.9），绝对定位压在滚动内容下面 */}
+      <HeroGradient height={heroHeight} />
       <ScrollView
         onScroll={onTabScroll ?? undefined}
         scrollEventThrottle={16}
         style={
           contentMaxWidth ? { maxWidth: contentMaxWidth, width: '100%', alignSelf: 'center' } : undefined
         }
-        contentContainerStyle={{ paddingTop: spacing.xs, paddingBottom: tabClearance }}
+        contentContainerStyle={{ paddingBottom: tabClearance }}
       >
-        {/* R1 页头：Tab 根页大标题（日历入口移到下面周期行右侧，与大日期是同一件事） */}
-        <ScreenHeader variant="root" title={tr('report.title')} />
-
-        {/* R1 周期行：‹ 2026年10月 › 在左、日历按钮在右。箭头与左右滑共用 shiftRange；
-            自定义区间时箭头不可点（shiftRange 原行为即不响应） */}
-        <View style={[styles.periodRow, { paddingHorizontal: pagePadding }]}>
+        {/* R1 页头（UI V2 稿）：大标题 30/600 白色 + 右侧周期行「‹ 2026年10月 ›」玻璃圆钮；
+            日历入口（日期区间选择器）保持在周期钮右侧 —— 入口 / 行为一点未变 */}
+        <View style={[styles.headerRow, { paddingHorizontal: pagePadding, paddingTop: insets.top + 14 }]}>
+          <AppText
+            variant="title1"
+            weight="600"
+            color={semantic.onAccent}
+            style={styles.heroTitle}
+            testID="report-header"
+          >
+            {tr('report.title')}
+          </AppText>
           <View style={styles.periodNav}>
-            <IconButton
+            <GlassRoundButton
               icon="chevron-back"
-              size={20}
               accessibilityLabel={tr('report.prevPeriod')}
               onPress={() => shiftRange(-1)}
               disabled={rangeType === 'custom'}
               testID="report-prev"
             />
-            <AppText variant="title3" style={styles.periodLabel}>
+            <AppText variant="subhead" weight="500" color={semantic.onAccent} style={styles.periodLabel}>
               {range.label}
             </AppText>
-            <IconButton
+            <GlassRoundButton
               icon="chevron-forward"
-              size={20}
               accessibilityLabel={tr('report.nextPeriod')}
               onPress={() => shiftRange(1)}
               disabled={rangeType === 'custom'}
               testID="report-next"
             />
+            <GlassRoundButton
+              icon="calendar-outline"
+              accessibilityLabel={tr('addTx.dateSheetTitle')}
+              onPress={openDatePicker}
+              testID="report-calendar"
+            />
           </View>
-          <IconButton
-            icon="calendar-outline"
-            size={24}
-            accessibilityLabel={tr('addTx.dateSheetTitle')}
-            onPress={openDatePicker}
-            testID="report-calendar"
-          />
         </View>
 
         {/* R1 + R6 两个分段控件同一行（验收退回第 3 条）：左边周期（周/月/年）、右边类型（支出/收入）；
-            窄屏一行放不下时右侧整块掉到第二行（UI_RULES 第 6 节 ②） */}
+            V2 换成玻璃槽（落在渐变上）；窄屏一行放不下时右侧整块掉到第二行（UI_RULES 第 6 节 ②） */}
         <View style={[styles.segRow, { paddingHorizontal: pagePadding }]}>
-          <SegmentedControl options={rangeOptions} selected={rangeType} onSelect={handleRangeSelect} />
           <SegmentedControl
+            appearance="glass"
+            options={rangeOptions}
+            selected={rangeType}
+            onSelect={handleRangeSelect}
+          />
+          <SegmentedControl
+            appearance="glass"
             options={[
               { value: 'expense', label: tr('report.expense') },
               { value: 'income', label: tr('report.income') },
@@ -638,70 +791,29 @@ export default function ReportScreen() {
           </View>
         ) : (
           <>
-            {/* R2 饼图卡：环 + 环心。环区上挂 Race(点按命中, 左右滑)，卡底保留 strip 的滑动换期 */}
-            <Card padded={false} style={[styles.donutCard, { marginHorizontal: pagePadding }]}>
-              <GestureDetector gesture={donutAreaGesture}>
-                <Animated.View style={[styles.donutArea, donutDragStyle]} testID="report-donut">
-                  <DonutChart
-                    data={categoryBreakdown.map((c) => ({ value: c.value, color: c.color }))}
-                    size={DONUT_SIZE}
-                    strokeWidth={DONUT_STROKE}
-                    rotation={DONUT_ROTATION_DEG}
-                    selectedIndex={selectedRingIndex}
-                  />
-                  {/* 环心：默认 = 总支出/总收入 + 总额 + 币种；选中 = 类名 + 该类金额 + 该类占比 */}
-                  <View style={styles.donutCenter} pointerEvents="none">
-                    {selectedCategory ? (
-                      <>
-                        <AppText variant="caption" color={semantic.textSecondary} align="center" numberOfLines={2}>
-                          {selectedCategory.name}
-                        </AppText>
-                        <MoneyText
-                          value={selectedCategory.value}
-                          variant="title2"
-                          // 汇总数字中性色、不带正负号（方向由上面的支出/收入分段说明）；
-                          // 圆孔窄（孔径 = DONUT_SIZE − 2×DONUT_STROKE = 105pt）：按档位降到 18 为止，
-                          // 不用 12.3k 紧凑格式（看不出具体钱数）；读屏仍读完整金额
-                          shrinkLadder={[22, 18]}
-                          compactFallback={false}
-                          style={styles.donutCenterValue}
-                        />
-                        <AppText variant="caption2" color={semantic.textSecondary} align="center">
-                          {selectedSharePct.toFixed(1)}%
-                        </AppText>
-                      </>
-                    ) : (
-                      <>
-                        <AppText variant="caption" color={semantic.textSecondary} align="center" numberOfLines={2}>
-                          {type === 'expense' ? tr('report.totalExpense') : tr('report.totalIncome')}
-                        </AppText>
-                        <MoneyText
-                          value={periodTotal}
-                          variant="title2"
-                          // 同上：汇总数字中性色、不带正负号；title2 放不下按档位降到 18，不退化紧凑格式
-                          shrinkLadder={[22, 18]}
-                          compactFallback={false}
-                          style={styles.donutCenterValue}
-                        />
-                        {/* 币种代码缀在金额下方（圆孔放不下「符号 + 金额」一整串）；
-                            13pt（footnote）起 —— textTertiary 只给 ≥13pt 的文字用（UI_RULES 第 1 节） */}
-                        <AppText variant="footnote" color={semantic.textTertiary} align="center">
-                          {selectedReportCurrency}
-                        </AppText>
-                      </>
-                    )}
-                  </View>
-                </Animated.View>
-              </GestureDetector>
-              <GestureDetector gesture={stripGesture}>
-                <View style={styles.swipeStrip} />
-              </GestureDetector>
-            </Card>
+            {/* R2 饼图卡（UI V2 稿）：夜间 = 玻璃卡（radius 28 / 内衬 18）；日间 = 白卡 + 轻投影。
+                环区上挂 Race(点按命中, 左右滑)，卡底保留 strip 的滑动换期 */}
+            {isDark ? (
+              <GlassView
+                radius={28}
+                style={[styles.donutCard, { marginHorizontal: pagePadding }]}
+              >
+                {donutCardBody}
+              </GlassView>
+            ) : (
+              <Card
+                padded={false}
+                style={[styles.donutCard, styles.donutCardLight, { marginHorizontal: pagePadding }]}
+              >
+                {donutCardBody}
+              </Card>
+            )}
 
             {/* R3 排行列表：图标方块 + 名称 + 占比细条（类别色，图例）+ 金额（中性色）+ 百分比 1 位小数；
                 选中行整行 accentSoft 底 + 标题加粗（验收退回第 4/5 条） */}
             <View style={[styles.rankList, { marginHorizontal: pagePadding }]}>
-              <Card padded={false}>
+              {/* 排行卡圆角按稿 26（Card 默认 radius.lg 20） */}
+              <Card padded={false} style={{ borderRadius: 26 }}>
                 {categoryBreakdown.map((c, index) => {
                   const pct = periodTotal > 0 ? (c.value / periodTotal) * 100 : 0;
                   const expanded = expandedCategoryId === c.categoryId;
@@ -798,16 +910,6 @@ export default function ReportScreen() {
 function makeStyles(semantic: SemanticColors, spacing: Spacing, layout: Layout, radius: Radius) {
   return StyleSheet.create({
     container: { flex: 1 },
-    // 周期行：‹ 日期 › 在左、日历按钮在右；窄屏放不下时按钮整块掉第二行
-    periodRow: {
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      columnGap: spacing.md,
-      rowGap: spacing.sm,
-      marginTop: spacing.xs,
-    },
     // 两个分段控件同一行：周期在左、类型在右。行间距取 spacing.sm —— 实测英文最宽组合
     // （Year/Month/Week 173 + Expense/Income 145 + 8 = 326）在 360 宽的内容区（328）里正好放得下；
     // 系统大字 / 更窄的屏幕放不下时，右侧那块整行掉到第二行（UI_RULES 第 6 节 ②）
@@ -820,7 +922,7 @@ function makeStyles(semantic: SemanticColors, spacing: Spacing, layout: Layout, 
       rowGap: spacing.sm,
       marginTop: spacing.sm,
     },
-    periodNav: { flexDirection: 'row', alignItems: 'center', flexShrink: 1 },
+    periodNav: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, flexShrink: 1 },
     // 日期标签允许换行变高（不截断、不用省略号）；宽度由内容决定，挤不到就整行换下去
     periodLabel: { flexShrink: 1, textAlign: 'center', marginHorizontal: spacing.xs },
     chipRow: {
@@ -830,17 +932,30 @@ function makeStyles(semantic: SemanticColors, spacing: Spacing, layout: Layout, 
       rowGap: spacing.xs,
       marginTop: spacing.sm,
     },
-    donutCard: { marginTop: spacing.md },
-    // 环区必须与 DonutChart 同尺寸（205×205）：绘制坐标与点击命中的坐标系都从这里起算。
+    // 页头（UI V2 稿）：大标题 + 右侧周期行「‹ 日期 ›」玻璃圆钮组
+    headerRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      columnGap: spacing.md,
+      rowGap: spacing.xs,
+      marginBottom: spacing.md,
+    },
+    // 大标题（渐变上的白字）：稿为 30 / 600（token title1 是 28/700，字号按稿覆盖）
+    heroTitle: { fontSize: 30, lineHeight: 36 },
+    // 饼图卡：稿为 radius 28 / 内衬 18（夜间是 GlassView、日间是白卡，两者都在这里给同样的内衬）
+    donutCard: { marginTop: spacing.md, padding: 18 },
+    // 日间白卡：Card 默认 radius.lg（20），稿里是 28（阴影 / 白底由 Card 自己给）
+    donutCardLight: { borderRadius: 28 },
+    // 环区必须与 DonutChart 同尺寸（200×200）：绘制坐标与点击命中的坐标系都从这里起算。
     // 用 minHeight（不用固定 height）：高度实际由环本身撑出，文字容器不写死高度（UI_RULES 第 4 节）
     donutArea: {
       width: DONUT_SIZE,
       minHeight: DONUT_SIZE,
       alignSelf: 'center',
-      marginTop: spacing.xl,
-      marginBottom: spacing.lg,
     },
-    // 环心内容严格限制在圆孔内：孔径 = DONUT_SIZE − 2×DONUT_STROKE = 105pt，
+    // 环心内容严格限制在圆孔内：孔径 = DONUT_SIZE − 2×DONUT_STROKE，
     // 于是左右内边距取环宽，MoneyText 实测到的可用宽就是孔径（超长金额才会按档位降级）
     donutCenter: {
       position: 'absolute',
@@ -852,7 +967,19 @@ function makeStyles(semantic: SemanticColors, spacing: Spacing, layout: Layout, 
       justifyContent: 'center',
       paddingHorizontal: DONUT_STROKE,
     },
+    // 环心小标签（稿）：12.5 号次要色（字号按稿微调，行高沿用 caption 档）
+    donutCenterLabel: { fontSize: 12.5, lineHeight: 16 },
+    // 环心金额（稿）：30 / 600 —— 字重与字距由 display 档给（600 / −0.8，见 JSX 注释），
+    // 字号由 shrinkLadder 给（30 → 26 → 22），这里只补上边距
     donutCenterValue: { marginTop: spacing.xs },
+    // 金额要一层「占满圆孔宽 + 内容居中」的壳：MoneyText 的档位判定用的是它自己当帧的盒宽，
+    // 直接放进居中列里盒宽 = 内容宽 → 首档会被自己的宽度判成放不下（实测一直停在 26）；
+    // 这层壳撑满圆孔宽（156），金额按内容宽居中，档位判定才拿到真正可用的宽度
+    donutCenterAmountWrap: {
+      alignSelf: 'stretch',
+      flexDirection: 'row',
+      justifyContent: 'center',
+    },
     rankList: { marginTop: layout.section },
     // 排行列表行间发丝线（由页面插：选中行要压住整行底色）
     rowSeparator: { height: StyleSheet.hairlineWidth, backgroundColor: semantic.hairline },
