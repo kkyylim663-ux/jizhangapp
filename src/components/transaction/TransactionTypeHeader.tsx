@@ -6,8 +6,8 @@
 //          每段约 82dp，英文 Exchange 也放得下；编辑模式没有类型切换，不渲染这一行）
 //
 // 扫票：支出/收入传 onScanPress；转账/兑换不做扫票识别（不传就不渲染，右侧用同宽占位保持标题居中）。
-// 玻璃上的白字 / 白图标按 ComponentGallery 的 V2 约定用字面量 #FFFFFF（不在主题色板内），
-// 材质走 GlassView（半透明 + 亮边 + 顶部内高光 + 模糊回退），不自己拼色值。
+// 文字 / 图标 = text.primary（UI V2.1 §3：玻璃上的标题、按钮文字一律主文字色 —— 旧的
+// 白色字面量在日间渐变上只有 1.4:1）；材质走 GlassView（半透明 + 亮边 + 内高光 + 模糊回退）。
 
 import React, { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -20,11 +20,6 @@ import GlassView from '../ui/GlassView';
 import PressableScale from '../PressableScale';
 import SegmentedControl from '../SegmentedControl';
 import type { Layout, Spacing } from '../../theme/theme';
-
-/** 渐变上的白字档（UI V2 页头：标题 / 玻璃控件内的图标与文字） */
-const ON_GRADIENT = '#FFFFFF';
-/** 渐变上的次要白（chevron 等辅助图标） */
-const ON_GRADIENT_DIM = 'rgba(255,255,255,0.85)';
 
 /** UI 层四个类型入口（兑换在数据层复用 transfer） */
 export type TransactionUiType = 'expense' | 'income' | 'transfer' | 'exchange';
@@ -78,15 +73,15 @@ export function TransactionTypeHeader({
           accessibilityLabel={t('common.back')}
         >
           <GlassView radius={999} style={styles.glassRound}>
-            <Ionicons name="chevron-back" size={20} color={ON_GRADIENT} />
+            <Ionicons name="chevron-back" size={20} color={semantic.textPrimary} />
           </GlassView>
         </PressableScale>
-        {/* 标题居中、白色（稿 17/600）；放不下也不缩字、不省略 */}
+        {/* 标题居中、text.primary（稿 17/600）；放不下也不缩字、不省略 */}
         <AppText
           variant="headline"
           weight="600"
           align="center"
-          color={ON_GRADIENT}
+          color={semantic.textPrimary}
           numberOfLines={1}
           style={styles.title}
         >
@@ -113,8 +108,8 @@ export function TransactionTypeHeader({
             accessibilityLabel={t('addTx.scanReceipt')}
           >
             <GlassView radius={999} style={styles.glassScan}>
-              <Ionicons name="camera-outline" size={18} color={ON_GRADIENT} />
-              <AppText variant="subhead" weight="600" color={ON_GRADIENT}>
+              <Ionicons name="camera-outline" size={18} color={semantic.textPrimary} />
+              <AppText variant="subhead" weight="600" color={semantic.textPrimary}>
                 {t('addTx.scanReceipt')}
               </AppText>
             </GlassView>
@@ -127,15 +122,21 @@ export function TransactionTypeHeader({
       {showTypeSwitch && (
         <View style={[styles.typeRow, isShort && styles.typeRowShort]}>
           {/* 分段控件的选项值就是 UiType（字符串联合），回传时收窄；
-              玻璃槽 + 白色选中胶囊（V2 稿），stretch 撑满整行 */}
-          <SegmentedControl
-            options={options}
-            selected={uiType}
-            onSelect={(value) => onSelectType(value as TransactionUiType)}
-            appearance="glass"
-            thumb="white"
-            stretch
-          />
+              玻璃槽 + 白色选中胶囊（V2 稿），stretch 撑满整行。
+              槽底托盘（UI V2.1 §4）：未选中标签是 13pt 小字（要 4.5:1），单层玻璃槽压在渐变
+              最亮的一段上只有 3.7-4.1:1。托盘为**实底**（surfaceSunken，全 App「凹底」档）——
+              半透明 scrim 会被玻璃槽的 backdrop 模糊从上下的亮渐变里回拉，压不下去。
+              与槽同圆角、零内衬（观感就是「槽更深一档」，不多一层描边） */}
+          <View style={[styles.typeTray, { backgroundColor: semantic.surfaceSunken }]}>
+            <SegmentedControl
+              options={options}
+              selected={uiType}
+              onSelect={(value) => onSelectType(value as TransactionUiType)}
+              appearance="glass"
+              thumb="white"
+              stretch
+            />
+          </View>
         </View>
       )}
     </View>
@@ -174,6 +175,8 @@ function makeStyles(spacing: Spacing, layout: Layout) {
     roundSpacer: { width: 44 },
     // 第二行：类型分段独占一行（stretch 撑满内容宽），与标题行只留半个格
     typeRow: { marginTop: spacing.sm },
+    // 压暗托盘（UI V2.1 §4，见 JSX 注释）：全圆角、零内衬
+    typeTray: { borderRadius: 999 },
     typeRowShort: { marginTop: spacing.xs },
   });
 }

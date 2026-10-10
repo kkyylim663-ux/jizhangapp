@@ -625,7 +625,10 @@ export const darkSemantic: SemanticColors = {
   // Tab 栏走唯一玻璃材质（§2）：栏身 = 夜间玻璃填充
   tabBar: 'rgba(14,10,30,0.46)',
   tabActive: '#FFFFFF',
-  tabInactive: 'rgba(242,240,250,0.56)', // = textTertiary（§3：Tab 未选中）
+  // ⚠ 不是 textTertiary（0.56）：Tab 标签是 11pt 小字（§4 要 4.5:1），而浮空 Tab 栏是玻璃 +
+  //    模糊，实测栏内底色会被下方内容提亮到 rgb(90-104, 80-93, 96-144) —— 0.56 只有 3.0-3.4:1。
+  //    0.85 实测 4.48:1（差 0.02 不达标），取 0.90（选中 / 未选中仍靠「实心图标 vs 线框图标 + 亮度差」区分）
+  tabInactive: 'rgba(242,240,250,0.90)',
   hairline: 'rgba(255,255,255,0.05)',
   textPrimary: '#F2F0FA',
   textSecondary: 'rgba(242,240,250,0.70)',

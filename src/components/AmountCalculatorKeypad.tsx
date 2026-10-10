@@ -434,7 +434,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 1,
   },
-  // 完成键文字（稿 19/600 白）与长按提示（11/500，白 80%）
+  // 完成键文字（稿 19/600 白）与长按提示（原稿 11/500 白 80%）
   confirmText: {
     fontSize: 19,
     fontWeight: '600',
@@ -442,11 +442,12 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   confirmHint: {
-    // 11pt = 字号令牌最小档（UI_RULES：禁止 7–10pt），仍在「完成」键内部第二行
-    fontSize: 11,
-    fontWeight: '500',
+    // ⚠ 不是 11：accent 渐变最亮处（渐变末端 ~rgb(160,88,200)）连纯白都只有 4.46:1，
+    // 11pt 达不到 UI V2.1 §4 的 4.5；提到 14/700 走「大字档 3:1」（实测 3.45 ✓）。
+    // 仍占「完成」键内部第二行，不再降透明度（满白最亮）
+    fontSize: 14,
+    fontWeight: '700',
     marginTop: 3,
-    opacity: 0.8,
     color: '#FFFFFF',
     textAlign: 'center',
     alignSelf: 'center',

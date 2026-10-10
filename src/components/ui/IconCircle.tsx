@@ -1,10 +1,11 @@
 // IconCircle.tsx
 // UI V2.1 §5：所有圆形图标（类别 / 账户 / 计划 / 设置行 / 账本……）= 同色系立体光泽球。
 //   结构（自上而下）：外投影 → 球面径向渐变（亮 0% → 基色 48% → 暗 100%）
-//     → 顶部白内阴影 + 底部暗内阴影 → 左上椭圆高光（46% × 30%，left 18% / top 8%，白 75% → 0）
+//     → 顶部白内阴影 + 底部暗内阴影 → 顶部高光条（49% × 9%，left 14% / top 4%，白 75% → 0）
 //     → 白图标（带 0 1 1 细阴影）
 //   颜色：亮色 = 基色混白 55%，暗色 = 基色混黑 32%；中性项（「全部」「已暂停」）基色 #8E8AA6；
-//   日夜同一套；基色太浅（白图标对比 < 3:1，如 #F5A524）→ 按 §5 反复加深 15% 直到 ≥ 3:1（§4 硬指标）。
+//   日夜同一套；§4 的硬指标作用在**图标真正压着的那部分球面**上（亮档与基色各压到 ≥3:1，
+//   高光不压到图标上 —— 详见 ballColors 与 gloss 两处注释）。
 //   选中（记一笔类别格）：球面不变，外加两层外圈（日 #9B5BD6 / 夜 类别色 60%）。
 //
 // 用法：
@@ -25,6 +26,8 @@ import { contrastRatio, darken, mixWithBlack, mixWithWhite, withAlpha } from './
 export const ICON_BALL_NEUTRAL = '#8E8AA6';
 /** 浅色基色的加深量（白图标对比 < 3:1 时；§5） */
 const TOO_LIGHT_DARKEN = 0.15;
+/** 亮档 = 基色混白比例（§5：亮色 = 基色混 55% 白） */
+const HIGHLIGHT_MIX = 0.55;
 /** 图标与其底的最低对比（§4：图标 ≥ 3:1） */
 const ICON_MIN_CONTRAST = 3;
 
@@ -52,7 +55,17 @@ function ballColors(color?: string): { base: string; light: string; dark: string
     if (ratio === null || ratio >= ICON_MIN_CONTRAST) break;
     base = darken(base, TOO_LIGHT_DARKEN);
   }
-  return { base, light: mixWithWhite(base, 0.55), dark: mixWithBlack(base, 0.32) };
+  // ⚠ 高光档同样要满足「白图标 ≥ 3:1」（§4）：白色图标正好压在 radial 的亮档上
+  //   （渐变中心 cx 32% / cy 26% 就在图标中心附近），亮档 = 基色混白 55% —— 对中等 / 浅基色
+  //   它会亮到 1.2–1.8:1（实测：娱乐 #AB47BC 亮档 1.77、工资 #43A047 亮档 1.19）。
+  //   所以亮档按同一套规则继续压深，直到白图标达标（最多 4 步）；基色与暗档不动。
+  let light = mixWithWhite(base, HIGHLIGHT_MIX);
+  for (let step = 0; step < 4; step++) {
+    const ratio = contrastRatio('#FFFFFF', light);
+    if (ratio === null || ratio >= ICON_MIN_CONTRAST) break;
+    light = darken(light, TOO_LIGHT_DARKEN);
+  }
+  return { base, light, dark: mixWithBlack(base, 0.32) };
 }
 
 export function IconCircle({
@@ -109,7 +122,12 @@ export function IconCircle({
         </Defs>
         <Circle cx={radius} cy={radius} r={radius} fill={`url(#${ballId})`} />
       </Svg>
-      {/* 左上椭圆高光：白 75% → 0（46% × 30%，left 18% / top 8%） */}
+      {/* 左上高光：白 75% → 0（§5 的左上椭圆高光）。
+          ⚠ 几何是硬指标，别把它做大：白图标正好落在球面中部，高光只要盖到图标上，
+          图标与球面的对比就掉到 1.2–2.4:1（实测 #AB47BC 1.77 / 中性球 1.97 / #43A047 1.19）。
+          高光的**强段**（顶部 75%）留在图标（+ 3px 采样环）之上 —— 49% 宽 × 9% 高、
+          left 14% / top 4%：各种球径（34/38/42/48）图标环的上沿都在 17–20% 处，
+          高光在 13% 处已淡到 0，图标环只吃到球面的亮档 / 基色（两者都已按 ≥3:1 压深） */}
       <LinearGradient
         colors={['rgba(255,255,255,0.75)', 'rgba(255,255,255,0)']}
         start={{ x: 0.5, y: 0 }}
@@ -143,10 +161,10 @@ const styles = StyleSheet.create({
   },
   gloss: {
     position: 'absolute',
-    left: '18%',
-    top: '8%',
-    width: '46%',
-    height: '30%',
+    left: '14%',
+    top: '4%',
+    width: '49%',
+    height: '9%',
     borderRadius: 999,
     overflow: 'hidden',
   },
