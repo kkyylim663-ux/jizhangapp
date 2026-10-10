@@ -1,12 +1,31 @@
 import React, { useMemo, useState } from 'react';
-import {View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, Keyboard } from 'react-native';
+import {
+  View,
+  StyleSheet,
+  TextInput,
+  ScrollView,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+} from 'react-native';
+
+/**
+ * 玻璃材质（UI V2.1 §2）在 web 上的偏差修正：expo-blur 的 web 实现用「tint 底色」模拟模糊——
+ * tint default + intensity 100 → 叠一层 rgba(255,255,255,.30) 的白，夜间玻璃被洗成中紫，
+ * 规范里的 text.secondary / income / danger 全部跌破 §4 硬指标（实测 2.7–4.2）。
+ * 这里把 web 强度降到 8（白底 2.4%，模糊 1.6px ≈ 不可见），玻璃回到稿里的 rgba(14,10,30,.46) 实色；
+ * iOS 仍用 GlassView 默认 100（真材质），Android 本来就没有模糊。
+ */
+const WEB_GLASS_INTENSITY = Platform.OS === 'web' ? 8 : undefined;
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/useTheme';
+import { useLayout } from '../theme/useLayout';
+import { useT } from '../i18n/LanguageContext';
 import { useTabClearance } from '../hooks/useTabClearance';
 import { useTabBarScrollHandler } from '../context/TabBarAutoHideContext';
-import { ThemeColors } from '../theme/theme';
 import PressableScale from '../components/PressableScale';
+import { AppText, GlassView, HeroGradient, ScreenHeader } from '../components/ui';
 
 type Method = 'reducing' | 'straight' | 'flat';
 
@@ -73,11 +92,26 @@ function buildFlatSchedule(principal: number, monthlyRate: number, months: numbe
   return { payment, rows };
 }
 
+/** UI V2.1 玻璃二级页头：ScreenHeader 的返回键是透明 44 触控区，这里在它底下垫一枚 44 玻璃圆钮（稿） */
+function GlassBackHeader({ title, onBack }: { title: string; onBack: () => void }) {
+  const { spacing } = useTheme();
+  const { pagePadding } = useLayout();
+  return (
+    <View>
+      <View pointerEvents="none" style={[st.headerGlass, { left: pagePadding, top: spacing.sm }]}>
+        <GlassView intensity={WEB_GLASS_INTENSITY} radius={999} style={st.headerGlassInner} />
+      </View>
+      <ScreenHeader variant="compact" title={title} onBack={onBack} />
+    </View>
+  );
+}
+
 export default function LoanCalculatorScreen({ navigation }: any) {
-  const { colors } = useTheme();
+  const { semantic, spacing, isDark } = useTheme();
+  const { pagePadding } = useLayout();
+  const t = useT();
   const tabClearance = useTabClearance();
   const onTabScroll = useTabBarScrollHandler();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const [principalStr, setPrincipalStr] = useState('');
   const [rateStr, setRateStr] = useState('');
@@ -126,209 +160,265 @@ export default function LoanCalculatorScreen({ navigation }: any) {
     }
   }, [principal, monthlyRate, months, method]);
 
+  const METHODS: { key: Method; label: string; sub: string }[] = [
+    { key: 'reducing', label: t('addTx.loanMethodReducing'), sub: t('addTx.loanMethodReducingSub') },
+    { key: 'straight', label: t('addTx.loanMethodStraight'), sub: t('addTx.loanMethodStraightSub') },
+    { key: 'flat', label: t('addTx.loanMethodFlat'), sub: t('addTx.loanMethodFlatSub') },
+  ];
+
   return (
-    <SafeAreaView style={styles.container} edges={['top']}
+    <SafeAreaView style={[st.container, { backgroundColor: semantic.bg }]} edges={['top']}
       onTouchStart={() => { Keyboard.dismiss(); }}
     >
-      <View style={styles.header}>
-        <PressableScale onPress={() => navigation.goBack()} activeScale={0.92}>
-          <Ionicons name="chevron-back" size={26} color={colors.textPrimary} />
-        </PressableScale>
-        <Text style={styles.title}>贷款计算器</Text>
-        <View style={{ width: 26 }} />
-      </View>
+      <HeroGradient fill />
+      <GlassBackHeader title={t('addTx.loanCalc')} onBack={() => navigation.goBack()} />
 
-      <ScrollView onScroll={onTabScroll ?? undefined} scrollEventThrottle={16} contentContainerStyle={{ padding: 20, paddingBottom: tabClearance }}>
-        <Text style={styles.label}>贷款本金</Text>
-        <TextInput
-          style={styles.input}
-          value={principalStr}
-          onChangeText={setPrincipalStr}
-          keyboardType="numeric"
-          placeholder="例如 10000"
-          placeholderTextColor={colors.textTertiary}
-        />
-
-        <View style={{ flexDirection: 'row', gap: 12 }}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.label}>年利率 (%)</Text>
-            <TextInput
-              style={styles.input}
-              value={rateStr}
-              onChangeText={setRateStr}
-              keyboardType="numeric"
-              placeholder="例如 10"
-              placeholderTextColor={colors.textTertiary}
-            />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.label}>年限</Text>
-            <TextInput
-              style={styles.input}
-              value={yearsStr}
-              onChangeText={setYearsStr}
-              keyboardType="numeric"
-              placeholder="例如 5"
-              placeholderTextColor={colors.textTertiary}
-            />
-          </View>
-        </View>
-
-        <Text style={styles.label}>还款方式</Text>
-        <View style={styles.methodRow}>
-          <PressableScale
-            style={[styles.methodBtn, method === 'reducing' && styles.methodBtnActive]}
-            activeScale={0.95}
-            onPress={() => setMethod('reducing')}
-          >
-            <Text style={[styles.methodText, method === 'reducing' && styles.methodTextActive]}>
-              余额递减法{'\n'}
-              <Text style={styles.methodSub}>月供固定</Text>
-            </Text>
-          </PressableScale>
-          <PressableScale
-            style={[styles.methodBtn, method === 'straight' && styles.methodBtnActive]}
-            activeScale={0.95}
-            onPress={() => setMethod('straight')}
-          >
-            <Text style={[styles.methodText, method === 'straight' && styles.methodTextActive]}>
-              直线法{'\n'}
-              <Text style={styles.methodSub}>月供递减</Text>
-            </Text>
-          </PressableScale>
-          <PressableScale
-            style={[styles.methodBtn, method === 'flat' && styles.methodBtnActive]}
-            activeScale={0.95}
-            onPress={() => setMethod('flat')}
-          >
-            <Text style={[styles.methodText, method === 'flat' && styles.methodTextActive]}>
-              平息法{'\n'}
-              <Text style={styles.methodSub}>本息都固定</Text>
-            </Text>
-          </PressableScale>
-        </View>
-
-        {result ? (
-          <>
-            <View style={styles.resultCard}>
-              {method !== 'straight' ? (
-                <View style={styles.resultRow}>
-                  <Text style={styles.resultLabel}>每月供款</Text>
-                  <Text style={styles.resultValue}>{fmt(result.firstPayment)}</Text>
-                </View>
-              ) : (
-                <>
-                  <View style={styles.resultRow}>
-                    <Text style={styles.resultLabel}>首月供款</Text>
-                    <Text style={styles.resultValue}>{fmt(result.firstPayment)}</Text>
-                  </View>
-                  <View style={styles.resultRow}>
-                    <Text style={styles.resultLabel}>末月供款</Text>
-                    <Text style={styles.resultValue}>{fmt(result.lastPayment)}</Text>
-                  </View>
-                </>
-              )}
-              <View style={styles.divider} />
-              <View style={styles.resultRow}>
-                <Text style={styles.resultLabelSmall}>还款总额</Text>
-                <Text style={styles.resultValueSmall}>{fmt(result.totalPaid)}</Text>
+      {/* 表单页：键盘弹出不遮住输入框 */}
+      <KeyboardAvoidingView style={st.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView
+          onScroll={onTabScroll ?? undefined}
+          scrollEventThrottle={16}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ paddingHorizontal: pagePadding, paddingBottom: tabClearance + spacing.xl, gap: spacing.md }}
+        >
+          {/* 输入组：一张玻璃卡，胶囊输入框（§2） */}
+          <GlassView intensity={WEB_GLASS_INTENSITY} radius={26} style={[st.card, { gap: spacing.md }]}>
+            <View>
+              <AppText variant="caption" color={semantic.textSecondary} style={st.fieldLabel}>
+                {t('addTx.loanPrincipal')}
+              </AppText>
+              <TextInput
+                style={[st.input, { backgroundColor: semantic.accentSoft, color: semantic.textPrimary }]}
+                value={principalStr}
+                onChangeText={setPrincipalStr}
+                keyboardType="numeric"
+                placeholder={t('addTx.loanPrincipalPh')}
+                placeholderTextColor={semantic.textSecondary}
+              />
+            </View>
+            <View style={st.row}>
+              <View style={st.col}>
+                <AppText variant="caption" color={semantic.textSecondary} style={st.fieldLabel}>
+                  {t('addTx.calcRate')}
+                </AppText>
+                <TextInput
+                  style={[st.input, { backgroundColor: semantic.accentSoft, color: semantic.textPrimary }]}
+                  value={rateStr}
+                  onChangeText={setRateStr}
+                  keyboardType="numeric"
+                  placeholder={t('addTx.calcRatePhLoan')}
+                  placeholderTextColor={semantic.textSecondary}
+                />
               </View>
-              <View style={styles.resultRow}>
-                <Text style={styles.resultLabelSmall}>利息总额</Text>
-                <Text style={styles.resultValueSmall}>{fmt(result.totalInterest)}</Text>
+              <View style={st.col}>
+                <AppText variant="caption" color={semantic.textSecondary} style={st.fieldLabel}>
+                  {t('addTx.calcYears')}
+                </AppText>
+                <TextInput
+                  style={[st.input, { backgroundColor: semantic.accentSoft, color: semantic.textPrimary }]}
+                  value={yearsStr}
+                  onChangeText={setYearsStr}
+                  keyboardType="numeric"
+                  placeholder={t('addTx.calcYearsPhLoan')}
+                  placeholderTextColor={semantic.textSecondary}
+                />
               </View>
             </View>
 
-            <PressableScale style={styles.toggleBtn} activeScale={0.94} onPress={() => setShowSchedule((v) => !v)}>
-              <Text style={styles.toggleBtnText}>{showSchedule ? '收起每月明细' : `查看每月明细（共 ${months} 期）`}</Text>
-              <Ionicons name={showSchedule ? 'chevron-up' : 'chevron-down'} size={16} color={colors.link} />
-            </PressableScale>
-
-            {showSchedule && (
-              <View style={styles.scheduleCard}>
-                <View style={styles.scheduleHeaderRow}>
-                  <Text style={[styles.scheduleCell, styles.scheduleHeaderText, { flex: 0.6 }]}>期数</Text>
-                  <Text style={[styles.scheduleCell, styles.scheduleHeaderText]}>月供</Text>
-                  <Text style={[styles.scheduleCell, styles.scheduleHeaderText]}>本金</Text>
-                  <Text style={[styles.scheduleCell, styles.scheduleHeaderText]}>利息</Text>
-                  <Text style={[styles.scheduleCell, styles.scheduleHeaderText]}>剩余本金</Text>
-                </View>
-                {result.rows.map((r) => (
-                  <View key={r.period} style={styles.scheduleRow}>
-                    <Text style={[styles.scheduleCell, { flex: 0.6 }]}>{r.period}</Text>
-                    <Text style={styles.scheduleCell}>{fmt(r.payment)}</Text>
-                    <Text style={styles.scheduleCell}>{fmt(r.principal)}</Text>
-                    <Text style={styles.scheduleCell}>{fmt(r.interest)}</Text>
-                    <Text style={styles.scheduleCell}>{fmt(r.balance)}</Text>
-                  </View>
-                ))}
+            {/* 还款方式：三选一（选中 = accentSoft 底 + accent 渐变圆点） */}
+            <View>
+              <AppText variant="caption" color={semantic.textSecondary} style={st.fieldLabel}>
+                {t('addTx.loanMethod')}
+              </AppText>
+              <View style={{ gap: spacing.sm }}>
+                {METHODS.map((m) => {
+                  const active = method === m.key;
+                  return (
+                    <PressableScale
+                      key={m.key}
+                      activeScale={0.98}
+                      onPress={() => setMethod(m.key)}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected: active }}
+                      accessibilityLabel={m.label}
+                    >
+                      <View
+                        style={[
+                          st.methodRow,
+                          { backgroundColor: active ? semantic.accentSoft : 'transparent' },
+                        ]}
+                      >
+                        <View style={st.methodText}>
+                          <AppText variant="subhead" weight="600" numberOfLines={1}>
+                            {m.label}
+                          </AppText>
+                          <AppText variant="caption" color={semantic.textSecondary} numberOfLines={1}>
+                            {m.sub}
+                          </AppText>
+                        </View>
+                        <Ionicons
+                          name={active ? 'radio-button-on' : 'radio-button-off'}
+                          size={20}
+                          color={active ? semantic.textPrimary : semantic.textSecondary}
+                        />
+                      </View>
+                    </PressableScale>
+                  );
+                })}
               </View>
-            )}
-          </>
-        ) : (
-          <Text style={styles.hint}>请输入本金、利率和年限</Text>
-        )}
-      </ScrollView>
+            </View>
+          </GlassView>
+
+          {result ? (
+            <GlassView intensity={WEB_GLASS_INTENSITY} radius={26} style={st.card}>
+              <AppText variant="footnote" color={semantic.textSecondary} align="center">
+                {method === 'straight' ? t('addTx.loanFirstPayment') : t('addTx.loanMonthlyPayment')}
+              </AppText>
+              <AppText variant="title2" align="center" style={st.resultValue}>
+                {fmt(result.firstPayment)}
+              </AppText>
+              <View style={[st.divider, { backgroundColor: semantic.hairline }]} />
+              {method === 'straight' && (
+                <View style={st.resultRow}>
+                  <AppText variant="footnote" color={semantic.textSecondary}>
+                    {t('addTx.loanLastPayment')}
+                  </AppText>
+                  <AppText variant="subhead" weight="600">
+                    {fmt(result.lastPayment)}
+                  </AppText>
+                </View>
+              )}
+              <View style={st.resultRow}>
+                <AppText variant="footnote" color={semantic.textSecondary}>
+                  {t('addTx.loanTotalPaid')}
+                </AppText>
+                <AppText variant="subhead" weight="600">
+                  {fmt(result.totalPaid)}
+                </AppText>
+              </View>
+              <View style={st.resultRow}>
+                <AppText variant="footnote" color={semantic.textSecondary}>
+                  {t('addTx.calcTotalInterest')}
+                </AppText>
+                <AppText variant="subhead" weight="600">
+                  {fmt(result.totalInterest)}
+                </AppText>
+              </View>
+
+              {/* 每月明细：玻璃胶囊开关 + 表（表头 caption / 单元格 caption） */}
+              <PressableScale
+                style={{ marginTop: spacing.md }}
+                activeScale={0.97}
+                onPress={() => setShowSchedule((v) => !v)}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  showSchedule
+                    ? t('addTx.loanScheduleHide')
+                    : t('addTx.loanScheduleShow', { count: months })
+                }
+              >
+                <GlassView intensity={WEB_GLASS_INTENSITY} radius={999} style={st.toggleBtn} shadow={false}>
+                  <AppText variant="subhead" weight="600" align="center" numberOfLines={2}>
+                    {showSchedule
+                      ? t('addTx.loanScheduleHide')
+                      : t('addTx.loanScheduleShow', { count: months })}
+                  </AppText>
+                  <Ionicons name={showSchedule ? 'chevron-up' : 'chevron-down'} size={18} color={semantic.textSecondary} />
+                </GlassView>
+              </PressableScale>
+
+              {showSchedule && (
+                <View style={{ marginTop: spacing.md }}>
+                  <View style={[st.scheduleRow, st.scheduleHeader]}>
+                    <AppText variant="caption" color={semantic.textSecondary} style={[st.scheduleCell, st.periodCell]}>
+                      {t('addTx.loanSchedulePeriod')}
+                    </AppText>
+                    <AppText variant="caption" color={semantic.textSecondary} style={st.scheduleCell}>
+                      {t('addTx.loanSchedulePayment')}
+                    </AppText>
+                    <AppText variant="caption" color={semantic.textSecondary} style={st.scheduleCell}>
+                      {t('addTx.loanSchedulePrincipal')}
+                    </AppText>
+                    <AppText variant="caption" color={semantic.textSecondary} style={st.scheduleCell}>
+                      {t('addTx.loanScheduleInterest')}
+                    </AppText>
+                    <AppText variant="caption" color={semantic.textSecondary} style={st.scheduleCell}>
+                      {t('addTx.loanScheduleBalance')}
+                    </AppText>
+                  </View>
+                  {result.rows.map((r) => (
+                    <View key={r.period} style={st.scheduleRow}>
+                      <AppText variant="caption" style={[st.scheduleCell, st.periodCell]}>
+                        {r.period}
+                      </AppText>
+                      <AppText variant="caption" style={st.scheduleCell}>
+                        {fmt(r.payment)}
+                      </AppText>
+                      <AppText variant="caption" style={st.scheduleCell}>
+                        {fmt(r.principal)}
+                      </AppText>
+                      <AppText variant="caption" style={st.scheduleCell}>
+                        {fmt(r.interest)}
+                      </AppText>
+                      <AppText variant="caption" style={st.scheduleCell}>
+                        {fmt(r.balance)}
+                      </AppText>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </GlassView>
+          ) : (
+            <AppText variant="footnote" color={semantic.textSecondary} align="center" style={st.hint}>
+              {t('addTx.calcEnterHint')}
+            </AppText>
+          )}
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-function makeStyles(colors: ThemeColors) {
-  return StyleSheet.create({
-    container: { flex: 1 },
-    header: { height: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20 },
-    title: { fontSize: 17, fontWeight: '700', color: colors.textPrimary },
-    label: { fontSize: 12, color: colors.textTertiary, marginTop: 16, marginBottom: 8 },
-    input: {
-      backgroundColor: colors.card,
-      borderRadius: 10,
-      borderWidth: 1,
-      borderColor: colors.dividerHair,
-      padding: 12,
-      fontSize: 15,
-      color: colors.textPrimary,
-    },
-    methodRow: { flexDirection: 'row', gap: 8 },
-    methodBtn: {
-      flex: 1,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: colors.dividerHair,
-      backgroundColor: colors.card,
-      paddingVertical: 10,
-      paddingHorizontal: 6,
-      alignItems: 'center',
-    },
-    methodBtnActive: { borderColor: colors.link, backgroundColor: colors.link + '14' },
-    methodText: { fontSize: 12, fontWeight: '700', color: colors.textPrimary, lineHeight: 18, textAlign: 'center' },
-    methodTextActive: { color: colors.link },
-    methodSub: { fontSize: 10, fontWeight: '400', color: colors.textTertiary },
-    resultCard: { backgroundColor: colors.card, borderRadius: 14, padding: 16, marginTop: 24 },
-    resultRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 4 },
-    resultLabel: { fontSize: 14, color: colors.textSecondary },
-    resultValue: { fontSize: 20, fontWeight: '700', color: colors.textPrimary },
-    resultLabelSmall: { fontSize: 12, color: colors.textTertiary },
-    resultValueSmall: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
-    divider: { height: 1, backgroundColor: colors.dividerHair, marginVertical: 10 },
-    toggleBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 6,
-      paddingVertical: 14,
-    },
-    toggleBtnText: { fontSize: 13, fontWeight: '600', color: colors.link },
-    scheduleCard: { backgroundColor: colors.card, borderRadius: 14, padding: 12, marginBottom: 20 },
-    scheduleHeaderRow: {
-      flexDirection: 'row',
-      paddingBottom: 8,
-      marginBottom: 4,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.dividerHair,
-    },
-    scheduleHeaderText: { fontWeight: '700', color: colors.textTertiary },
-    scheduleRow: { flexDirection: 'row', paddingVertical: 6 },
-    scheduleCell: { flex: 1, fontSize: 11, color: colors.textPrimary },
-    hint: { fontSize: 13, color: colors.textTertiary, textAlign: 'center', marginTop: 40 },
-  });
-}
+const st = StyleSheet.create({
+  container: { flex: 1 },
+  flex: { flex: 1 },
+  headerGlass: { position: 'absolute', width: 44, height: 44 },
+  headerGlassInner: { width: 44, height: 44 },
+  card: { padding: 16 },
+  fieldLabel: { marginBottom: 6 },
+  // 胶囊输入框（§2：输入框 radius 999）
+  input: {
+    height: 50,
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    fontSize: 15,
+  },
+  row: { flexDirection: 'row', gap: 12 },
+  col: { flex: 1 },
+  methodRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    minHeight: 52,
+  },
+  methodText: { flex: 1, minWidth: 0, gap: 2 },
+  resultValue: { marginTop: 6 },
+  divider: { height: 1, marginVertical: 14, alignSelf: 'stretch' },
+  resultRow: { flexDirection: 'row', justifyContent: 'space-between', alignSelf: 'stretch', paddingVertical: 4, gap: 12 },
+  toggleBtn: {
+    minHeight: 46,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  scheduleRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 3 },
+  scheduleHeader: { paddingBottom: 6 },
+  scheduleCell: { flex: 1, textAlign: 'right' },
+  periodCell: { flex: 0.6, textAlign: 'left' },
+  hint: { marginTop: 24 },
+});

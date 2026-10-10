@@ -2,14 +2,24 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Keyboard,
-  Text,
   StyleSheet,
   TextInput,
   TouchableOpacity,
   ScrollView,
   Pressable,
   Modal,
+  Platform,
 } from 'react-native';
+
+/**
+ * 玻璃材质（UI V2.1 §2）在 web 上的偏差修正：expo-blur 的 web 实现用「tint 底色」模拟模糊——
+ * tint default + intensity 100 → 叠一层 rgba(255,255,255,.30) 的白，夜间玻璃被洗成中紫，
+ * 规范里的 text.secondary / income / danger 全部跌破 §4 硬指标（实测 2.7–4.2）。
+ * 这里把 web 强度降到 8（白底 2.4%，模糊 1.6px ≈ 不可见），玻璃回到稿里的 rgba(14,10,30,.46) 实色；
+ * iOS 仍用 GlassView 默认 100（真材质），Android 本来就没有模糊。
+ */
+const WEB_GLASS_INTENSITY = Platform.OS === 'web' ? 8 : undefined;
+import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,15 +32,18 @@ import {
 import { useApp } from '../context/AppContext';
 import { useDialog } from '../components/AppDialog';
 import { useTheme } from '../theme/useTheme';
+import { useLayout } from '../theme/useLayout';
 import { useTabClearance } from '../hooks/useTabClearance';
 import { useTabBarScrollHandler } from '../context/TabBarAutoHideContext';
 import { EXPENSE_CATEGORY_GROUPS, INCOME_CATEGORY_GROUPS } from '../utils/defaultCategories';
-import { ThemeColors } from '../theme/theme';
+import { Spacing } from '../theme/theme';
 import { Category } from '../types';
 import { useT } from '../i18n/LanguageContext';
 import { getCategoryLabel, getGroupLabel } from '../i18n/categories';
 import { hapticWarning, hapticSuccess } from '../utils/haptics';
 import PressableScale from '../components/PressableScale';
+import SegmentedControl from '../components/SegmentedControl';
+import { AppText, GlassView, HeroGradient, IconCircle, ScreenHeader } from '../components/ui';
 // 图标/颜色池抽到公共常量（选择类别页的内联添加也用同一份，防两处漂移）
 import { CATEGORY_ICON_OPTIONS, CATEGORY_COLOR_OPTIONS, CategoryIconName } from '../constants/categoryAddOptions';
 
@@ -41,6 +54,34 @@ const GROUP_ORDER_KEY = '@jizhang/categoryGroupOrder';
 
 type CategorySection = { group: string; items: Category[]; custom?: boolean };
 
+/** UI V2.1 玻璃二级页头：ScreenHeader 的返回键是透明 44 触控区，这里在它底下垫一枚 44 玻璃圆钮（稿） */
+function GlassBackHeader({
+  title,
+  onBack,
+  right,
+}: {
+  title: string;
+  onBack: () => void;
+  right?: React.ReactNode;
+}) {
+  const { spacing } = useTheme();
+  const { pagePadding } = useLayout();
+  return (
+    <View>
+      <View pointerEvents="none" style={[glassHeaderStyles.glass, { left: pagePadding, top: spacing.sm }]}>
+        <GlassView intensity={WEB_GLASS_INTENSITY} radius={999} style={glassHeaderStyles.glassInner} />
+      </View>
+      <ScreenHeader variant="compact" title={title} onBack={onBack} right={right} />
+    </View>
+  );
+}
+
+/** 玻璃页头里那枚 44 圆钮的纯几何（与 ScreenHeader 左侧槽位对齐；颜色/材质在 GlassView 内） */
+const glassHeaderStyles = StyleSheet.create({
+  glass: { position: 'absolute', width: 44, height: 44 },
+  glassInner: { width: 44, height: 44 },
+});
+
 // 组内排序：按持久化的 order 编号排（没编号的排最后），编号只在本组内比较
 function sortByOrder(items: Category[], order: Record<string, number>): Category[] {
   return [...items].sort((a, b) => (order[a.id] ?? 9999) - (order[b.id] ?? 9999));
@@ -48,13 +89,15 @@ function sortByOrder(items: Category[], order: Record<string, number>): Category
 
 export default function CategoryManagementScreen({ navigation, route }: any) {
   const { categories, categoryGroups, addCategory, addCategoryGroup, updateCategory, deleteCategory, deleteCategoryGroup } = useApp();
-  const { colors } = useTheme();
+  const { semantic, spacing, gradients, isDark } = useTheme();
+  const { pagePadding } = useLayout();
+  // 玻璃卡上的次要字色（§4 硬指标）：夜间玻璃被 web BlurView 洗亮，70% 白的 text.secondary 只有 ~4.2
   const t = useT();
   const dialog = useDialog(); // 主题化弹窗（替代系统 Alert）
   const tabClearance = useTabClearance();
   const onTabScroll = useTabBarScrollHandler();
   // 样式表记忆化：转场期间 blur/focus 重渲染不再重建 60+ 条样式
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const styles = useMemo(() => makeStyles(semantic, spacing), [semantic, spacing]);
   // 选择模式：财务规划的计划表单跳进来时带 selectMode=true——此时点分类是"选中并返回"，
   // 不进入管理交互（删除徽章隐藏、添加入口保留），选中后 navigate 回传 pickedCategoryId
   const selectMode = !!(route?.params && route.params.selectMode);
@@ -223,18 +266,19 @@ export default function CategoryManagementScreen({ navigation, route }: any) {
         onLongPress={drag}
         delayLongPress={150}
       >
-        <View style={[styles.reorderIconCircle, { backgroundColor: c.color + '22' }]}>
-          <Ionicons name={c.icon as CategoryIconName} size={20} color={c.color} />
-        </View>
-        <Text style={styles.reorderLabel}>{getCategoryLabel(c, t)}</Text>
+        {/* UI V2.1 §5：立体光泽球 */}
+        <IconCircle size={36} color={c.color} icon={c.icon as CategoryIconName} />
+        <AppText variant="subhead" weight="600" numberOfLines={1} style={styles.reorderLabel}>
+          {getCategoryLabel(c, t)}
+        </AppText>
         <TouchableOpacity
           style={styles.reorderDeleteBadge}
           hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
           onPress={() => handleDeleteCategory(c.id, c.name)}
         >
-          <Ionicons name="remove-circle" size={16} color={colors.expense} />
+          <Ionicons name="remove-circle" size={18} color={semantic.danger} />
         </TouchableOpacity>
-        <Ionicons name="reorder-three-outline" size={22} color={colors.textTertiary} />
+        <Ionicons name="reorder-three-outline" size={22} color={semantic.textTertiary} />
       </TouchableOpacity>
     </ScaleDecorator>
   );
@@ -244,25 +288,27 @@ export default function CategoryManagementScreen({ navigation, route }: any) {
     const { group, items, custom } = item;
     return (
       <ScaleDecorator>
-        <View style={[styles.groupCard, isActive && styles.groupCardActive]}>
+        <GlassView intensity={WEB_GLASS_INTENSITY} radius={26} style={isActive ? [styles.groupCard, { opacity: 0.85 }] : styles.groupCard}>
           <TouchableOpacity
             style={styles.groupHeader}
             activeOpacity={0.8}
             onLongPress={drag}
             delayLongPress={150}
           >
-            <Ionicons name="reorder-three-outline" size={16} color={colors.textTertiary} style={styles.groupDragHandle} />
-            <Text style={styles.groupTitle}>{getGroupLabel(group, t)}</Text>
+            <Ionicons name="reorder-three-outline" size={16} color={semantic.textTertiary} style={styles.groupDragHandle} />
+            <AppText variant="subhead" weight="600" style={styles.groupTitle}>{getGroupLabel(group, t)}</AppText>
             {custom && (
               <TouchableOpacity
                 style={styles.groupDeleteBtn}
                 hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                 onPress={() => handleDeleteGroup(group, items)}
               >
-                <Ionicons name="trash-outline" size={15} color={colors.expense} />
+                <Ionicons name="trash-outline" size={18} color={semantic.danger} />
               </TouchableOpacity>
             )}
-            <Text style={styles.groupCount}>{t('addTx.itemsUnit', { count: items.length })}</Text>
+            <AppText variant="caption2" color={semantic.textSecondary} style={styles.groupCount}>
+              {t('addTx.itemsUnit', { count: items.length })}
+            </AppText>
           </TouchableOpacity>
 
           {items.length > 0 ? (
@@ -275,48 +321,55 @@ export default function CategoryManagementScreen({ navigation, route }: any) {
               />
             </View>
           ) : (
-            <Text style={styles.groupEmpty}>{t('addTx.emptySubcats')}</Text>
+            <AppText variant="footnote" color={semantic.textSecondary} style={styles.groupEmpty}>
+              {t('addTx.emptySubcats')}
+            </AppText>
           )}
-        </View>
+        </GlassView>
       </ScaleDecorator>
     );
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}
+    <SafeAreaView style={[styles.container, { backgroundColor: semantic.bg }]} edges={['top']}
       onTouchStart={() => { Keyboard.dismiss(); }}
     >
-      {/* 顶栏与"记一笔"同款：圆环返回键 + 标题 + 右侧编辑切换（原生 header 已关闭） */}
-      <View style={styles.topBar}>
-        <PressableScale
-          style={styles.topBackBtn}
-          activeScale={0.92}
-          onPress={() => navigation?.goBack()}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Ionicons name="chevron-back" size={22} color={colors.icon} />
-        </PressableScale>
-        <Text style={styles.topBarTitle}>
-          {/* 选择模式进来（财务规划/记一笔添加分类）显示"选择类别"，与设置项管理入口区分 */}
-          {selectMode ? t('addTx.selectCategory') : t('addTx.categoryMgmt')}
-        </Text>
-        <PressableScale
-          style={[styles.editToggleBtn, reorderMode && styles.editToggleBtnActive]}
-          activeScale={0.92}
-          onPress={() => setReorderMode((prev) => !prev)}
-        >
-          <Ionicons name={reorderMode ? 'checkmark-outline' : 'reorder-three-outline'} size={15} color={reorderMode ? colors.fabIcon : colors.link} />
-          <Text style={[styles.editToggleText, reorderMode && { color: colors.fabIcon }]}>{reorderMode ? t('common.done') : t('addTx.edit')}</Text>
-        </PressableScale>
-      </View>
+      {/* UI V2.1 §1：渐变铺满整页，一切卡片浮在渐变上 */}
+      <HeroGradient fill />
+      {/* 玻璃二级页头：返回 + 居中标题 + 右侧「编辑 / 完成」玻璃胶囊 */}
+      <GlassBackHeader
+        title={selectMode ? t('addTx.selectCategory') : t('addTx.categoryMgmt')}
+        onBack={() => navigation?.goBack()}
+        right={
+          <PressableScale
+            activeScale={0.95}
+            onPress={() => setReorderMode((prev) => !prev)}
+            accessibilityRole="button"
+            accessibilityLabel={reorderMode ? t('common.done') : t('addTx.edit')}
+          >
+            <GlassView intensity={WEB_GLASS_INTENSITY} radius={999} style={styles.editPill}>
+              <Ionicons
+                name={reorderMode ? 'checkmark-outline' : 'reorder-three-outline'}
+                size={15}
+                color={semantic.textPrimary}
+              />
+              <AppText variant="caption" weight="600" color={semantic.textPrimary}>
+                {reorderMode ? t('common.done') : t('addTx.edit')}
+              </AppText>
+            </GlassView>
+          </PressableScale>
+        }
+      />
       {reorderMode ? (
         // 编辑排列模式：整页变成一个可拖拽列表，长按组标题拖大分组、长按组内条目拖子分类
         <NestableScrollContainer
           onScroll={onTabScroll ?? undefined}
           scrollEventThrottle={16}
-          contentContainerStyle={{ paddingBottom: tabClearance }}
+          contentContainerStyle={{ paddingBottom: tabClearance, paddingHorizontal: pagePadding }}
         >
-          <Text style={styles.reorderHint}>{t('addTx.reorderHint')}</Text>
+          <AppText variant="footnote" color={semantic.textSecondary} style={styles.reorderHint}>
+            {t('addTx.reorderHint')}
+          </AppText>
           <NestableDraggableFlatList
             data={sections}
             keyExtractor={(s) => s.group}
@@ -325,35 +378,37 @@ export default function CategoryManagementScreen({ navigation, route }: any) {
           />
         </NestableScrollContainer>
       ) : (
-        <ScrollView onScroll={onTabScroll ?? undefined} scrollEventThrottle={16} contentContainerStyle={{ paddingBottom: tabClearance, paddingTop: 2 }}>
-          {/* 顶部 支出/收入 切换：分别编辑对应类型的大组和组内分类（紧贴顶栏，减少顶部留白）。
-              TASK-020 纠偏：selectMode 下隐藏——类型由表单 initialType 定死（进来只显示该类型的类别），
-              管理模式保留切换 */}
+        <ScrollView
+          onScroll={onTabScroll ?? undefined}
+          scrollEventThrottle={16}
+          contentContainerStyle={{ paddingBottom: tabClearance, paddingTop: 2, paddingHorizontal: pagePadding }}
+        >
+          {/* 顶部 支出/收入 切换：玻璃分段控件（V2.1 §2：夜白胶囊 / 日紫胶囊），带各自类别数（稿） */}
           {!selectMode && (
-            <View style={styles.typeSegRow}>
-              {[['expense', t('addTx.expenseTab')], ['income', t('addTx.incomeTab')]].map(([k, label]) => (
-                <PressableScale
-                  key={k}
-                  style={[styles.typeSegBtn, manageType === k && styles.typeSegBtnActive]}
-                  activeScale={0.95}
-                  onPress={() => {
-                    setManageType(k as 'expense' | 'income');
-                    setReorderMode(false);
-                  }}
-                >
-                  <Text style={[styles.typeSegText, manageType === k && styles.typeSegTextActive]}>{label}</Text>
-                </PressableScale>
-              ))}
+            <View style={styles.typeSegWrap}>
+              <SegmentedControl
+                stretch
+                appearance="glass"
+                options={[
+                  { label: t('addTx.expenseTabCount', { count: categories.filter((c) => c.type === 'expense').length }), value: 'expense' },
+                  { label: t('addTx.incomeTabCount', { count: categories.filter((c) => c.type === 'income').length }), value: 'income' },
+                ]}
+                selected={manageType}
+                onSelect={(v) => {
+                  setManageType(v as 'expense' | 'income');
+                  setReorderMode(false);
+                }}
+              />
             </View>
           )}
 
-          {/* 每张大组一张卡片：组内成员 + 该组自己的添加入口；自定义组可删除 */}
+          {/* 每张大组一张玻璃卡：组内成员 + 该组自己的添加入口；自定义组可删除 */}
           {sections.map(({ group, items, custom }) => {
             const isAdding = addingGroupName === group;
             // TASK-020③：selectMode 照搬记一笔——折叠状态在 Set 里，点头部行收/展（管理模式不受影响）
             const expanded = !selectMode || !collapsedGroups.has(group);
             return (
-            <View key={group} style={styles.groupCard}>
+            <GlassView intensity={WEB_GLASS_INTENSITY} key={group} radius={26} style={styles.groupCard}>
               {/* TASK-020③：selectMode 头部行照搬记一笔组卡（箭头+组名+＋药丸+🗑+数量胶囊，整行可点收展）；
                   管理模式保持原头部不变 */}
               {selectMode ? (
@@ -369,11 +424,11 @@ export default function CategoryManagementScreen({ navigation, route }: any) {
                   }}
                   hitSlop={{ top: 6, bottom: 6 }}
                 >
-                  <Ionicons name={expanded ? 'chevron-down' : 'chevron-forward'} size={14} color={colors.link} />
-                  <Text style={styles.groupTitle}>{getGroupLabel(group, t)}</Text>
+                  <Ionicons name={expanded ? 'chevron-down' : 'chevron-forward'} size={14} color={semantic.textPrimary} />
+                  <AppText variant="subhead" weight="600" style={styles.groupTitle}>{getGroupLabel(group, t)}</AppText>
                   {/* ＋入口移入标题行（记一笔同款药丸）：点开组内两步小卡 */}
                   <PressableScale
-                    style={styles.catHeaderAddBtn}
+                    style={[styles.catHeaderAddBtn, { backgroundColor: semantic.accentSoft }]}
                     activeScale={0.92}
                     onPress={() => {
                       if (isAdding) {
@@ -388,10 +443,14 @@ export default function CategoryManagementScreen({ navigation, route }: any) {
                     }}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   >
-                    <Ionicons name={isAdding ? 'remove' : 'add'} size={13} color={colors.fabIcon} />
-                    <Text style={styles.catHeaderAddText}>{isAdding ? t('addTx.headerCollapse') : t('addTx.headerAdd')}</Text>
+                    <Ionicons name={isAdding ? 'remove' : 'add'} size={13} color={semantic.textPrimary} />
+                    <AppText variant="caption2" weight="700" color={semantic.textPrimary}>
+                      {isAdding ? t('addTx.headerCollapse') : t('addTx.headerAdd')}
+                    </AppText>
                   </PressableScale>
-                  <Text style={styles.groupCount}>{t('addTx.itemsUnit', { count: items.length })}</Text>
+                  <AppText variant="caption2" color={semantic.textSecondary} style={styles.groupCount}>
+                    {t('addTx.itemsUnit', { count: items.length })}
+                  </AppText>
                   {/* 整组删除入口（记一笔同款：垃圾桶贴数量胶囊右侧；默认组自定义组都可删） */}
                   <PressableScale
                     style={styles.catHeaderDeleteBtn}
@@ -399,27 +458,29 @@ export default function CategoryManagementScreen({ navigation, route }: any) {
                     onPress={() => handleDeleteGroup(group, items)}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   >
-                    <Ionicons name="trash-outline" size={15} color={colors.expense} />
+                    <Ionicons name="trash-outline" size={18} color={semantic.danger} />
                   </PressableScale>
                 </Pressable>
               ) : (
               <View style={styles.groupHeader}>
-                <Text style={styles.groupTitle}>{getGroupLabel(group, t)}</Text>
+                <AppText variant="subhead" weight="600" style={styles.groupTitle}>{getGroupLabel(group, t)}</AppText>
                 <PressableScale
                   style={styles.groupDeleteBtn}
                   activeScale={0.90}
                   hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                   onPress={() => handleDeleteGroup(group, items)}
                 >
-                  <Ionicons name="trash-outline" size={15} color={colors.expense} />
+                  <Ionicons name="trash-outline" size={18} color={semantic.danger} />
                 </PressableScale>
-                <Text style={styles.groupCount}>{t('addTx.itemsUnit', { count: items.length })}</Text>
+                <AppText variant="caption2" color={semantic.textSecondary} style={styles.groupCount}>
+                  {t('addTx.itemsUnit', { count: items.length })}
+                </AppText>
               </View>
               )}
 
               {/* TASK-020③：selectMode 折叠时组内容不渲染（记一笔同款）；管理模式永远显示 */}
               {(expanded || !selectMode) && (items.length > 0 ? (
-                <View style={styles.groupGrid} removeClippedSubviews>
+                <View style={styles.groupGrid}>
                   {items.map((c) => (
                     <View key={c.id} style={styles.gridItem}>
                       {/* 选择模式下整格可点：选中分类并返回表单；管理模式保持纯展示 */}
@@ -435,32 +496,34 @@ export default function CategoryManagementScreen({ navigation, route }: any) {
                             navigation.goBack();
                           }}
                         >
-                          <View style={[styles.gridIconCircle, { backgroundColor: c.color + '22' }]}>
-                            <Ionicons name={c.icon as CategoryIconName} size={22} color={c.color} />
-                          </View>
-                          <Text style={styles.gridLabel} numberOfLines={1} adjustsFontSizeToFit>{getCategoryLabel(c, t)}</Text>
+                          <IconCircle size={52} color={c.color} icon={c.icon as CategoryIconName} />
+                          <AppText variant="caption" numberOfLines={1} style={styles.gridLabel}>
+                            {getCategoryLabel(c, t)}
+                          </AppText>
                         </PressableScale>
                       ) : (
                         <>
-                          <View style={[styles.gridIconCircle, { backgroundColor: c.color + '22' }]}>
-                            <Ionicons name={c.icon as CategoryIconName} size={22} color={c.color} />
-                          </View>
+                          <IconCircle size={52} color={c.color} icon={c.icon as CategoryIconName} />
                           <PressableScale
                             style={styles.gridDeleteBadge}
                             activeScale={0.90}
                             hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                             onPress={() => handleDeleteCategory(c.id, c.name)}
                           >
-                            <Ionicons name="remove-circle" size={16} color={colors.expense} />
+                            <Ionicons name="remove-circle" size={18} color={semantic.danger} />
                           </PressableScale>
-                          <Text style={styles.gridLabel} numberOfLines={1} adjustsFontSizeToFit>{getCategoryLabel(c, t)}</Text>
+                          <AppText variant="caption" numberOfLines={1} style={styles.gridLabel}>
+                            {getCategoryLabel(c, t)}
+                          </AppText>
                         </>
                       )}
                     </View>
                   ))}
                 </View>
               ) : (
-                <Text style={styles.groupEmpty}>{t('addTx.noCatsAddHint')}</Text>
+                <AppText variant="footnote" color={semantic.textSecondary} style={styles.groupEmpty}>
+                  {t('addTx.noCatsAddHint')}
+                </AppText>
               ))}
 
               {/* 该组的添加入口：TASK-020③ selectMode 照搬记一笔两步小卡（图标预览+名称+✓ + 16 色格，
@@ -469,41 +532,57 @@ export default function CategoryManagementScreen({ navigation, route }: any) {
                 <View style={styles.catInlineCard}>
                   <View style={styles.catInlineNameRow}>
                     <PressableScale
-                      style={styles.catIconPreviewBtn}
+                      style={[styles.catIconPreviewBtn, { backgroundColor: semantic.accentSoft }]}
                       activeScale={0.94}
                       onPress={() => setIconPickerOpen(true)}
                     >
-                      <Ionicons name={inlineIcon} size={22} color={colors.textPrimary} />
+                      <Ionicons name={inlineIcon} size={22} color={semantic.textPrimary} />
                     </PressableScale>
                     <TextInput
-                      style={styles.catInlineInput}
+                      style={[styles.catInlineInput, { backgroundColor: semantic.accentSoft, color: semantic.textPrimary }]}
                       value={inlineName}
                       onChangeText={setInlineName}
                       placeholder={t('addTx.inlineAddPlaceholder', { group })}
-                      placeholderTextColor={colors.textTertiary}
+                      placeholderTextColor={semantic.textSecondary}
                       maxLength={10}
                       autoFocus
                     />
+                    {/* 保存方键 = accent 渐变（§3：渐变实心按钮保持白字） */}
                     <PressableScale
-                      style={[styles.catInlineSaveSquare, !inlineName.trim() && { opacity: 0.35 }]}
                       activeScale={0.94}
                       disabled={!inlineName.trim()}
                       onPress={() => handleInlineAdd(group)}
+                      accessibilityRole="button"
+                      accessibilityLabel={t('common.done')}
                     >
-                      <Ionicons name="checkmark" size={20} color={colors.fabIcon} />
+                      <LinearGradient
+                        colors={gradients.accent.colors}
+                        locations={gradients.accent.locations as [number, number, ...number[]]}
+                        start={gradients.accent.start}
+                        end={gradients.accent.end}
+                        style={[styles.catInlineSaveSquare, !inlineName.trim() && { opacity: 0.45 }]}
+                      >
+                        <Ionicons name="checkmark" size={20} color={semantic.onAccent} />
+                      </LinearGradient>
                     </PressableScale>
                   </View>
                   {/* 16 色直接铺 2 排（每排 8 个）——记一笔同款 */}
                   <View style={styles.catMiniColorsGrid}>
                     {COLOR_OPTIONS.map((color) => (
-                      <TouchableOpacity
+                      <PressableScale
                         key={color}
                         style={[
                           styles.catMiniColorDot,
                           { backgroundColor: color },
-                          inlineColor === color && styles.catMiniColorDotActive,
+                          inlineColor === color && {
+                            boxShadow: `0px 0px 0px 2px ${semantic.bg}, 0px 0px 0px 4px ${color}`,
+                          },
                         ]}
+                        activeScale={0.92}
                         onPress={() => setInlineColor(color)}
+                        accessibilityRole="radio"
+                        accessibilityState={{ selected: inlineColor === color }}
+                        accessibilityLabel={color}
                       />
                     ))}
                   </View>
@@ -511,92 +590,128 @@ export default function CategoryManagementScreen({ navigation, route }: any) {
               ) : isAdding ? (
                 <View style={styles.inlineAddCard}>
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, { backgroundColor: semantic.accentSoft, color: semantic.textPrimary }]}
                     value={inlineName}
                     onChangeText={setInlineName}
                     placeholder={t('addTx.inlineAddPlaceholder', { group })}
-                    placeholderTextColor={colors.textTertiary}
+                    placeholderTextColor={semantic.textSecondary}
                     maxLength={10}
                     autoFocus
                   />
-                  <Text style={styles.pickerLabel}>{t('ledger.iconLabel')}</Text>
+                  <AppText variant="caption" color={semantic.textSecondary} style={styles.pickerLabel}>
+                    {t('ledger.iconLabel')}
+                  </AppText>
                   <View style={styles.pickerRow}>
                     {ICON_OPTIONS.map((icon) => (
                       <PressableScale
                         key={icon}
-                        style={[styles.iconOption, inlineIcon === icon && styles.iconOptionActive]}
+                        style={[
+                          styles.iconOption,
+                          { backgroundColor: semantic.accentSoft },
+                          inlineIcon === icon && { borderWidth: 2, borderColor: semantic.accentText },
+                        ]}
                         activeScale={0.92}
                         onPress={() => setInlineIcon(icon)}
                       >
-                        <Ionicons name={icon} size={16} color={colors.textPrimary} />
+                        <Ionicons name={icon} size={16} color={semantic.textPrimary} />
                       </PressableScale>
                     ))}
                   </View>
-                  <Text style={styles.pickerLabel}>{t('ledger.colorLabel')}</Text>
+                  <AppText variant="caption" color={semantic.textSecondary} style={styles.pickerLabel}>
+                    {t('ledger.colorLabel')}
+                  </AppText>
                   <View style={styles.pickerRow}>
                     {COLOR_OPTIONS.map((color) => (
-                      <TouchableOpacity
+                      <PressableScale
                         key={color}
-                        style={[styles.colorOption, { backgroundColor: color }, inlineColor === color && styles.colorOptionActive]}
+                        style={[
+                          styles.colorOption,
+                          { backgroundColor: color },
+                          inlineColor === color && {
+                            boxShadow: `0px 0px 0px 2px ${semantic.bg}, 0px 0px 0px 4px ${color}`,
+                          },
+                        ]}
+                        activeScale={0.92}
                         onPress={() => setInlineColor(color)}
+                        accessibilityRole="radio"
+                        accessibilityState={{ selected: inlineColor === color }}
+                        accessibilityLabel={color}
                       />
                     ))}
                   </View>
                   <View style={styles.inlineBtnRow}>
                     <PressableScale style={styles.cancelBtn} activeScale={0.94} onPress={() => setAddingGroupName(null)}>
-                      <Text style={styles.cancelBtnText}>{t('common.cancel')}</Text>
+                      <AppText variant="subhead" color={semantic.textSecondary}>{t('common.cancel')}</AppText>
                     </PressableScale>
                     <PressableScale
-                      style={[styles.saveBtn, { flex: 1 }, !inlineName.trim() && { opacity: 0.4 }]}
-                      activeScale={0.94}
+                      style={{ flex: 1, opacity: !inlineName.trim() ? 0.45 : 1 }}
+                      activeScale={0.97}
                       disabled={!inlineName.trim()}
                       onPress={() => handleInlineAdd(group)}
+                      accessibilityRole="button"
+                      accessibilityLabel={t('addTx.addToGroup', { group })}
                     >
-                      <Text style={styles.saveBtnText}>{t('addTx.addToGroup', { group })}</Text>
+                      <LinearGradient
+                        colors={gradients.accent.colors}
+                        locations={gradients.accent.locations as [number, number, ...number[]]}
+                        start={gradients.accent.start}
+                        end={gradients.accent.end}
+                        style={styles.saveBtnFill}
+                      >
+                        <AppText variant="subhead" weight="600" color={semantic.onAccent} numberOfLines={1}>
+                          {t('addTx.addToGroup', { group })}
+                        </AppText>
+                      </LinearGradient>
                     </PressableScale>
                   </View>
                 </View>
               ) : (
                 /* TASK-020 纠偏：selectMode 不再渲染底部「添加」入口行——添加入口已在组卡标题行＋里
-                    （长表单分支只在管理模式出现，selectMode 到这里就是收尾，不渲染任何东西） */
+                   （长表单分支只在管理模式出现，selectMode 到这里就是收尾，不渲染任何东西） */
                 !selectMode && (
                   <PressableScale
-                    style={styles.inlineAddEntry}
+                    style={[styles.inlineAddEntry, { backgroundColor: semantic.accentSoft }]}
                     activeScale={0.97}
                     onPress={() => {
                       setInlineName('');
                       setAddingGroupName(group);
                     }}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('common.add')}
                   >
-                    <Ionicons name="add-circle-outline" size={17} color={colors.link} />
-                    <Text style={styles.inlineAddEntryText}>{t('common.add')}</Text>
+                    <Ionicons name="add-circle-outline" size={17} color={semantic.textPrimary} />
+                    <AppText variant="footnote" weight="600" color={semantic.textPrimary} style={styles.inlineAddEntryText}>
+                      {t('common.add')}
+                    </AppText>
                   </PressableScale>
                 )
               )}
-            </View>
+            </GlassView>
           );
           })
           }
           {/* 新增大分类 */}
           {newGroupFormOpen ? (
-            <View style={[styles.groupCard, styles.newGroupCard]}>
-              <Text style={styles.newCatTitle}>{t('addTx.addGroup')}</Text>
+            <GlassView intensity={WEB_GLASS_INTENSITY} radius={26} style={[styles.groupCard, styles.newGroupCard]}>
+              <AppText variant="subhead" weight="600" style={styles.newCatTitle}>
+                {t('addTx.addGroup')}
+              </AppText>
               <TextInput
-                style={styles.input}
+                style={[styles.input, { backgroundColor: semantic.accentSoft, color: semantic.textPrimary }]}
                 value={newGroupName}
                 onChangeText={setNewGroupName}
                 placeholder={t('addTx.groupNamePlaceholder')}
-                placeholderTextColor={colors.textTertiary}
+                placeholderTextColor={semantic.textSecondary}
                 maxLength={10}
                 autoFocus
               />
               <View style={styles.inlineBtnRow}>
                 <PressableScale style={styles.cancelBtn} activeScale={0.94} onPress={() => setNewGroupFormOpen(false)}>
-                  <Text style={styles.cancelBtnText}>{t('common.cancel')}</Text>
+                  <AppText variant="subhead" color={semantic.textSecondary}>{t('common.cancel')}</AppText>
                 </PressableScale>
                 <PressableScale
-                  style={[styles.saveBtn, { flex: 1 }, !newGroupName.trim() && { opacity: 0.4 }]}
-                  activeScale={0.94}
+                  style={{ flex: 1, opacity: !newGroupName.trim() ? 0.45 : 1 }}
+                  activeScale={0.97}
                   disabled={!newGroupName.trim()}
                   onPress={() => {
                     const name = newGroupName.trim();
@@ -605,17 +720,38 @@ export default function CategoryManagementScreen({ navigation, route }: any) {
                     setNewGroupName('');
                     setNewGroupFormOpen(false);
                   }}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('addTx.createGroup')}
                 >
-                  <Text style={styles.saveBtnText}>{t('addTx.createGroup')}</Text>
+                  <LinearGradient
+                    colors={gradients.accent.colors}
+                    locations={gradients.accent.locations as [number, number, ...number[]]}
+                    start={gradients.accent.start}
+                    end={gradients.accent.end}
+                    style={styles.saveBtnFill}
+                  >
+                    <AppText variant="subhead" weight="600" color={semantic.onAccent} numberOfLines={1}>
+                      {t('addTx.createGroup')}
+                    </AppText>
+                  </LinearGradient>
                 </PressableScale>
               </View>
-            </View>
+            </GlassView>
           ) : (
-            <PressableScale style={[styles.groupCard, styles.newGroupCard]} activeScale={0.97} onPress={() => setNewGroupFormOpen(true)}>
-              <View style={styles.newGroupEntry}>
-                <Ionicons name="add-circle-outline" size={18} color={colors.link} />
-                <Text style={styles.newGroupEntryText}>{t('addTx.addGroup')}</Text>
-              </View>
+            <PressableScale
+              activeScale={0.97}
+              onPress={() => setNewGroupFormOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel={t('addTx.addGroup')}
+            >
+              <GlassView intensity={WEB_GLASS_INTENSITY} radius={26} style={[styles.groupCard, styles.newGroupCard]}>
+                <View style={styles.newGroupEntry}>
+                  <Ionicons name="add-circle-outline" size={18} color={semantic.textPrimary} />
+                  <AppText variant="subhead" weight="600" color={semantic.textPrimary} style={styles.newGroupEntryText}>
+                    {t('addTx.addGroup')}
+                  </AppText>
+                </View>
+              </GlassView>
             </PressableScale>
           )}
         </ScrollView>
@@ -630,35 +766,42 @@ export default function CategoryManagementScreen({ navigation, route }: any) {
         onRequestClose={() => setIconPickerOpen(false)}
       >
         <Pressable style={styles.iconPickerOverlay} onPress={() => setIconPickerOpen(false)}>
-          <Pressable style={styles.iconPickerSheet} onPress={() => {}}>
-            <View style={styles.iconPickerHeader}>
-              <Text style={styles.iconPickerTitle}>{t('addTx.pickIconTitle')}</Text>
-              <PressableScale
-                style={styles.iconPickerClose}
-                activeScale={0.92}
-                onPress={() => setIconPickerOpen(false)}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <Ionicons name="close" size={18} color={colors.textSecondary} />
-              </PressableScale>
-            </View>
-            <ScrollView style={styles.iconPickerGrid} keyboardShouldPersistTaps="handled">
-              <View style={styles.iconPickerGridInner}>
-                {ICON_OPTIONS.map((icon) => (
-                  <PressableScale
-                    key={icon}
-                    style={[styles.iconPickerCell, inlineIcon === icon && styles.iconPickerCellActive]}
-                    activeScale={0.9}
-                    onPress={() => {
-                      setInlineIcon(icon);
-                      setIconPickerOpen(false);
-                    }}
-                  >
-                    <Ionicons name={icon} size={22} color={inlineIcon === icon ? colors.link : colors.textPrimary} />
-                  </PressableScale>
-                ))}
+          <Pressable style={{ width: '100%' }} onPress={() => {}}>
+            <GlassView intensity={WEB_GLASS_INTENSITY} radius={0} style={styles.iconPickerSheet}>
+              <View style={styles.iconPickerHeader}>
+                <AppText variant="headline">{t('addTx.pickIconTitle')}</AppText>
+                <PressableScale
+                  style={[styles.iconPickerClose, { backgroundColor: semantic.accentSoft }]}
+                  activeScale={0.92}
+                  onPress={() => setIconPickerOpen(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('common.close')}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Ionicons name="close" size={18} color={semantic.textSecondary} />
+                </PressableScale>
               </View>
-            </ScrollView>
+              <ScrollView style={styles.iconPickerGrid} keyboardShouldPersistTaps="handled">
+                <View style={styles.iconPickerGridInner}>
+                  {ICON_OPTIONS.map((icon) => (
+                    <PressableScale
+                      key={icon}
+                      style={[
+                        styles.iconPickerCell,
+                        inlineIcon === icon && { backgroundColor: semantic.accentSoft },
+                      ]}
+                      activeScale={0.9}
+                      onPress={() => {
+                        setInlineIcon(icon);
+                        setIconPickerOpen(false);
+                      }}
+                    >
+                      <Ionicons name={icon} size={22} color={inlineIcon === icon ? semantic.accentText : semantic.textPrimary} />
+                    </PressableScale>
+                  ))}
+                </View>
+              </ScrollView>
+            </GlassView>
           </Pressable>
         </Pressable>
       </Modal>
@@ -666,152 +809,110 @@ export default function CategoryManagementScreen({ navigation, route }: any) {
   );
 }
 
-function makeStyles(colors: ThemeColors) {
+function makeStyles(semantic: ReturnType<typeof useTheme>['semantic'], spacing: Spacing) {
   return StyleSheet.create({
     container: { flex: 1 },
-    editToggleBtn: {
+    // 玻璃页头：透明返回键底下那枚 44 玻璃圆钮（与 ScreenHeader 左侧槽位对齐）
+    headerGlass: { position: 'absolute', width: 44, height: 44 },
+    headerGlassInner: { width: 44, height: 44 },
+    // 右侧「编辑 / 完成」玻璃胶囊（稿：高 40 / padding 0 14 / radius 999）
+    editPill: {
+      height: 40,
+      paddingHorizontal: 14,
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: colors.bg,
-      borderWidth: 1,
-      borderColor: colors.dividerHair,
-      borderRadius: 12,
-      paddingHorizontal: 12,
-      paddingVertical: 6,
+      gap: spacing.xs,
     },
-    editToggleBtnActive: { backgroundColor: colors.fabBg, borderColor: colors.fabBg },
-    // 顶栏：与"记一笔"同款——圆环返回键 + 居中标题 + 右侧编辑切换
-    topBar: { height: 52, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16 },
-    topBackBtn: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
-      borderWidth: 1.5,
-      borderColor: colors.link,
-      backgroundColor: colors.card,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    topBarTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '700', color: colors.textPrimary },
-    editToggleText: { color: colors.link, fontSize: 13, fontWeight: '700', marginLeft: 4 },
-    // 顶部 支出/收入 分段切换：贴紧顶栏（上移），条本身加高一点更好点
-    typeSegRow: { flexDirection: 'row', backgroundColor: colors.bg, borderRadius: 10, padding: 2, marginBottom: 10 },
-    typeSegBtn: { flex: 1, alignItems: 'center', paddingVertical: 13, borderRadius: 8 },
-    typeSegBtnActive: { backgroundColor: colors.fabBg },
-    typeSegText: { fontSize: 12, color: colors.textSecondary, fontWeight: '600' },
-    typeSegTextActive: { color: colors.fabIcon, fontWeight: '700' },
+    // 顶部 支出/收入 分段：贴紧页头（上移），玻璃槽自带圆角
+    typeSegWrap: { marginBottom: spacing.md },
     groupCard: {
-      backgroundColor: colors.card,
-      borderRadius: 14,
-      marginHorizontal: 20,
-      marginBottom: 12,
-      paddingBottom: 6,
-      overflow: 'hidden',
+      marginBottom: spacing.md,
+      paddingBottom: spacing.xs + 2,
     },
-    groupCardActive: { opacity: 0.85, borderColor: colors.fabBg },
-    groupHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 11 },
-    groupDragHandle: { marginRight: 6 },
-    groupTitle: { fontSize: 13, fontWeight: '700', color: colors.link },
-    groupDeleteBtn: { marginLeft: 8 },
-    groupCount: { marginLeft: 'auto', fontSize: 10, color: colors.textTertiary },
-    reorderHint: { fontSize: 11, color: colors.textTertiary, paddingHorizontal: 20, paddingBottom: 8 },
-    groupGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 8, paddingTop: 4 },
-    gridItem: { width: '33.33%', alignItems: 'center', marginBottom: 16 },
+    groupHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.sm + 3 },
+    groupDragHandle: { marginRight: spacing.xs + 2 },
+    groupTitle: { flexShrink: 1 },
+    groupDeleteBtn: { marginLeft: spacing.sm },
+    groupCount: { marginLeft: 'auto' },
+    reorderHint: { paddingBottom: spacing.sm },
+    groupGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: spacing.sm, paddingTop: spacing.xs },
+    gridItem: { width: '33.33%', alignItems: 'center', marginBottom: spacing.lg },
     // 选择模式下包住图标+文字的可点区域（覆盖整格宽度，方便点按）
     gridSelectWrap: { alignItems: 'center', width: '100%' },
-    gridIconCircle: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center' },
     gridDeleteBadge: { position: 'absolute', top: -4, right: 8 },
-    gridLabel: { fontSize: 12, color: colors.textPrimary, marginTop: 5 },
-    groupEmpty: { fontSize: 11, color: colors.textTertiary, paddingHorizontal: 14, paddingBottom: 10 },
+    gridLabel: { marginTop: 5, textAlign: 'center' },
+    groupEmpty: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
     // ---------- TASK-020③：selectMode 照搬记一笔的两步小卡 + 图标弹层样式（原样搬，防两处漂移） ----------
-    catInlineCard: { paddingHorizontal: 14, paddingBottom: 12, paddingTop: 2 },
+    catInlineCard: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md, paddingTop: spacing.xs },
     catInlineInput: {
       flex: 1,
       minWidth: 0,
-      backgroundColor: colors.bg,
-      borderRadius: 10,
-      borderWidth: 1,
-      borderColor: colors.dividerHair,
-      paddingHorizontal: 12,
-      paddingVertical: 8,
+      borderRadius: 999,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
       fontSize: 14,
-      color: colors.textPrimary,
       textAlign: 'center',
     },
     catIconPreviewBtn: {
       width: 44,
       height: 44,
-      borderRadius: 11,
-      backgroundColor: colors.bg,
-      borderWidth: 1,
-      borderColor: colors.dividerHair,
+      borderRadius: 999,
       alignItems: 'center',
       justifyContent: 'center',
-      marginRight: 8,
+      marginRight: spacing.sm,
     },
     catInlineSaveSquare: {
-      marginLeft: 8,
+      marginLeft: spacing.sm,
       width: 38,
       height: 38,
-      borderRadius: 11,
-      backgroundColor: colors.fabBg,
+      borderRadius: 999,
       alignItems: 'center',
       justifyContent: 'center',
       flexShrink: 0,
+      overflow: 'hidden',
     },
     catInlineNameRow: { flexDirection: 'row', alignItems: 'center' },
     catMiniColorsGrid: {
       flexDirection: 'row',
       flexWrap: 'wrap',
-      marginTop: 10,
+      marginTop: spacing.sm + 2,
       paddingHorizontal: 2,
     },
-    catMiniColorDot: { width: 26, height: 26, borderRadius: 13, marginRight: 10, marginBottom: 8 },
-    catMiniColorDotActive: { borderWidth: 2, borderColor: colors.textPrimary },
+    catMiniColorDot: { width: 26, height: 26, borderRadius: 999, marginRight: 10, marginBottom: spacing.sm },
     // 标题行药丸「新增」键 + 垃圾桶（记一笔同款规格）
     catHeaderAddBtn: {
       flexDirection: 'row',
       alignItems: 'center',
       height: 24,
       borderRadius: 12,
-      backgroundColor: colors.fabBg,
       paddingHorizontal: 9,
-      marginLeft: 8,
+      marginLeft: spacing.sm,
       gap: 2,
-      shadowColor: colors.fabBg,
-      shadowOpacity: 0.35,
-      shadowRadius: 4,
-      shadowOffset: { width: 0, height: 2 },
-      elevation: 3,
     },
-    catHeaderAddText: { color: colors.fabIcon, fontSize: 11, fontWeight: '700' },
-    catHeaderDeleteBtn: { marginLeft: 8, padding: 2 },
+    catHeaderDeleteBtn: { marginLeft: spacing.sm, padding: 2 },
     iconPickerOverlay: {
       flex: 1,
-      backgroundColor: 'rgba(0,0,0,0.45)',
+      backgroundColor: semantic.scrim,
       justifyContent: 'flex-end',
     },
     iconPickerSheet: {
-      backgroundColor: colors.card,
-      borderTopLeftRadius: 20,
-      borderTopRightRadius: 20,
+      borderTopLeftRadius: 28,
+      borderTopRightRadius: 28,
       maxHeight: 520,
-      paddingBottom: 16,
+      paddingBottom: spacing.lg,
     },
     iconPickerHeader: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: 16,
-      paddingTop: 14,
-      paddingBottom: 8,
+      paddingHorizontal: spacing.lg,
+      paddingTop: spacing.md + 2,
+      paddingBottom: spacing.sm,
     },
-    iconPickerTitle: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
     iconPickerClose: {
       width: 30,
       height: 30,
-      borderRadius: 15,
-      backgroundColor: colors.bg,
+      borderRadius: 999,
       alignItems: 'center',
       justifyContent: 'center',
     },
@@ -824,85 +925,75 @@ function makeStyles(colors: ThemeColors) {
       justifyContent: 'center',
       borderRadius: 12,
     },
-    iconPickerCellActive: { backgroundColor: colors.link + '1A' },
     // 编辑排列模式条目
     reorderWrap: { paddingHorizontal: 10 },
     reorderItem: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: colors.bg,
-      borderRadius: 12,
-      paddingVertical: 8,
-      paddingHorizontal: 12,
-      marginBottom: 8,
+      backgroundColor: semantic.accentSoft,
+      borderRadius: 16,
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.md,
+      marginBottom: spacing.sm,
     },
-    reorderIconCircle: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-    reorderLabel: { flex: 1, fontSize: 13, color: colors.textPrimary, fontWeight: '600', marginLeft: 10 },
+    reorderLabel: { flex: 1, marginLeft: spacing.sm + 2 },
     reorderDeleteBadge: { marginRight: 10 },
     // 组内联添加
-    inlineAddCard: { paddingHorizontal: 14, paddingBottom: 8 },
-    inlineBtnRow: { flexDirection: 'row', marginTop: 12 },
-    // 添加入口胶囊行：与记一笔选择类别页的 catAddTile 同观感（link 22% 圆底 + link 文字）
+    inlineAddCard: { paddingHorizontal: spacing.lg, paddingBottom: spacing.sm },
+    inlineBtnRow: { flexDirection: 'row', marginTop: spacing.md, alignItems: 'center' },
+    // 添加入口胶囊行：与记一笔选择类别页的 catAddTile 同观感（accentSoft 圆底 + accentText 文字）
     inlineAddEntry: {
       flexDirection: 'row',
       alignItems: 'center',
       alignSelf: 'center',
-      marginHorizontal: 14,
+      marginHorizontal: spacing.lg,
       marginBottom: 10,
-      marginTop: 2,
+      marginTop: spacing.xs,
       paddingVertical: 9,
       paddingHorizontal: 18,
-      borderRadius: 18,
-      backgroundColor: colors.link + '14',
-      borderWidth: 1,
-      borderColor: colors.link + '33',
+      borderRadius: 999,
     },
-    inlineAddEntryText: { color: colors.link, fontSize: 13, fontWeight: '700', marginLeft: 6 },
-    cancelBtn: { justifyContent: 'center', alignItems: 'center', paddingHorizontal: 18, marginRight: 8 },
-    cancelBtnText: { color: colors.textSecondary, fontSize: 14 },
+    inlineAddEntryText: { marginLeft: spacing.xs + 2 },
+    cancelBtn: { justifyContent: 'center', alignItems: 'center', paddingHorizontal: 18, marginRight: spacing.sm },
     // 新增大分类
-    newGroupCard: { marginTop: 4, padding: 14 },
-    newCatTitle: { fontSize: 13, fontWeight: '700', color: colors.textPrimary, marginBottom: 10 },
+    newGroupCard: { marginTop: spacing.xs, padding: spacing.lg },
+    newCatTitle: { marginBottom: 10 },
     newGroupEntry: {
       flexDirection: 'row',
       alignItems: 'center',
       alignSelf: 'center',
       paddingVertical: 9,
       paddingHorizontal: 18,
-      borderRadius: 18,
-      backgroundColor: colors.link + '14',
-      borderWidth: 1,
-      borderColor: colors.link + '33',
+      borderRadius: 999,
     },
-    newGroupEntryText: { color: colors.link, fontSize: 14, fontWeight: '700', marginLeft: 6 },
+    newGroupEntryText: { marginLeft: spacing.xs + 2 },
     input: {
-      backgroundColor: colors.bg,
-      borderRadius: 10,
-      borderWidth: 1,
-      borderColor: colors.dividerHair,
-      padding: 10,
+      borderRadius: 999,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.md,
       fontSize: 14,
-      color: colors.textPrimary,
-      marginBottom: 12,
+      marginBottom: spacing.md,
     },
-    pickerLabel: { fontSize: 12, color: colors.textTertiary, marginBottom: 8 },
-    pickerRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 12 },
+    pickerLabel: { marginBottom: spacing.sm },
+    pickerRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: spacing.md },
     iconOption: {
       width: 32,
       height: 32,
-      borderRadius: 8,
-      backgroundColor: colors.bg,
-      borderWidth: 1,
-      borderColor: colors.dividerHair,
+      borderRadius: 999,
       alignItems: 'center',
       justifyContent: 'center',
-      marginRight: 6,
-      marginBottom: 6,
+      marginRight: spacing.sm - 2,
+      marginBottom: spacing.sm - 2,
     },
-    iconOptionActive: { borderColor: colors.fabBg, borderWidth: 2 },
-    colorOption: { width: 26, height: 26, borderRadius: 13, marginRight: 8, marginBottom: 6 },
-    colorOptionActive: { borderWidth: 2, borderColor: colors.textPrimary },
-    saveBtn: { backgroundColor: colors.fabBg, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
-    saveBtnText: { color: colors.fabIcon, fontWeight: '700', fontSize: 14 },
+    colorOption: { width: 26, height: 26, borderRadius: 999, marginRight: spacing.sm, marginBottom: spacing.sm - 2 },
+    // 渐变主按钮的填充层（圆角 999 胶囊；文字白字压在上面）
+    saveBtnFill: {
+      minHeight: 44,
+      borderRadius: 999,
+      overflow: 'hidden',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: spacing.xl,
+    },
   });
 }

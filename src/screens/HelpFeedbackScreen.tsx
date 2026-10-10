@@ -1,16 +1,51 @@
 import React, { useState } from 'react';
-import {View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Keyboard } from 'react-native';
+import {
+  View,
+  StyleSheet,
+  TouchableOpacity,
+  ScrollView,
+  TextInput,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+} from 'react-native';
+
+/**
+ * 玻璃材质（UI V2.1 §2）在 web 上的偏差修正：expo-blur 的 web 实现用「tint 底色」模拟模糊——
+ * tint default + intensity 100 → 叠一层 rgba(255,255,255,.30) 的白，夜间玻璃被洗成中紫，
+ * 规范里的 text.secondary / income / danger 全部跌破 §4 硬指标（实测 2.7–4.2）。
+ * 这里把 web 强度降到 8（白底 2.4%，模糊 1.6px ≈ 不可见），玻璃回到稿里的 rgba(14,10,30,.46) 实色；
+ * iOS 仍用 GlassView 默认 100（真材质），Android 本来就没有模糊。
+ */
+const WEB_GLASS_INTENSITY = Platform.OS === 'web' ? 8 : undefined;
+import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/useTheme';
+import { useLayout } from '../theme/useLayout';
 import { useDialog } from '../components/AppDialog';
 import { useT } from '../i18n/LanguageContext';
 import { useTabClearance } from '../hooks/useTabClearance';
 import { useTabBarScrollHandler } from '../context/TabBarAutoHideContext';
 import PressableScale from '../components/PressableScale';
+import { AppText, GlassView, HeroGradient, ScreenHeader } from '../components/ui';
+
+/** UI V2.1 玻璃二级页头：ScreenHeader 的返回键是透明 44 触控区，这里在它底下垫一枚 44 玻璃圆钮（稿） */
+function GlassBackHeader({ title, onBack }: { title: string; onBack: () => void }) {
+  const { spacing } = useTheme();
+  const { pagePadding } = useLayout();
+  return (
+    <View>
+      <View pointerEvents="none" style={[styles.headerGlass, { left: pagePadding, top: spacing.sm }]}>
+        <GlassView intensity={WEB_GLASS_INTENSITY} radius={999} style={styles.headerGlassInner} />
+      </View>
+      <ScreenHeader variant="compact" title={title} onBack={onBack} />
+    </View>
+  );
+}
 
 export default function HelpFeedbackScreen({ navigation }: any) {
-  const { colors } = useTheme();
+  const { semantic, spacing, gradients, isDark } = useTheme();
   const t = useT();
   const dialog = useDialog(); // 主题化弹窗（替代系统 Alert）
   const tabClearance = useTabClearance();
@@ -27,64 +62,99 @@ export default function HelpFeedbackScreen({ navigation }: any) {
   };
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]}>
-      <View style={styles.header}>
-        <PressableScale onPress={() => navigation.goBack()} style={[styles.backBtn, { borderColor: colors.link, backgroundColor: colors.card }]} activeScale={0.92} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="chevron-back" size={22} color={colors.textPrimary} />
-        </PressableScale>
-        <Text style={[styles.title, { color: colors.textPrimary }]}>{t('addTx.helpTitle')}</Text>
-        <View style={{ width: 40 }} />
-      </View>
+    <SafeAreaView style={[styles.container, { backgroundColor: semantic.bg }]} edges={['top']}
+      onTouchStart={() => { Keyboard.dismiss(); }}
+    >
+      <HeroGradient fill />
+      <GlassBackHeader title={t('addTx.helpTitle')} onBack={() => navigation.goBack()} />
 
-      <ScrollView onScroll={onTabScroll ?? undefined} scrollEventThrottle={16} contentContainerStyle={[styles.content, { paddingBottom: tabClearance }]}>
-        <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>{t('addTx.faq')}</Text>
-        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.dividerHair }]}>
-          <Row label={t('addTx.faqAdd')} colors={colors} />
-          <Row label={t('addTx.faqSwitch')} colors={colors} />
-          <Row label={t('addTx.faqAssets')} colors={colors} />
-        </View>
+      {/* 表单页：键盘弹出不遮住输入框与提交键 */}
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView
+          onScroll={onTabScroll ?? undefined}
+          scrollEventThrottle={16}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={[styles.content, { paddingBottom: tabClearance, paddingHorizontal: spacing.xl }]}
+        >
+          <AppText variant="footnote" color={semantic.textSecondary} style={styles.sectionTitle}>
+            {t('addTx.faq')}
+          </AppText>
+          <GlassView intensity={WEB_GLASS_INTENSITY} radius={26} style={styles.card}>
+            <Row label={t('addTx.faqAdd')} muted={semantic.textSecondary} />
+            <Row label={t('addTx.faqSwitch')} muted={semantic.textSecondary} />
+            <Row label={t('addTx.faqAssets')} muted={semantic.textSecondary} />
+          </GlassView>
 
-        <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>{t('addTx.feedbackSection')}</Text>
-        <View style={[styles.feedbackCard, { backgroundColor: colors.card, borderColor: colors.dividerHair }]}>
-          <TextInput
-            value={feedback}
-            onChangeText={setFeedback}
-            placeholder={t('addTx.feedbackPlaceholder')}
-            placeholderTextColor={colors.textTertiary}
-            multiline
-            textAlignVertical="top"
-            style={[styles.input, { color: colors.textPrimary, backgroundColor: colors.bg, borderColor: colors.dividerHair }]}
-          />
-          <PressableScale style={[styles.button, { backgroundColor: colors.fabBg }]} activeScale={0.95} onPress={submitFeedback}>
-            <Text style={[styles.buttonText, { color: colors.bg }]}>{t('addTx.submitFeedback')}</Text>
-          </PressableScale>
-        </View>
-      </ScrollView>
+          <AppText variant="footnote" color={semantic.textSecondary} style={styles.sectionTitle}>
+            {t('addTx.feedbackSection')}
+          </AppText>
+          <GlassView intensity={WEB_GLASS_INTENSITY} radius={26} style={styles.feedbackCard}>
+            <TextInput
+              value={feedback}
+              onChangeText={setFeedback}
+              placeholder={t('addTx.feedbackPlaceholder')}
+              placeholderTextColor={semantic.textSecondary}
+              multiline
+              textAlignVertical="top"
+              style={[styles.input, { color: semantic.textPrimary, backgroundColor: semantic.accentSoft }]}
+            />
+            {/* 主按钮 = accent 渐变胶囊（§3：渐变实心按钮保持白字）；17pt 粗体走大字档 3:1 */}
+            <PressableScale
+              style={styles.button}
+              activeScale={0.97}
+              onPress={submitFeedback}
+              accessibilityRole="button"
+              accessibilityLabel={t('addTx.submitFeedback')}
+            >
+              <LinearGradient
+                colors={gradients.accent.colors}
+                locations={gradients.accent.locations as [number, number, ...number[]]}
+                start={gradients.accent.start}
+                end={gradients.accent.end}
+                style={styles.buttonFill}
+              >
+                <AppText variant="headline" weight="700" color="#FFFFFF" numberOfLines={1}>
+                  {t('addTx.submitFeedback')}
+                </AppText>
+              </LinearGradient>
+            </PressableScale>
+          </GlassView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-function Row({ label, colors }: any) {
+function Row({ label, muted }: { label: string; muted: string }) {
   return (
-    <TouchableOpacity style={styles.row}>
-      <Text style={[styles.rowText, { color: colors.textPrimary }]}>{label}</Text>
-      <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+    <TouchableOpacity style={styles.row} activeOpacity={0.6} accessibilityRole="button" accessibilityLabel={label}>
+      <AppText variant="subhead" weight="500">
+        {label}
+      </AppText>
+      <Ionicons name="chevron-forward" size={18} color={muted} />
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { height: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20 },
-  backBtn: { width: 40, height: 40, borderRadius: 20, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: 17, fontWeight: '700' },
-  content: { paddingHorizontal: 20, paddingBottom: 40 },
-  sectionTitle: { fontSize: 12, fontWeight: '600', marginTop: 28, marginBottom: 9 },
-  card: { width: '100%', borderWidth: 1, borderRadius: 16, paddingHorizontal: 16 },
+  flex: { flex: 1 },
+  headerGlass: { position: 'absolute', width: 44, height: 44 },
+  headerGlassInner: { width: 44, height: 44 },
+  content: { paddingBottom: 40 },
+  sectionTitle: { marginTop: 24, marginBottom: 9 },
+  card: { width: '100%', paddingHorizontal: 16 },
   row: { height: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  rowText: { fontSize: 15, fontWeight: '500' },
-  feedbackCard: { width: '100%', borderWidth: 1, borderRadius: 16, padding: 16 },
-  input: { minHeight: 130, borderWidth: 1, borderRadius: 12, padding: 12, fontSize: 14 },
-  button: { height: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginTop: 14 },
-  buttonText: { fontSize: 14, fontWeight: '700' },
+  feedbackCard: { width: '100%', padding: 16 },
+  // 多行输入不做全圆胶囊（长文本会顶着圆角），半径 24 + accentSoft 底（§2 表单填充）
+  input: { minHeight: 130, borderRadius: 24, padding: 16, fontSize: 15 },
+  button: { alignSelf: 'stretch', marginTop: 14 },
+  buttonFill: {
+    height: 54,
+    borderRadius: 999,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
 });
