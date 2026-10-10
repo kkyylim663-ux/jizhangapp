@@ -16,7 +16,7 @@ import SegmentedControl from './SegmentedControl';
 import AppText from './ui/AppText';
 import MoneyText from './ui/MoneyText';
 import { IconButton } from './ui/IconButton';
-import TransactionRow from './ui/TransactionRow';
+import { IconCircle } from './ui/IconCircle';
 import { Ionicons } from '@expo/vector-icons';
 import { withAlpha } from './ui/color';
 import { useTheme } from '../theme/useTheme';
@@ -24,7 +24,7 @@ import { useT } from '../i18n/LanguageContext';
 import { useLanguage } from '../i18n/LanguageContext';
 import type { MoneyKind } from '../utils/formatMoney';
 import { formatDate } from '../utils/formatDate';
-import type { Radius, SemanticColors, Spacing } from '../theme/theme';
+import type { Layout, Radius, SemanticColors, Spacing } from '../theme/theme';
 
 /** 当日逐笔账单（点日期在下方展开的明细行）：字段与首页列表的 TransactionRow 一一对应
  *  —— 明细行要求和首页列表行一模一样（验收退回第 3 条）。
@@ -67,6 +67,57 @@ interface Props {
 }
 
 const MONTH_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+/** 明细行（UI V2）：42 圆图标 + 标题（备注）+ 副标题（类别 · 账户）+ 右金额。
+ *  几何与首页账单行同规格（见 HomeScreen 的 TxRow），点整行 = 进编辑。 */
+function CalendarDetailRow({
+  item,
+  onPress,
+}: {
+  item: CalendarDayItem;
+  onPress?: () => void;
+}) {
+  const { semantic, spacing, layout } = useTheme();
+  const styles = useMemo(() => makeDetailRowStyles(semantic, spacing, layout), [semantic, spacing, layout]);
+  // 副标题：类别 · 账户（账户缺失时只有类别，不留下孤零零的分隔点）
+  const subtitle = [item.categoryName, item.accountName].filter((part): part is string => !!part).join(' · ');
+  return (
+    <PressableScale
+      onPress={onPress}
+      activeScale={0.98}
+      hitSlop={0}
+      style={styles.row}
+      accessibilityRole="button"
+    >
+      <IconCircle color={item.categoryColor} icon={item.categoryIcon} />
+      <View style={styles.textBlock}>
+        <AppText variant="subhead" weight="500" numberOfLines={2}>
+          {item.note ?? item.categoryName}
+        </AppText>
+        {!!subtitle && (
+          <AppText variant="caption" color={semantic.textSecondary} numberOfLines={1}>
+            {subtitle}
+          </AppText>
+        )}
+      </View>
+      <MoneyText value={item.amount} kind={item.type} variant="body" />
+    </PressableScale>
+  );
+}
+
+/** 明细行样式（令牌进、StyleSheet 出） */
+function makeDetailRowStyles(semantic: SemanticColors, spacing: Spacing, layout: Layout) {
+  return StyleSheet.create({
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      columnGap: spacing.md,
+      minHeight: 60,
+      paddingVertical: spacing.sm,
+    },
+    textBlock: { flex: 1, minWidth: 0, rowGap: 2 },
+  });
+}
 
 /** 药丸淡底透明度（UI_RULES 第 1 节：语义色 12% 淡底，与类别图标方块 / Badge 同比例） */
 const PILL_TINT_ALPHA = 0.12;
@@ -279,17 +330,13 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
             {selectedDateLabel}
           </AppText>
           {selectedDay.items.map((it) => (
-            // 明细行 = 首页列表同款 TransactionRow（图标方块 + 标题=备注 + 副标题 类别 · 账户 +
-            // MoneyText）；点一下走页面的现有「进入编辑」入口（验收退回第 3 条）
-            <TransactionRow
+            // 明细行 = 首页列表同款（42 圆图标 + 标题=备注 + 副标题 类别 · 账户 + MoneyText）；
+            // 点一下走页面的现有「进入编辑」入口（验收退回第 3 条）。
+            // ⚠ 这里自绘而不复用 ui/TransactionRow：UI V2 把列表图标改成圆形，TransactionRow 是
+            //   本车道之外的共享文件（40 方块），改它会波及别的车道 —— 按同一几何自绘一份。
+            <CalendarDetailRow
               key={it.id}
-              note={it.note}
-              categoryName={it.categoryName}
-              categoryIcon={it.categoryIcon}
-              categoryColor={it.categoryColor}
-              accountName={it.accountName}
-              amount={it.amount}
-              kind={it.type}
+              item={it}
               onPress={onPressItem ? () => onPressItem(it.id) : undefined}
             />
           ))}
