@@ -1,21 +1,30 @@
 // TransactionTypeHeader.tsx
-// 记一笔页头（T13 抽取 / T14 改两行 —— 计划 9.2 第 ① 条「把挤的控件挪到单独一行」）：
-//   第一行：返回 IconButton + 标题 + 右侧动作（扫票；编辑模式换成红色垃圾桶）
-//   第二行：类型分段 SegmentedControl（stretch 四等分占满一整行，每段约 82dp，
-//          英文 Exchange 也放得下；编辑模式没有类型切换，不渲染这一行）
+// 记一笔页头（T13 抽取 / T14 改两行 —— 计划 9.2 第 ① 条「把挤的控件挪到单独一行」；
+// T19-B V2 改玻璃 —— 稿 G_Add.dc.html / G_AddLight.dc.html）：
+//   第一行：返回玻璃圆钮 + 居中白标题 + 右侧动作（扫票玻璃胶囊；编辑模式换成玻璃圆钮垃圾桶）
+//   第二行：类型分段 SegmentedControl（玻璃槽 + 白色选中胶囊，stretch 四等分占满一整行，
+//          每段约 82dp，英文 Exchange 也放得下；编辑模式没有类型切换，不渲染这一行）
 //
-// 扫票：支出/收入传 onScanPress；转账/兑换不做扫票识别（不传就不渲染，标题左对齐不受影响）。
+// 扫票：支出/收入传 onScanPress；转账/兑换不做扫票识别（不传就不渲染，右侧用同宽占位保持标题居中）。
+// 玻璃上的白字 / 白图标按 ComponentGallery 的 V2 约定用字面量 #FFFFFF（不在主题色板内），
+// 材质走 GlassView（半透明 + 亮边 + 顶部内高光 + 模糊回退），不自己拼色值。
 
 import React, { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../theme/useTheme';
 import { useLayout } from '../../theme/useLayout';
 import { useT } from '../../i18n/LanguageContext';
 import AppText from '../ui/AppText';
-import Button from '../ui/Button';
-import IconButton from '../ui/IconButton';
+import GlassView from '../ui/GlassView';
+import PressableScale from '../PressableScale';
 import SegmentedControl from '../SegmentedControl';
 import type { Layout, Spacing } from '../../theme/theme';
+
+/** 渐变上的白字档（UI V2 页头：标题 / 玻璃控件内的图标与文字） */
+const ON_GRADIENT = '#FFFFFF';
+/** 渐变上的次要白（chevron 等辅助图标） */
+const ON_GRADIENT_DIM = 'rgba(255,255,255,0.85)';
 
 /** UI 层四个类型入口（兑换在数据层复用 transfer） */
 export type TransactionUiType = 'expense' | 'income' | 'transfer' | 'exchange';
@@ -27,9 +36,9 @@ interface Props {
   onBack: () => void;
   /** 标题（记一笔 / 编辑账单） */
   title: string;
-  /** 扫票入口（相机图标 + 文字）；转账/兑换不传 */
+  /** 扫票入口（相机图标 + 文字，玻璃胶囊）；转账/兑换不传 */
   onScanPress?: () => void;
-  /** 删除入口（编辑模式：右侧红色垃圾桶，替代扫票） */
+  /** 删除入口（编辑模式：玻璃圆钮里的红色垃圾桶，替代扫票） */
   onDeletePress?: () => void;
   /** 类型分段行（默认显示；编辑模式传 false） */
   showTypeSwitch?: boolean;
@@ -60,36 +69,71 @@ export function TransactionTypeHeader({
   return (
     <View style={[styles.header, isShort && styles.headerShort]}>
       <View style={styles.headerRow}>
-        <IconButton icon="chevron-back" accessibilityLabel={t('common.back')} onPress={onBack} />
-        {/* 标题左对齐跟住返回键（页头规范：返回 + 标题 + 右侧动作），放不下也不缩字、不省略 */}
-        <AppText variant="title3" numberOfLines={1} style={styles.title}>
+        {/* 返回：44 玻璃圆钮（稿） */}
+        <PressableScale
+          onPress={onBack}
+          activeScale={0.94}
+          hitSlop={0}
+          accessibilityRole="button"
+          accessibilityLabel={t('common.back')}
+        >
+          <GlassView radius={999} style={styles.glassRound}>
+            <Ionicons name="chevron-back" size={20} color={ON_GRADIENT} />
+          </GlassView>
+        </PressableScale>
+        {/* 标题居中、白色（稿 17/600）；放不下也不缩字、不省略 */}
+        <AppText
+          variant="headline"
+          weight="600"
+          align="center"
+          color={ON_GRADIENT}
+          numberOfLines={1}
+          style={styles.title}
+        >
           {title}
         </AppText>
         {onDeletePress ? (
-          <IconButton
-            icon="trash-outline"
-            color={semantic.danger}
-            accessibilityLabel={t('common.delete')}
+          <PressableScale
             onPress={onDeletePress}
-          />
+            activeScale={0.94}
+            hitSlop={0}
+            accessibilityRole="button"
+            accessibilityLabel={t('common.delete')}
+          >
+            <GlassView radius={999} style={styles.glassRound}>
+              <Ionicons name="trash-outline" size={20} color={semantic.danger} />
+            </GlassView>
+          </PressableScale>
         ) : onScanPress ? (
-          <Button
-            title={t('addTx.scanReceipt')}
-            icon="camera-outline"
-            variant="ghost"
-            size="sm"
-            fullWidth={false}
+          <PressableScale
             onPress={onScanPress}
-          />
-        ) : null}
+            activeScale={0.94}
+            hitSlop={0}
+            accessibilityRole="button"
+            accessibilityLabel={t('addTx.scanReceipt')}
+          >
+            <GlassView radius={999} style={styles.glassScan}>
+              <Ionicons name="camera-outline" size={18} color={ON_GRADIENT} />
+              <AppText variant="subhead" weight="600" color={ON_GRADIENT}>
+                {t('addTx.scanReceipt')}
+              </AppText>
+            </GlassView>
+          </PressableScale>
+        ) : (
+          // 转账/兑换没有扫票：同宽占位，标题保持与有扫票时同一位置
+          <View style={styles.roundSpacer} />
+        )}
       </View>
       {showTypeSwitch && (
         <View style={[styles.typeRow, isShort && styles.typeRowShort]}>
-          {/* 分段控件的选项值就是 UiType（字符串联合），回传时收窄 */}
+          {/* 分段控件的选项值就是 UiType（字符串联合），回传时收窄；
+              玻璃槽 + 白色选中胶囊（V2 稿），stretch 撑满整行 */}
           <SegmentedControl
             options={options}
             selected={uiType}
             onSelect={(value) => onSelectType(value as TransactionUiType)}
+            appearance="glass"
+            thumb="white"
             stretch
           />
         </View>
@@ -98,7 +142,7 @@ export function TransactionTypeHeader({
   );
 }
 
-/** 令牌进、StyleSheet 出（禁止写死色值 / 字号 / 间距） */
+/** 令牌进、StyleSheet 出（尺寸 / 间距走令牌；玻璃上的白字档是 V2 约定字面量） */
 function makeStyles(spacing: Spacing, layout: Layout) {
   return StyleSheet.create({
     header: {
@@ -108,7 +152,7 @@ function makeStyles(spacing: Spacing, layout: Layout) {
     },
     // 矮屏：上留白 4→0、下留白 8→4（一档收紧）
     headerShort: { paddingTop: 0, paddingBottom: spacing.xs },
-    // 第一行：返回 44 触控区 + 标题（吃满剩余宽）+ 右侧动作
+    // 第一行：返回 44 玻璃圆 + 标题（吃满剩余宽、居中）+ 右侧动作
     headerRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -116,9 +160,21 @@ function makeStyles(spacing: Spacing, layout: Layout) {
       columnGap: spacing.sm,
     },
     title: { flex: 1 },
+    // 44 玻璃圆钮（返回 / 垃圾桶；chevron-back 图标视觉居中）
+    glassRound: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+    // 扫票玻璃胶囊：高 44、内 14、图标 18 + 14/600 文字（稿）
+    glassScan: {
+      height: 44,
+      paddingHorizontal: 14,
+      flexDirection: 'row',
+      alignItems: 'center',
+      columnGap: 6,
+    },
+    // 无右侧动作时的占位：与返回钮同宽
+    roundSpacer: { width: 44 },
     // 第二行：类型分段独占一行（stretch 撑满内容宽），与标题行只留半个格
-    typeRow: { marginTop: spacing.xs },
-    typeRowShort: { marginTop: 0 },
+    typeRow: { marginTop: spacing.sm },
+    typeRowShort: { marginTop: spacing.xs },
   });
 }
 

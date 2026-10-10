@@ -8,6 +8,7 @@ import {
   Pressable,
   ScrollView,
   ActivityIndicator,
+  Animated,
   Modal,
   Switch,
   Dimensions,
@@ -16,6 +17,7 @@ import {
 } from 'react-native';
 import DraggableFlatList, { ScaleDecorator, RenderItemParams } from 'react-native-draggable-flatlist';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
@@ -36,7 +38,7 @@ import { useTheme } from '../theme/useTheme';
 import { useLayout } from '../theme/useLayout';
 import { useTabClearance } from '../hooks/useTabClearance';
 import { useTabBarScrollHandler, useTabBarForceHide } from '../context/TabBarAutoHideContext';
-import { ThemeColors, SemanticColors, Spacing, Layout, Radius } from '../theme/theme';
+import { ThemeColors, SemanticColors, Spacing, Layout, Radius, categoryRing } from '../theme/theme';
 import { useAmountExpression } from '../hooks/useAmountExpression';
 import { getExpressionTotal } from '../utils/amountExpression';
 import { formatMoney } from '../utils/formatMoney';
@@ -48,12 +50,15 @@ import AppText from '../components/ui/AppText';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
-import Chip from '../components/ui/Chip';
 import IconButton from '../components/ui/IconButton';
 import ScreenHeader from '../components/ui/ScreenHeader';
+import GlassView from '../components/ui/GlassView';
 import { withAlpha } from '../components/ui/color';
+import HeroGradient from '../components/ui/HeroGradient';
+import IconCircle from '../components/ui/IconCircle';
 import PressableScale from '../components/PressableScale';
 import { TransactionTypeHeader } from '../components/transaction/TransactionTypeHeader';
+import { TransactionChip } from '../components/transaction/TransactionChip';
 import { AccountPickerSheet } from '../components/transaction/AccountPickerSheet';
 import { CategoryPickerSheet } from '../components/transaction/CategoryPickerSheet';
 import { ReceiptPreviewModal } from '../components/transaction/ReceiptPreviewModal';
@@ -61,6 +66,13 @@ import { useDialog } from '../components/AppDialog';
 
 
 type IconName = keyof typeof Ionicons.glyphMap;
+
+/** 渐变上的白字档（UI V2 稿 / ComponentGallery 同一约定：不在主题色板内，直接字面量） */
+const V2_ON_GRADIENT = '#FFFFFF';
+/** 渐变上的次要白（chevron 等辅助图标） */
+const V2_ON_GRADIENT_DIM = 'rgba(255,255,255,0.85)';
+/** 记一笔 Hero 渐变高度（UI V2 定稿 400；矮屏 ×0.9） */
+const HERO_GRADIENT_HEIGHT = 400;
 
 // iOS 风格"左侧边缘右滑返回"：从屏幕左边缘(40px内)横向右滑超过阈值就返回。
 // manualActivation 手动接管：只有"起点贴近左边缘且横向位移占主导"才激活手势，
@@ -126,11 +138,161 @@ function expressionTotal(display: string): number {
   return getExpressionTotal({ terms });
 }
 
-/** 金额字号档位（UI_RULES 第 5 节：按档位降级、不做连续压缩）：≤9 字符 = 基准 44 · ≤12 字符 34 · 更多 28 */
+/** 金额字号档位（UI_RULES 第 5 节：按档位降级、不做连续压缩）。
+ *  V2 稿基准档 64（矮屏 58）；长串按 44 → 34 两档降级，保证 14 位大数字也不溢出 */
 function amountFontTier(display: string, base: number): number {
   if (display.length <= 9) return base;
-  if (display.length <= 12) return 34;
-  return 28;
+  if (display.length <= 12) return 44;
+  return 34;
+}
+
+// ---------- UI V2 记一笔：Hero 金额（稿）----------
+// 整数段 = 基准 64/500 白（字距 −2.5、行高 66）；「.小数」段 = 34/300 白 70%（稿的降透明度）。
+// 键盘开着时把闪烁光标画在「光标所在的那一段」里：复用 CursorAmountText 的点按/拖动定位，
+// 只做 cursorFromEnd 的全串 ↔ 分段换算（整段：Li − si；小段：Li + Ld − si）。
+// 为什么不是 MoneyText / CursorAmountText 单独搞定：MoneyText hero 没有光标，
+// CursorAmountText 不拆整数/小数（组件都在别处、本车道不改），两个片段各自渲染是唯一不损功能的组合。
+const HERO_INT_RATIO_DEC = 34 / 64; // 小数段 ÷ 整数段（稿 34/64）
+const HERO_LINE_RATIO = 66 / 64; // 行高 ÷ 字号（稿 line-height 66）
+const HERO_LETTER_RATIO = -2.5 / 64; // 字距 ÷ 字号（稿 letter-spacing −2.5）
+
+/** Hero 金额 / 成功勾选徽章的静态样式（颜色全在组件内取稿的字面白档，与主题无关） */
+const v2Styles = StyleSheet.create({
+  heroAmountRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'center' },
+  saveFlashOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 50,
+  },
+  saveFlashBadge: {
+    width: 64,
+    height: 64,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+});
+
+function HeroAmountText({
+  display,
+  fontSize,
+  cursorFromEnd,
+  cursorActive,
+  onCursorChange,
+}: {
+  display: string;
+  fontSize: number;
+  cursorFromEnd: number;
+  /** 光标是否可见（键盘开着且不是多项算式的合计态） */
+  cursorActive: boolean;
+  onCursorChange: (cursorFromEnd: number) => void;
+}) {
+  const dotIdx = display.indexOf('.');
+  const intPart = dotIdx < 0 ? display : display.slice(0, dotIdx);
+  const decPart = dotIdx < 0 ? '' : display.slice(dotIdx);
+  const intLen = intPart.length;
+  const decLen = decPart.length;
+  // 光标在整串中的「前面有几个字符」位置（0 = 最前）
+  const cursorIdx = Math.max(0, Math.min(display.length, display.length - cursorFromEnd));
+  const cursorInInt = cursorIdx <= intLen;
+
+  const intSize = fontSize;
+  const decSize = Math.round(fontSize * HERO_INT_RATIO_DEC);
+  const intStyle = {
+    fontSize: intSize,
+    lineHeight: Math.round(intSize * HERO_LINE_RATIO),
+    fontWeight: '500' as const,
+    letterSpacing: Math.round(fontSize * HERO_LETTER_RATIO * 10) / 10,
+    color: '#FFFFFF',
+  };
+  const decStyle = {
+    fontSize: decSize,
+    lineHeight: Math.round(decSize * HERO_LINE_RATIO),
+    fontWeight: '300' as const,
+    // 稿：小数部分降透明度
+    color: 'rgba(255,255,255,0.7)',
+  };
+  // 光标：白色细竖条（稿里是 2×44 渐变条；这里沿用文字光标字形，尺寸跟着片段字号）
+  const cursorStyle = {
+    fontSize: Math.round(intSize * 0.68),
+    fontWeight: '300' as const,
+    color: 'rgba(255,255,255,0.9)',
+    marginLeft: 2,
+  };
+
+  const showCursor = cursorActive && display.length > 0;
+  const intWithCursor = showCursor && cursorInInt;
+  const decWithCursor = showCursor && !cursorInInt && decLen > 0;
+
+  return (
+    <View style={v2Styles.heroAmountRow}>
+      {intWithCursor ? (
+        <CursorAmountText
+          display={intPart}
+          cursorFromEnd={intLen - cursorIdx}
+          onCursorChange={(segFromEnd) => onCursorChange(display.length - (intLen - segFromEnd))}
+          style={intStyle}
+          cursorStyle={cursorStyle}
+          numberOfLines={1}
+        />
+      ) : (
+        <Text style={intStyle} numberOfLines={1}>
+          {intPart}
+        </Text>
+      )}
+      {decLen > 0 &&
+        (decWithCursor ? (
+          <CursorAmountText
+            display={decPart}
+            cursorFromEnd={decLen - (cursorIdx - intLen)}
+            onCursorChange={(segFromEnd) => onCursorChange(display.length - (intLen + decLen - segFromEnd))}
+            style={decStyle}
+            cursorStyle={cursorStyle}
+            numberOfLines={1}
+          />
+        ) : (
+          <Text style={decStyle} numberOfLines={1}>
+            {decPart}
+          </Text>
+        ))}
+    </View>
+  );
+}
+
+// ---------- UI V2 T17：保存成功的 300ms 勾选动画 ----------
+// 保存成功 = success 震动（调用方发）+ 中央勾选徽章 120ms 弹入，300ms 后由调用方照原逻辑返回/留页。
+// 徽章用 accent 渐变（与「完成」键同一档），纯装饰、不接触摸。
+function SaveSuccessFlash() {
+  const scale = useRef(new Animated.Value(0.6)).current;
+  const opacity = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(opacity, { toValue: 1, duration: 110, useNativeDriver: true }),
+      Animated.spring(scale, { toValue: 1, friction: 6, tension: 180, useNativeDriver: true }),
+    ]).start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const { gradients } = useTheme();
+  return (
+    <View style={v2Styles.saveFlashOverlay} pointerEvents="none">
+      <Animated.View style={[v2Styles.saveFlashBadge, { opacity, transform: [{ scale }] }]}>
+        <LinearGradient
+          colors={gradients.accent.colors}
+          locations={gradients.accent.locations as [number, number, ...number[]]}
+          start={gradients.accent.start}
+          end={gradients.accent.end}
+          style={StyleSheet.absoluteFill}
+        />
+        <Ionicons name="checkmark" size={34} color="#FFFFFF" />
+      </Animated.View>
+    </View>
+  );
 }
 
 type Step = 'category' | 'detail' | 'transferDetail';
@@ -157,7 +319,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   const { categories, categoryGroups, addCategory, addCategoryGroup, deleteCategoryGroup, addTransaction, updateTransaction, addTransfer, updateCategory, deleteCategory, deleteTransaction, assets, getAssetBalance, currencySymbol, currency, activeLedgerId, paymentPlans, addPaymentPlan } =
     useApp();
   const insets = useSafeAreaInsets();
-  const { colors, isDark, semantic, spacing, layout, radius, typography } = useTheme();
+  const { colors, isDark, semantic, spacing, layout, radius } = useTheme();
   // 矮屏（可用高 < 700）：金额卡内边距 / 行距再收紧一档，保证「金额 + 至少 2 行类别 + 键盘」一屏可见
   const { isShort, categoryColumns } = useLayout();
   const t = useT();
@@ -539,8 +701,9 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   // 网格区是可滚动的 flex:1 区域：实测到多少高度就铺多少格（至少 2 行 —— 计划 8.2 第 7 条
   // 「金额 + 至少 2 行类别 + 键盘」一屏可见）；历史用过的类别超出可见容量时靠网格滚动查看，不再裁剪
   const [gridH, setGridH] = useState<number | null>(null);
-  /** 一格高度 = 44 方块 + 4 标签间距 + 32 两行标签 + 4 顶距 + 4 行距（与 catCell / catCellLabel / catGridContent 样式同步） */
-  const CAT_CELL_ROW_HEIGHT = 88;
+  /** 一格高度 = 48 圆（V2） + 4 标签间距 + 16 单行标签预留 + 4 顶距 + 4 行距 = 76
+   *  （与 catCell / catCellLabel / catGridContent 样式同步；两行标签的格子自然变高，网格可滚动） */
+  const CAT_CELL_ROW_HEIGHT = 76;
   const gridVisibleRows = gridH == null ? null : Math.max(2, Math.floor(gridH / CAT_CELL_ROW_HEIGHT));
   const gridMaxCount = gridVisibleRows == null ? null : gridVisibleRows * categoryColumns - 1;
   // ---------- 网格顺序冻结（T15 修正）----------
@@ -602,15 +765,8 @@ export default function AddTransactionScreen({ navigation, route }: any) {
       ? formatMoney(expressionTotal(amountExpr.displayValue))
       : amountExpr.displayValue
     : amount || '0.00';
-  // 金额字号档位（UI_RULES 第 5 节：按档位降级 44 → 34 → 28，不做连续压缩）；
-  // 矮屏基准降一档（44 → 40，与计划 8.2「矮屏 Hero −4」同口径），给类别区留高度
-  const heroAmountFontSize = amountFontTier(
-    heroAmountDisplay,
-    typography.amountEntry.fontSize - (isShort ? 4 : 0)
-  );
-  const heroAmountLineHeight = Math.round(
-    heroAmountFontSize * (typography.amountEntry.lineHeight / typography.amountEntry.fontSize)
-  );
+  // 金额字号档位（V2 稿基准 64；矮屏按 T15 惯例再收一档 44，给类别网格腾「至少 2 行」）
+  const heroAmountFontSize = amountFontTier(heroAmountDisplay, isShort ? 44 : 64);
   const fromAsset = assets.find((a) => a.id === fromAssetId);
   const toAsset = assets.find((a) => a.id === toAssetId);
   const isCrossCurrency = !!fromAsset && !!toAsset && fromAsset.currency !== toAsset.currency;
@@ -631,6 +787,32 @@ export default function AddTransactionScreen({ navigation, route }: any) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ---------- T17：保存成功的 300ms 勾选动画 ----------
+  // 四个保存路径（完成 / 长按完成 / 转账完成 / 转账长按）统一走 playSaveFlashThen：
+  // success 震动由各调用点先发，这里只负责「中央徽章弹入 → 300ms 后执行原本的返回/留页逻辑」
+  const [saveFlash, setSaveFlash] = useState(false);
+  const saveFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (saveFlashTimerRef.current) clearTimeout(saveFlashTimerRef.current);
+    },
+    []
+  );
+  const playSaveFlashThen = (next: () => void) => {
+    setSaveFlash(true);
+    if (saveFlashTimerRef.current) clearTimeout(saveFlashTimerRef.current);
+    saveFlashTimerRef.current = setTimeout(() => {
+      saveFlashTimerRef.current = null;
+      setSaveFlash(false);
+      next();
+    }, 300);
+  };
+
+  // ---------- UI V2：类别选中的外圈 ----------
+  // 由页面侧画（IconCircle 的 boxShadow / style 两个入口在 react-native-web 下都不落地）：
+  // 真圆 = 58 圆 + borderWidth 2（夜：类别色 60% / 日 #9B5BD6），与 48 实心圆之间留 3 的页面底间隙；
+  // 绝对定位在 48 盒子上 → 不影响网格行高、选中前后图标不位移。等 ui 侧修好可移除。
 
   const resetAll = () => {
     // 类型也要重置回支出：底部Tab的"记一笔"切走不会卸载，uiType 留着的话，
@@ -910,12 +1092,15 @@ export default function AddTransactionScreen({ navigation, route }: any) {
       const ok = await saveTransaction(total);
       if (ok) {
         hapticSuccess();
-        if (isEditing) {
-          navigation?.goBack();
-        } else {
-          resetAll();
-          navigation?.navigate(ROUTES.TAB_HOME);
-        }
+        // T17：勾选动画 300ms 后照原逻辑返回（编辑 → 返回；新增 → 清表单回首页）
+        playSaveFlashThen(() => {
+          if (isEditing) {
+            navigation?.goBack();
+          } else {
+            resetAll();
+            navigation?.navigate(ROUTES.TAB_HOME);
+          }
+        });
       }
     } catch (err) {
       console.error('保存失败:', err);
@@ -931,7 +1116,10 @@ export default function AddTransactionScreen({ navigation, route }: any) {
       const ok = await saveTransaction(total);
       if (ok) {
         hapticSuccess();
-        resetAll();
+        // T17：同样先播勾选动画，300ms 后清表单、留在本页记下一笔
+        playSaveFlashThen(() => {
+          resetAll();
+        });
       }
     } catch (err) {
       console.error('保存失败:', err);
@@ -1061,11 +1249,15 @@ export default function AddTransactionScreen({ navigation, route }: any) {
       note,
       receiptUri: receiptUri ?? undefined,
     });
-    resetAll();
-    // 长按"完成"＝保存后继续记下一笔，留在本页；普通点击才退出到首页
-    if (!options?.continueRecording) {
-      navigation?.navigate(ROUTES.TAB_HOME);
-    }
+    // T17：success 震动 + 300ms 勾选动画，然后照原逻辑（清表单；非长按再回首页）
+    hapticSuccess();
+    playSaveFlashThen(() => {
+      resetAll();
+      // 长按"完成"＝保存后继续记下一笔，留在本页；普通点击才退出到首页
+      if (!options?.continueRecording) {
+        navigation?.navigate(ROUTES.TAB_HOME);
+      }
+    });
     return true;
   };
 
@@ -1190,6 +1382,8 @@ export default function AddTransactionScreen({ navigation, route }: any) {
       <SafeAreaView style={styles.container} edges={['top']}
       onTouchStart={() => { Keyboard.dismiss(); }}>
         <View style={{ flex: 1 }}>
+        {/* UI V2：最底层品牌渐变（与支出/收入同一档：400 / 矮屏 ×0.9） */}
+        <HeroGradient height={isShort ? Math.round(HERO_GRADIENT_HEIGHT * 0.9) : HERO_GRADIENT_HEIGHT} grid={false} />
         {/* 页头两行（T14）：返回 + 标题 + 扫票 / 类型分段独占一行；转账·兑换不做扫票识别 */}
         <TransactionTypeHeader
           uiType={uiType}
@@ -1227,7 +1421,8 @@ export default function AddTransactionScreen({ navigation, route }: any) {
             </View>
 
             <View style={styles.flowRow}>
-              {/* 转出账户块 */}
+              {/* 转出账户块（外层 View 承载 flex —— PressableScale 的样式落在内层，flex 必须给直接子项） */}
+              <View style={styles.flowBlockWrap}>
               <PressableScale
                 style={styles.flowBlock}
                 activeScale={0.98}
@@ -1246,40 +1441,37 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                   <Ionicons name="chevron-down" size={16} color={semantic.textTertiary} />
                 </View>
                 <View style={styles.flowBlockMain}>
-                  <View
-                    style={[
-                      styles.flowIconSquare,
-                      { backgroundColor: withAlpha(fromAsset?.color ?? semantic.accent, 0.12) },
-                    ]}
-                  >
-                    <Ionicons
-                      name={(fromAsset?.icon as IconName) ?? 'wallet-outline'}
-                      size={20}
-                      color={fromAsset?.color ?? semantic.accent}
-                    />
-                  </View>
+                  {/* UI V2：圆形账户图标（42 圆，取代旧 40 圆角方块） */}
+                  <IconCircle
+                    size={42}
+                    color={fromAsset?.color ?? semantic.accent}
+                    icon={(fromAsset?.icon as IconName) ?? 'wallet-outline'}
+                  />
                   <AppText variant="headline" numberOfLines={2} style={styles.flowBlockName}>
                     {fromAsset?.name ?? t('common.notSelected')}
                   </AppText>
                 </View>
               </PressableScale>
+              </View>
 
-              {/* 中间方向按钮：互换转出/转入两个账户（原逻辑不变） */}
-              <IconButton
-                icon="swap-horizontal"
-                variant="soft"
-                accessibilityLabel={t('addTx.swapAccounts')}
-                onPress={() => {
-                  hapticLight();
-                  // 互换是显式操作，之后转出账户不再自动跟随默认账户变化
-                  userPickedFromRef.current = true;
-                  setFromAssetId(toAssetId);
-                  setToAssetId(fromAssetId);
-                }}
-                style={styles.flowSwap}
-              />
+              {/* 中间方向按钮：互换转出/转入两个账户（原逻辑不变）；同样用外层 View 承载外边距 */}
+              <View style={styles.flowSwapWrap}>
+                <IconButton
+                  icon="swap-horizontal"
+                  variant="soft"
+                  accessibilityLabel={t('addTx.swapAccounts')}
+                  onPress={() => {
+                    hapticLight();
+                    // 互换是显式操作，之后转出账户不再自动跟随默认账户变化
+                    userPickedFromRef.current = true;
+                    setFromAssetId(toAssetId);
+                    setToAssetId(fromAssetId);
+                  }}
+                />
+              </View>
 
-              {/* 转入账户块 */}
+              {/* 转入账户块（外层 View 承载 flex） */}
+              <View style={styles.flowBlockWrap}>
               <PressableScale
                 style={styles.flowBlock}
                 activeScale={0.98}
@@ -1298,23 +1490,18 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                   <Ionicons name="chevron-down" size={16} color={semantic.textTertiary} />
                 </View>
                 <View style={styles.flowBlockMain}>
-                  <View
-                    style={[
-                      styles.flowIconSquare,
-                      { backgroundColor: withAlpha(toAsset?.color ?? semantic.accent, 0.12) },
-                    ]}
-                  >
-                    <Ionicons
-                      name={(toAsset?.icon as IconName) ?? 'wallet-outline'}
-                      size={20}
-                      color={toAsset?.color ?? semantic.accent}
-                    />
-                  </View>
+                  {/* UI V2：圆形账户图标（42 圆，取代旧 40 圆角方块） */}
+                  <IconCircle
+                    size={42}
+                    color={toAsset?.color ?? semantic.accent}
+                    icon={(toAsset?.icon as IconName) ?? 'wallet-outline'}
+                  />
                   <AppText variant="headline" numberOfLines={2} style={styles.flowBlockName}>
                     {toAsset?.name ?? t('common.notSelected')}
                   </AppText>
                 </View>
               </PressableScale>
+              </View>
             </View>
           </Card>
 
@@ -1336,40 +1523,45 @@ export default function AddTransactionScreen({ navigation, route }: any) {
 
               {/* 第一行：左边转出金额输入框，右边到账/转入金额（只读展示） */}
               <View style={styles.rateGridRow}>
-                <PressableScale
-                  style={styles.rateGridCellLeft}
-                  activeScale={0.98}
-                  hitSlop={0}
-                  onPress={() => openTransferCalculator('amount')}
+                {/* onLayout 挂外层 View（PressableScale 不收 onLayout；T16 wip 的 7 个 tsc 错） */}
+                <View
+                  style={styles.rateGridCellWrapLeft}
                   onLayout={(e) => {
                     const cardY = fieldY.current['cardTop'] ?? 0;
                     fieldY.current['amount'] = cardY + e.nativeEvent.layout.y;
                   }}
-                  accessibilityRole="button"
-                  accessibilityLabel={t('addTx.outAmount')}
                 >
-                  <View style={styles.rateGridLabelRow}>
-                    <AppText variant="caption" color={semantic.textSecondary}>
-                      {t('addTx.outAmount')}
-                    </AppText>
-                    {/* 后置货币提示贴在"转出金额"标签右侧：选了转出账户才显示，不与金额数字碰撞 */}
-                    {fromAsset && (
-                      <AppText variant="footnote" color={semantic.textTertiary} style={styles.rateGridLabelSuffix}>
-                        ({fromAsset.currency})
+                  <PressableScale
+                    style={styles.rateGridCellLeft}
+                    activeScale={0.98}
+                    hitSlop={0}
+                    onPress={() => openTransferCalculator('amount')}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('addTx.outAmount')}
+                  >
+                    <View style={styles.rateGridLabelRow}>
+                      <AppText variant="caption" color={semantic.textSecondary}>
+                        {t('addTx.outAmount')}
                       </AppText>
-                    )}
-                  </View>
-                  <View style={styles.rateGridValueRow}>
-                    <CursorAmountText
-                      display={calculatorTarget === 'amount' && amountKeypadOpen ? amountExpr.displayValue : amount || '0.00'}
-                      enabled={calculatorTarget === 'amount' && amountKeypadOpen}
-                      cursorFromEnd={amountCursor}
-                      onCursorChange={setAmountCursor}
-                      style={styles.rateGridValue}
-                      cursorStyle={styles.rateCursor}
-                    />
-                  </View>
-                </PressableScale>
+                      {/* 后置货币提示贴在"转出金额"标签右侧：选了转出账户才显示，不与金额数字碰撞 */}
+                      {fromAsset && (
+                        <AppText variant="footnote" color={semantic.textTertiary} style={styles.rateGridLabelSuffix}>
+                          ({fromAsset.currency})
+                        </AppText>
+                      )}
+                    </View>
+                    <View style={styles.rateGridValueRow}>
+                      <CursorAmountText
+                        display={calculatorTarget === 'amount' && amountKeypadOpen ? amountExpr.displayValue : amount || '0.00'}
+                        enabled={calculatorTarget === 'amount' && amountKeypadOpen}
+                        cursorFromEnd={amountCursor}
+                        onCursorChange={setAmountCursor}
+                        style={styles.rateGridValue}
+                        cursorStyle={styles.rateCursor}
+                      />
+                    </View>
+                  </PressableScale>
+                </View>
 
                 {/* 分隔竖线：兑换/普通转账都渲染——转账没有汇率时这条线就是转出与转入的分界；
                     大金额换行时线跟随格子布局，两种货币不会撞在一起 */}
@@ -1377,34 +1569,38 @@ export default function AddTransactionScreen({ navigation, route }: any) {
 
                 {showRateField ? (
                   <>
-                    <PressableScale
-                      style={styles.rateCenterCell}
-                      activeScale={0.96}
-                      hitSlop={0}
-                      onPress={() => openTransferCalculator('rate')}
+                    <View
+                      style={styles.rateCenterCellWrap}
                       onLayout={(e) => {
                         const cardY = fieldY.current['cardTop'] ?? 0;
                         fieldY.current['rate'] = cardY + e.nativeEvent.layout.y;
                       }}
-                      accessibilityRole="button"
-                      accessibilityLabel={t('addTx.rate')}
                     >
-                      <AppText variant="caption" color={semantic.textSecondary} style={styles.rateCenterLabel}>
-                        {t('addTx.rate')}
-                      </AppText>
-                      <View style={styles.rateGridValueRow}>
-                        <Text style={styles.rateFieldValue}>×</Text>
-                        <CursorAmountText
-                          display={calculatorTarget === 'rate' && amountKeypadOpen ? rateExpr.displayValue : exchangeRate || '0.00'}
-                          enabled={calculatorTarget === 'rate' && amountKeypadOpen}
-                          cursorFromEnd={rateCursor}
-                          onCursorChange={setRateCursor}
-                          style={styles.rateFieldValue}
-                          cursorStyle={styles.rateCursor}
-                        />
-                        <Ionicons name="calculator-outline" size={16} color={semantic.accentText} style={styles.rateGridCalcIcon} />
-                      </View>
-                    </PressableScale>
+                      <PressableScale
+                        style={styles.rateCenterCell}
+                        activeScale={0.96}
+                        hitSlop={0}
+                        onPress={() => openTransferCalculator('rate')}
+                        accessibilityRole="button"
+                        accessibilityLabel={t('addTx.rate')}
+                      >
+                        <AppText variant="caption" color={semantic.textSecondary} style={styles.rateCenterLabel}>
+                          {t('addTx.rate')}
+                        </AppText>
+                        <View style={styles.rateGridValueRow}>
+                          <Text style={styles.rateFieldValue}>×</Text>
+                          <CursorAmountText
+                            display={calculatorTarget === 'rate' && amountKeypadOpen ? rateExpr.displayValue : exchangeRate || '0.00'}
+                            enabled={calculatorTarget === 'rate' && amountKeypadOpen}
+                            cursorFromEnd={rateCursor}
+                            onCursorChange={setRateCursor}
+                            style={styles.rateFieldValue}
+                            cursorStyle={styles.rateCursor}
+                          />
+                          <Ionicons name="calculator-outline" size={16} color={semantic.accentText} style={styles.rateGridCalcIcon} />
+                        </View>
+                      </PressableScale>
+                    </View>
                     <View style={styles.rateGridDividerVertical} />
                   </>
                 ) : null}
@@ -1581,6 +1777,9 @@ export default function AddTransactionScreen({ navigation, route }: any) {
           uri={receiptUri}
           onClose={() => setReceiptPreviewOpen(false)}
         />
+
+        {/* T17：保存成功的勾选动画（转账/兑换同一套） */}
+        {saveFlash && <SaveSuccessFlash />}
       </SafeAreaView>
       </EdgeBackSwipe>
     );
@@ -1922,6 +2121,8 @@ export default function AddTransactionScreen({ navigation, route }: any) {
     <SafeAreaView style={styles.container} edges={['top']}
       onTouchStart={() => { Keyboard.dismiss(); }}>
       <View style={{ flex: 1 }}>
+      {/* UI V2：最底层品牌渐变（400 / 矮屏 ×0.9，底部自动淡出到 bg）；内容全部压在它上面 */}
+      <HeroGradient height={isShort ? Math.round(HERO_GRADIENT_HEIGHT * 0.9) : HERO_GRADIENT_HEIGHT} grid={false} />
       {/* TASK-011 五轮（用户定版尝试）：外层不再可滚——普通 View 替代 ScrollView。
           页面不能滚 → 内容不可能被滚到键盘底下；T15 起类别网格自己可滚（catGridScroll），
           flex 布局把键盘面板高度从容器里扣除，网格天然停在键盘上沿。
@@ -1951,115 +2152,105 @@ export default function AddTransactionScreen({ navigation, route }: any) {
           />
         )}
 
-        {/* 金额：整屏视觉主角（T14 / A1）——算式（多项时）在上方 15pt，金额 44pt 右对齐按档位降级；
-            第一行 = 币种 Chip（左）+ 金额（右）；第二行 = 账户 / 日期 / 月度结转 Chip（放不下自动换行） */}
-        <Card style={[styles.heroCard, isShort && styles.heroCardShort]}>
-          <View onLayout={registerFieldY('amount')}>
-            {/* 算式行：多项（有 +/− 运算符）时才出现 */}
-            {amountExpr.isMulti && (
-              <AppText
-                variant="subhead"
-                color={semantic.textSecondary}
-                align="right"
-                numberOfLines={1}
-                style={styles.heroExpr}
-              >
-                {amountExpr.displayValue}
+        {/* 金额 Hero（UI V2 / 稿）：币种小胶囊 → 算式（多项时才出现，14pt 降透明）→ 64pt 金额，
+            全部居中直接落在渐变上（不再是卡片）；金额点按打开自绘键盘 / 定位光标 */}
+        <View style={[styles.heroArea, isShort && styles.heroAreaShort]}>
+          <PressableScale
+            activeScale={0.96}
+            hitSlop={0}
+            onPress={() => setAssetPickerOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel={t('addTx.selectCurrency')}
+          >
+            <GlassView radius={999} style={styles.currencyPill}>
+              <AppText variant="caption2" weight="500" color={V2_ON_GRADIENT}>
+                {amountCurrencyCode}
               </AppText>
-            )}
-            {/* 金额行：币种按钮（左）+ 金额（右，档位 44 → 34 → 28），点金额打开自绘键盘 */}
-            <View style={[styles.heroAmountLine, isShort && styles.heroAmountLineShort]}>
-              <Chip
-                label={amountCurrencyCode}
-                trailingIcon="chevron-down"
-                onPress={() => setAssetPickerOpen(true)}
-                accessibilityLabel={t('addTx.selectCurrency')}
-              />
-              <PressableScale
-                style={styles.heroAmountTouch}
-                activeScale={0.98}
-                hitSlop={0}
-                onPress={() => {
-                  // 备注框的系统键盘/光标退场：一次只允许一个光标显示
-                  noteInputRef.current?.blur();
-                  // 打开键盘即从空态起输：按 5 就是 5 元，新输入直接替换旧值（不再从尾部续接）
-                  amountExpr.reset();
-                  setAmountCursor(0);
-                  setAmountKeypadOpen(true);
-                  scrollToField('amount');
-                }}
-                accessibilityRole="button"
-                accessibilityLabel={`${amountCurrencyCode} ${heroAmountDisplay}`}
-              >
-                {amountExpr.isMulti && amountKeypadOpen ? (
-                  /* 多项算式：金额行显示合计（算式已在上方），金额永不换行、只按档位降级 */
-                  <AppText
-                    variant="amountEntry"
-                    style={[styles.heroAmountText, { fontSize: heroAmountFontSize, lineHeight: heroAmountLineHeight }]}
-                    numberOfLines={1}
-                    ellipsizeMode="clip"
-                  >
-                    {heroAmountDisplay}
-                  </AppText>
-                ) : (
-                  <CursorAmountText
-                    containerStyle={styles.heroAmountTextInner}
-                    style={[styles.heroAmountText, { fontSize: heroAmountFontSize, lineHeight: heroAmountLineHeight }]}
-                    cursorStyle={[styles.heroCursorInline, { fontSize: Math.round(heroAmountFontSize * 0.8) }]}
-                    display={heroAmountDisplay}
-                    enabled={amountKeypadOpen}
-                    cursorFromEnd={amountCursor}
-                    onCursorChange={setAmountCursor}
-                    numberOfLines={1}
-                  />
-                )}
-              </PressableScale>
-            </View>
-          </View>
+              <Ionicons name="chevron-down" size={12} color={V2_ON_GRADIENT_DIM} />
+            </GlassView>
+          </PressableScale>
 
-          {/* 账户 / 日期 / 月度结转：一行标准 Chip（账户名过长换行不截断；放不下自动掉第二行） */}
-          <View style={[styles.heroChipsRow, isShort && styles.heroChipsRowShort]}>
-            <Chip
-              label={selectedAsset ? selectedAsset.name : t('common.notSelected')}
-              trailingIcon="chevron-down"
-              onPress={() => setAssetPickerOpen(true)}
-              accessibilityLabel={t('addTx.selectAccount')}
-            />
-            <Chip
-              label={formatDateLabel(date, langMode, { style: 'monthDay' })}
-              trailingIcon="chevron-down"
-              onPress={() => setDatePickerOpen(true)}
-              accessibilityLabel={formatDateLabel(date, langMode, { style: 'monthDay' })}
-            />
-            {!isEditing && (
-              <Chip
-                /* 文案按 9.2 ④ 长度预算取短档（胶囊 ≤10 字符）：英文 "Monthly expense" 会把整行挤换行，
-                   支出/收入类型由上方分段控件表达，这里只表达「每月一次」 */
-                label={t('finance.monthlyLabel')}
-                selected={autoMonthly}
-                onPress={() => {
-                  hapticLight();
-                  setAutoMonthly((v) => !v);
-                }}
-              />
-            )}
-          </View>
-        </Card>
-
-        {/* 类别（T15）：列数取版型（窄屏 4 / 其它 5）；格 = 44 图标方块 + 12pt 标签（预留 2 行高度，整格对齐）；
-            选中 = accent 描边 + accentSoft 底 + selection 震动；网格区可滚动，「全部」永远殿后
-            矮屏不渲染这一行提示（选中态在网格高亮、未选保存时仍会弹「请选择一个分类」），
-            把高度让给「金额 + 至少 2 行类别 + 键盘」一屏可见 */}
-        {!isShort && (
-          <View style={styles.categorySectionHeader}>
-            <AppText variant="footnote" weight="600" color={semantic.textPrimary}>
-              {selectedCategory ? `${t('addTx.categoryPrefix')}${getCategoryLabel(selectedCategory, t)}` : t('addTx.categoryRequired')}
+          {/* 算式行：多项（有 +/− 运算符）时才出现；稿里是 14pt 降透明白 */}
+          {amountExpr.isMulti && (
+            <AppText
+              variant="footnote"
+              color="rgba(255,255,255,0.8)"
+              align="center"
+              numberOfLines={1}
+              style={styles.heroExpr}
+            >
+              {amountExpr.displayValue}
             </AppText>
+          )}
+
+          <View onLayout={registerFieldY('amount')} style={styles.heroAmountBox}>
+            <PressableScale
+              style={styles.heroAmountTouch}
+              activeScale={0.98}
+              hitSlop={0}
+              onPress={() => {
+                // 备注框的系统键盘/光标退场：一次只允许一个光标显示
+                noteInputRef.current?.blur();
+                // 打开键盘即从空态起输：按 5 就是 5 元，新输入直接替换旧值（不再从尾部续接）
+                amountExpr.reset();
+                setAmountCursor(0);
+                setAmountKeypadOpen(true);
+                scrollToField('amount');
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={`${amountCurrencyCode} ${heroAmountDisplay}`}
+            >
+              {/* 整数 64/500 白 + .小数 34/300 降透明；光标随键盘开关（多项算式合计态无光标） */}
+              <HeroAmountText
+                display={heroAmountDisplay}
+                fontSize={heroAmountFontSize}
+                cursorFromEnd={amountCursor}
+                cursorActive={amountKeypadOpen && !amountExpr.isMulti}
+                onCursorChange={setAmountCursor}
+              />
+            </PressableScale>
           </View>
-        )}
+        </View>
+
+        {/* 账户 / 日期 / 月度结转：一行 V2 实底 Chip（夜 surfaceSunken / 日白底轻投影，稿），居中排布 */}
+        <View style={[styles.heroChipsRow, isShort && styles.heroChipsRowShort]}>
+          <TransactionChip
+            label={selectedAsset ? selectedAsset.name : t('common.notSelected')}
+            dotColor={selectedAsset?.color}
+            trailingIcon="chevron-down"
+            compact={isShort}
+            onPress={() => setAssetPickerOpen(true)}
+            accessibilityLabel={t('addTx.selectAccount')}
+          />
+          <TransactionChip
+            label={formatDateLabel(date, langMode, { style: 'monthDay' })}
+            trailingIcon="chevron-down"
+            compact={isShort}
+            onPress={() => setDatePickerOpen(true)}
+            accessibilityLabel={formatDateLabel(date, langMode, { style: 'monthDay' })}
+          />
+          {!isEditing && (
+            <TransactionChip
+              /* 文案按 9.2 ④ 长度预算取短档（胶囊 ≤10 字符）：英文 "Monthly expense" 会把整行挤换行，
+                 支出/收入类型由上方分段控件表达，这里只表达「每月一次」 */
+              label={t('finance.monthlyLabel')}
+              icon="repeat-outline"
+              selected={autoMonthly}
+              compact={isShort}
+              onPress={() => {
+                hapticLight();
+                setAutoMonthly((v) => !v);
+              }}
+            />
+          )}
+        </View>
+
+        {/* 类别（T15 / V2）：列数取版型；格 = 48 圆图标 + 12pt 标签；网格区可滚动，「全部」永远殿后。
+            定稿里没有「类别：xxx」提示行（选中态由外圈表达）→ 整行删掉，高度让给网格：
+            390×844 露出 3 行（15 格，与稿一致），360×640 至少 2 行 */}
         <ScrollView
           style={styles.catGridScroll}
-          contentContainerStyle={styles.catGridContent}
+          contentContainerStyle={[styles.catGridContent, isShort && styles.catGridContentShort]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           onLayout={(e) => {
@@ -2082,20 +2273,28 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                   accessibilityLabel={getCategoryLabel(c, t)}
                   accessibilityState={{ selected: active }}
                 >
-                  <View
-                    style={[
-                      styles.catCellSquare,
-                      active ? styles.catCellSquareActive : { backgroundColor: withAlpha(c.color, 0.12) },
-                    ]}
-                  >
-                    <Ionicons name={c.icon as IconName} size={20} color={c.color} />
+                  {/* UI V2 稿：48 圆图标（未选中 = 类别色淡底；选中 = 类别色实底 + 外圈）。
+                      外圈 = 两层嵌套 View 画的真圆（不依赖 boxShadow）：58 圆 borderWidth 2
+                      （夜 = 类别色 60% / 日 = #9B5BD6），与 48 实心圆之间留 3 的页面底间隙；
+                      绝对定位在 48 盒子上，不占布局、选中时图标不位移 */}
+                  <View style={styles.catIconBox}>
+                    <IconCircle size={48} color={c.color} icon={c.icon as IconName} selected={active} />
+                    {active ? (
+                      <View
+                        pointerEvents="none"
+                        style={[
+                          styles.catRing,
+                          { borderColor: isDark ? withAlpha(c.color, categoryRing.darkAlpha) : categoryRing.light },
+                        ]}
+                      />
+                    ) : null}
                   </View>
                   <AppText
                     variant="caption"
                     align="center"
                     numberOfLines={2}
                     weight={active ? '600' : undefined}
-                    color={active ? semantic.accentText : semantic.textPrimary}
+                    color={active ? semantic.textPrimary : semantic.textSecondary}
                     style={styles.catCellLabel}
                   >
                     {getCategoryLabel(c, t)}
@@ -2105,7 +2304,8 @@ export default function AddTransactionScreen({ navigation, route }: any) {
             );
           })}
 
-          {/* 「全部」殿后格：与类别格同尺寸，打开完整列表抽屉（组内新增 / 排序 / 删除都在「管理类别」页） */}
+          {/* 「全部」殿后格：与类别格同尺寸，打开完整列表抽屉（组内新增 / 排序 / 删除都在「管理类别」页）；
+              稿里是中性圆（夜 surfaceSunken / 日白底轻投影）+ 九宫格图标 */}
           <View style={[styles.catCellWrap, { width: `${100 / categoryColumns}%` as unknown as `${number}%` }]}>
             <PressableScale
               style={[styles.catCell, isShort && styles.catCellShort]}
@@ -2114,9 +2314,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
               accessibilityRole="button"
               accessibilityLabel={t('common.all')}
             >
-              <View style={styles.catCellSquareMore}>
-                <Ionicons name="chevron-forward" size={20} color={semantic.textSecondary} />
-              </View>
+              <IconCircle size={48} icon="grid-outline" />
               <AppText variant="caption" align="center" color={semantic.textSecondary} style={styles.catCellLabel}>
                 {t('common.all')}
               </AppText>
@@ -2232,6 +2430,9 @@ export default function AddTransactionScreen({ navigation, route }: any) {
           onClose={() => setCatSheetOpen(false)}
         />
       )}
+
+      {/* T17：保存成功的勾选动画（300ms 后由 playSaveFlashThen 收尾返回 / 留页） */}
+      {saveFlash && <SaveSuccessFlash />}
     </SafeAreaView>
     </EdgeBackSwipe>
   );
@@ -2401,14 +2602,10 @@ function makeStyles(colors: ThemeColors, isDark: boolean, semantic: SemanticColo
   },
   catEditDoneText: { color: colors.fabIcon, fontWeight: '700', fontSize: 13 },
 
-  // ---------- 固定在屏幕底部的按钮栏：不随内容滚动，永远看得见 ----------
+  // ---------- 键盘停靠区（V2）：面板自身画 keypadPanel 底 + 顶部 30 圆角，这里只留底部安全区补白 ----------
   stickyFooter: {
     paddingHorizontal: 20,
-    paddingTop: 6,
-    // 键盘区表面用令牌 surface（夜间不再沿用旧 card 的藏青）；页底与其它页统一 bg
-    backgroundColor: semantic.surface,
-    borderTopWidth: 1,
-    borderTopColor: semantic.hairline,
+    paddingTop: 0,
   },
   // 矮屏：键盘面板上沿留白 6→0（键盘本身高度由 useLayout 键高决定）
   stickyFooterShort: { paddingTop: 0 },
@@ -2461,43 +2658,41 @@ function makeStyles(colors: ThemeColors, isDark: boolean, semantic: SemanticColo
   // 返回按钮：更大(40)、紫色外环（与"全部"Pill 同色）、加粗箭头，让返回入口足够明显
   // 编辑页右上角的删除按钮：与返回键同款圆环，用红色警示色
 
-  // ---------- T14：金额 Hero 区（标准卡 surface + radius.lg + level1；算式在上、金额主角、Chip 行在下） ----------
-  heroCard: { marginHorizontal: layout.page, marginTop: spacing.sm, marginBottom: spacing.md },
-  // 矮屏：卡内边距 16→12、与下个分区的间距 12→8（一档收紧，见渲染处 isShort）
-  // 矮屏：卡内边距 12→8、上外边距 8→4、与下个分区的间距 12→8（给类别区腾出至少 2 行）
-  heroCardShort: { padding: spacing.sm, marginTop: spacing.xs, marginBottom: spacing.xs },
-  // 算式行（15pt 次要文字，右对齐与金额同侧）：只在多项算式时出现
-  heroExpr: { marginBottom: spacing.xs },
-  // 金额行：币种按钮（左）+ 金额（右）；minHeight 撑住 44pt 档，不与 Chip 的 44 触控区打架
-  heroAmountLine: {
+  // ---------- UI V2：金额 Hero 区（不再包卡片，直接落在渐变上；币种胶囊 → 算式 → 64 金额） ----------
+  heroArea: {
+    alignItems: 'center',
+    paddingTop: spacing.xs,
+    paddingHorizontal: layout.page,
+  },
+  // 矮屏：上留白 4→0（一档收紧）
+  heroAreaShort: { paddingTop: 0 },
+  // 币种小胶囊（稿：高 28 / 内 10 / 12.5 文字 + 12 chevron）
+  currencyPill: {
+    height: 28,
+    paddingHorizontal: 10,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    columnGap: spacing.sm,
-    minHeight: 56,
+    columnGap: 4,
   },
-  // 矮屏：金额行再收一档（56→48，44pt 金额串本身约 52 高，靠行高自然撑开、不挤字）
-  heroAmountLineShort: { minHeight: 48 },
-  // 金额点按热区：吃掉剩余宽度、内容右对齐；14 位大数字也绝不换行（档位降级由 JS 选）
-  heroAmountTouch: { flex: 1, minWidth: 0, alignItems: 'flex-end', justifyContent: 'center' },
-  // 金额文字：右对齐 + 等宽数字；字号 / 行高由档位函数按字符串长度内联给出（44 → 34 → 28）
-  heroAmountText: { textAlign: 'right', fontVariant: ['tabular-nums'], color: semantic.textPrimary },
-  heroAmountTextInner: { alignItems: 'flex-end' },
-  // 光标：内联在金额文字流里（CursorAmountText 切片渲染）
-  heroCursorInline: { color: semantic.accent },
-  // 账户 / 日期 / 月度结转 Chip 行：放不下整块掉第二行（9.2 ②），不截断、不缩字
+  // 算式行（稿：14pt 降透明白、居中）：只在多项算式时出现
+  heroExpr: { marginTop: 6 },
+  // 金额点按热区：整行居中；14 位大数字也绝不换行（档位降级由 JS 选）
+  heroAmountBox: { alignSelf: 'stretch', marginTop: 2 },
+  heroAmountTouch: { alignSelf: 'stretch', minWidth: 0, alignItems: 'center', justifyContent: 'center' },
+  // 账户 / 日期 / 月度结转 Chip 行（稿）：整行居中、放不下整块掉第二行，不截断、不缩字
   heroChipsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+    justifyContent: 'center',
     alignItems: 'center',
-    columnGap: spacing.xs,
-    rowGap: spacing.xs,
-    marginTop: spacing.sm,
+    columnGap: spacing.sm,
+    paddingHorizontal: layout.page,
+    marginTop: spacing.xs,
   },
-  // 矮屏：与金额行的间距 8→4
-  heroChipsRowShort: { marginTop: spacing.xs },
+  // 矮屏：与金额区的间距 4→0、Chip 间距 8→6（三个 Chip 保持一行）
+  heroChipsRowShort: { marginTop: 0, columnGap: 6 },
 
-  // ---------- T15：类别网格（列数按版型；格 = 44 图标方块 + 12pt 标签，标签预留 2 行高度） ----------
+  // ---------- T15/V2：类别网格（列数按版型；格 = 48 圆图标 + 12pt 标签，标签预留 2 行高度） ----------
   // 网格区可滚动：吃掉剩余高度（flex:1），历史类别超出可见容量时滚下去看，「全部」永远殿后
   catGridScroll: { flex: 1 },
   catGridContent: {
@@ -2507,57 +2702,39 @@ function makeStyles(colors: ThemeColors, isDark: boolean, semantic: SemanticColo
     paddingBottom: spacing.xs,
     rowGap: spacing.xs,
   },
-  // 一格：方块 44 + 标签间距 4 + 两行标签 32 + 顶距 4 = 84（与 CAT_CELL_ROW_HEIGHT 常量同步）
+  // 矮屏：底部留白 4→0（「至少 2 行完整可见」的最后 4px）
+  catGridContentShort: { paddingBottom: 0 },
+  // 一格：48 圆 + 标签间距 4 + 单行标签 16 + 顶距 4 = 72（+4 行距 = 76，与 CAT_CELL_ROW_HEIGHT 同步）
   catCellWrap: {},
   catCell: { alignItems: 'center', paddingTop: spacing.xs },
-  // 矮屏：去掉格顶留白（44→40 两行总高，让「至少 2 行」稳落在一屏内）
+  // 矮屏：去掉格顶留白（让「至少 2 行」稳落在一屏内）
   catCellShort: { paddingTop: 0 },
-  catCellSquare: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-    // 描边恒 1.5（选中才换色）：选中/未选中之间不跳 1px
-    borderWidth: 1.5,
-    borderColor: 'transparent',
+  // （V2：图标底 / 选中圆与「全部」中性圆交给共享 IconCircle + 本页 catIconBox/catRing）
+  // 选中外圈：58 圆 + 2 描边，绝对定位在 48 盒子上（不占布局），与 48 圆之间留 3 的页面底间隙
+  catIconBox: { width: 48, height: 48 },
+  catRing: {
+    position: 'absolute',
+    top: -5,
+    left: -5,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    borderWidth: 2,
   },
-  // 选中：accent 描边 + accentSoft 底（图标保持类别色，UI_RULES：类别色 100% 图标）
-  catCellSquareActive: { borderColor: semantic.accent, backgroundColor: semantic.accentSoft },
-  // 「全部」格：中性样式（surface 底 + textSecondary 箭头），与「选中」accent 描边区分开，
-  // 结构上与类别格一致：描边恒 1.5 透明（不跳 1px）
-  catCellSquareMore: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: 'transparent',
-    backgroundColor: semantic.surface,
-  },
-  // 标签：12pt 居中、最多 2 行；minHeight 32（两行）+ alignSelf stretch 让整格宽度对齐
+  // 标签：12pt 居中、最多 2 行；minHeight 16（单行）+ alignSelf stretch 让整格宽度对齐
   // （stretch 而不是 width:'100%'：百分比在 RN Web 的嵌套 flex 里解析不到父级实测宽）
-  catCellLabel: { marginTop: spacing.xs, minHeight: 32, alignSelf: 'stretch' },
+  catCellLabel: { marginTop: spacing.xs, minHeight: 16, alignSelf: 'stretch' },
 
   rateCursor: { fontSize: 17, fontWeight: '300', color: colors.link, marginLeft: 2 },
   feeCursor: { fontSize: 15, fontWeight: '400', color: colors.link, marginLeft: 3 },
 
-  // ---------- 类别自适应网格（点击仍是"进入选择页" ----------
-  categorySectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: layout.page,
-    marginBottom: spacing.xs,
-  },
   // 矮屏：整行再收 4（标签行不占多余高度，给类别格留位置）
 
   // ---------- 转账/兑换（T16 / A6）：资金流卡 + 汇率卡，全部令牌化 ----------
   exchangePageContent: { paddingHorizontal: layout.page, paddingBottom: 26 },
 
-  // 资金流卡：普通卡 + 两张账户块 + 中间方向 IconButton
-  flowCard: { marginBottom: spacing.md },
+  // 资金流卡：普通卡 + 两张账户块 + 中间方向 IconButton；V2 内容卡统一 26 圆角（页面内覆盖共享 Card 的 20）
+  flowCard: { marginBottom: spacing.md, borderRadius: 26 },
   flowHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2565,10 +2742,10 @@ function makeStyles(colors: ThemeColors, isDark: boolean, semantic: SemanticColo
     marginBottom: spacing.sm,
   },
   flowRow: { flexDirection: 'row', alignItems: 'center' },
-  // 账户块：flex 均分；描边 + bg 底撑起"可选"的观感（与抽屉搜索框同一档）
+  // 账户块的外层（flex 直接子项）：PressableScale 把 style 放内层，flex 必须落在这一层
+  flowBlockWrap: { flex: 1, minWidth: 0 },
+  // 账户块：描边 + bg 底撑起"可选"的观感（与抽屉搜索框同一档）
   flowBlock: {
-    flex: 1,
-    minWidth: 0,
     minHeight: 56,
     padding: spacing.md,
     borderRadius: radius.md,
@@ -2583,13 +2760,14 @@ function makeStyles(colors: ThemeColors, isDark: boolean, semantic: SemanticColo
     marginBottom: spacing.xs,
   },
   flowBlockMain: { flexDirection: 'row', alignItems: 'center', columnGap: spacing.sm },
-  // 图标方块：全 App 同一种 40 方块（类别/账户色 12% 底 + 100% 图标）
-  flowIconSquare: { width: 40, height: 40, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
+  // （V2：账户图标改用共享 IconCircle 42 圆，旧 flowIconSquare 已删）
   // 账户名：最多 2 行、放不下换行不截断（flexShrink 让长名在块内折行）
   flowBlockName: { flexShrink: 1 },
-  flowSwap: { marginHorizontal: spacing.sm },
+  // 互换钮的外层：外边距必须落在 flex 直接子项上（同上）
+  flowSwapWrap: { marginHorizontal: spacing.sm },
 
-  rateCard: { paddingVertical: spacing.md },
+  // 金额卡：V2 内容卡统一 26 圆角（页面内覆盖共享 Card 的 20）
+  rateCard: { paddingVertical: spacing.md, borderRadius: 26 },
   rateCardTitle: { marginBottom: spacing.sm },
   rateGridRow: { flexDirection: 'row', alignItems: 'flex-start', flexWrap: 'wrap' },
   rateGridDividerVertical: {
@@ -2598,6 +2776,11 @@ function makeStyles(colors: ThemeColors, isDark: boolean, semantic: SemanticColo
     marginHorizontal: spacing.md,
     alignSelf: 'stretch',
   },
+  // onLayout 挂外层（fieldY 记账用），格子本体仍是 PressableScale
+  rateGridCellWrapLeft: { flex: 1, minWidth: 0 },
+  rateCenterCellWrap: { alignItems: 'center' },
+  // 数值行：数字与「×」/计算器图标同一基线
+  rateGridValueRow: { flexDirection: 'row', alignItems: 'baseline' },
   rateGridCellLeft: { flex: 1, alignItems: 'flex-start', paddingVertical: spacing.xs },
   rateGridCellRight: { flex: 1, alignItems: 'flex-end', paddingVertical: spacing.xs },
   rateGridLabelRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xs },

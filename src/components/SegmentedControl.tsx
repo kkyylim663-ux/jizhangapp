@@ -183,11 +183,11 @@ export default function SegmentedControl({
     <View style={[styles.touchWrap, stretch && styles.touchWrapStretch]}>
       {isGlass ? (
         // 玻璃槽（UI V2）：半透明 + 1px 亮边 + 顶部内高光（GlassView 自带模糊回退）
-        <GlassView radius={radius.full} style={[styles.trackBase, stretch && styles.trackStretch]}>
+        <GlassView radius={radius.full} style={stretch ? [styles.trackBase, styles.trackStretch] : styles.trackBase}>
           {rows}
         </GlassView>
       ) : (
-        <View style={[styles.track, stretch && styles.trackStretch]}>{rows}</View>
+        <View style={stretch ? [styles.track, styles.trackStretch] : styles.track}>{rows}</View>
       )}
     </View>
   );
