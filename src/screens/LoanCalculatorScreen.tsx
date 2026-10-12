@@ -19,8 +19,11 @@ import {
 const WEB_GLASS_INTENSITY = Platform.OS === 'web' ? 8 : undefined;
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useApp } from '../context/AppContext';
 import { useTheme } from '../theme/useTheme';
 import { useLayout } from '../theme/useLayout';
+import { formatMoney } from '../utils/formatMoney';
+import type { DecimalPlaces } from '../types';
 import { useT } from '../i18n/LanguageContext';
 import { useTabClearance } from '../hooks/useTabClearance';
 import { useTabBarScrollHandler } from '../context/TabBarAutoHideContext';
@@ -37,9 +40,10 @@ type ScheduleRow = {
   balance: number;
 };
 
-function fmt(n: number) {
+/** 金额统一走 formatMoney，小数位跟随 App 的小数位设置 */
+function fmt(n: number, decimals: DecimalPlaces) {
   if (!isFinite(n)) return '--';
-  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return formatMoney(n, { decimals });
 }
 
 // 余额递减法（等额本息）：每月供款固定，利息按剩余本金算，本金部分逐月变多
@@ -107,6 +111,7 @@ function GlassBackHeader({ title, onBack }: { title: string; onBack: () => void 
 }
 
 export default function LoanCalculatorScreen({ navigation }: any) {
+  const { decimalPlaces } = useApp();
   const { semantic, spacing, isDark } = useTheme();
   const { pagePadding } = useLayout();
   const t = useT();
@@ -275,7 +280,7 @@ export default function LoanCalculatorScreen({ navigation }: any) {
                 {method === 'straight' ? t('addTx.loanFirstPayment') : t('addTx.loanMonthlyPayment')}
               </AppText>
               <AppText variant="title2" align="center" style={st.resultValue}>
-                {fmt(result.firstPayment)}
+                {fmt(result.firstPayment, decimalPlaces)}
               </AppText>
               <View style={[st.divider, { backgroundColor: semantic.hairline }]} />
               {method === 'straight' && (
@@ -284,7 +289,7 @@ export default function LoanCalculatorScreen({ navigation }: any) {
                     {t('addTx.loanLastPayment')}
                   </AppText>
                   <AppText variant="subhead" weight="600">
-                    {fmt(result.lastPayment)}
+                    {fmt(result.lastPayment, decimalPlaces)}
                   </AppText>
                 </View>
               )}
@@ -293,7 +298,7 @@ export default function LoanCalculatorScreen({ navigation }: any) {
                   {t('addTx.loanTotalPaid')}
                 </AppText>
                 <AppText variant="subhead" weight="600">
-                  {fmt(result.totalPaid)}
+                  {fmt(result.totalPaid, decimalPlaces)}
                 </AppText>
               </View>
               <View style={st.resultRow}>
@@ -301,7 +306,7 @@ export default function LoanCalculatorScreen({ navigation }: any) {
                   {t('addTx.calcTotalInterest')}
                 </AppText>
                 <AppText variant="subhead" weight="600">
-                  {fmt(result.totalInterest)}
+                  {fmt(result.totalInterest, decimalPlaces)}
                 </AppText>
               </View>
 
@@ -352,16 +357,16 @@ export default function LoanCalculatorScreen({ navigation }: any) {
                         {r.period}
                       </AppText>
                       <AppText variant="caption" style={st.scheduleCell}>
-                        {fmt(r.payment)}
+                        {fmt(r.payment, decimalPlaces)}
                       </AppText>
                       <AppText variant="caption" style={st.scheduleCell}>
-                        {fmt(r.principal)}
+                        {fmt(r.principal, decimalPlaces)}
                       </AppText>
                       <AppText variant="caption" style={st.scheduleCell}>
-                        {fmt(r.interest)}
+                        {fmt(r.interest, decimalPlaces)}
                       </AppText>
                       <AppText variant="caption" style={st.scheduleCell}>
-                        {fmt(r.balance)}
+                        {fmt(r.balance, decimalPlaces)}
                       </AppText>
                     </View>
                   ))}

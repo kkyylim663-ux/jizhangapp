@@ -19,8 +19,11 @@ import {
 const WEB_GLASS_INTENSITY = Platform.OS === 'web' ? 8 : undefined;
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useApp } from '../context/AppContext';
 import { useTheme } from '../theme/useTheme';
 import { useLayout } from '../theme/useLayout';
+import { formatMoney } from '../utils/formatMoney';
+import type { DecimalPlaces } from '../types';
 import { useT } from '../i18n/LanguageContext';
 import { useTabClearance } from '../hooks/useTabClearance';
 import { useTabBarScrollHandler } from '../context/TabBarAutoHideContext';
@@ -34,9 +37,10 @@ const FREQUENCIES: { key: string; value: number }[] = [
   { key: 'addTx.calcFreqMonthly', value: 12 },
 ];
 
-function fmt(n: number) {
+/** 金额统一走 formatMoney，小数位跟随 App 的小数位设置 */
+function fmt(n: number, decimals: DecimalPlaces) {
   if (!isFinite(n)) return '--';
-  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return formatMoney(n, { decimals });
 }
 
 /** UI V2.1 玻璃二级页头：ScreenHeader 的返回键是透明 44 触控区，这里在它底下垫一枚 44 玻璃圆钮（稿） */
@@ -54,6 +58,7 @@ function GlassBackHeader({ title, onBack }: { title: string; onBack: () => void 
 }
 
 export default function CompoundInterestScreen({ navigation }: any) {
+  const { decimalPlaces } = useApp();
   const { semantic, spacing, isDark } = useTheme();
   const { pagePadding } = useLayout();
   const t = useT();
@@ -206,7 +211,7 @@ export default function CompoundInterestScreen({ navigation }: any) {
                 {t('addTx.calcFutureValue')}
               </AppText>
               <AppText variant="title2" align="center" style={st.resultValue}>
-                {fmt(result.futureValue)}
+                {fmt(result.futureValue, decimalPlaces)}
               </AppText>
               <View style={[st.divider, { backgroundColor: semantic.hairline }]} />
               <View style={st.resultRow}>
@@ -214,7 +219,7 @@ export default function CompoundInterestScreen({ navigation }: any) {
                   {t('addTx.calcTotalContributed')}
                 </AppText>
                 <AppText variant="subhead" weight="600">
-                  {fmt(result.totalContributed)}
+                  {fmt(result.totalContributed, decimalPlaces)}
                 </AppText>
               </View>
               <View style={st.resultRow}>
@@ -222,7 +227,7 @@ export default function CompoundInterestScreen({ navigation }: any) {
                   {t('addTx.calcTotalInterest')}
                 </AppText>
                 <AppText variant="subhead" weight="600">
-                  {fmt(result.totalInterest)}
+                  {fmt(result.totalInterest, decimalPlaces)}
                 </AppText>
               </View>
             </GlassView>
