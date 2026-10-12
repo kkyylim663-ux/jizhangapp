@@ -681,8 +681,9 @@ export const darkSemantic: SemanticColors = {
   hairline: 'rgba(255,255,255,0.05)',
   switchTrackOff: 'rgba(255,255,255,0.22)',
   textPrimary: '#F2F0FA',
-  textSecondary: 'rgba(242,240,250,0.76)', // V2.2c：.70 → .76
-  textTertiary: 'rgba(242,240,250,0.56)',
+  // 夜间灰字（见 darkColors 同名注释）：secondary .84 / tertiary .72，对最亮渐变色块 ≥4.5:1
+  textSecondary: 'rgba(242,240,250,0.84)',
+  textTertiary: 'rgba(242,240,250,0.72)',
   accent: '#6C4DF6',
   onAccent: '#FFFFFF',
   accentText: '#A595FF',
@@ -690,7 +691,7 @@ export const darkSemantic: SemanticColors = {
   amountExpense: '#B8A6FF', // V3 新规：全 App 支出金额 = 紫（夜）
   // 收入金额（夜）：#3DDC97 在 #5A5470 上仅 4.05:1；#7CF0B8 在卡 #16141F 13:1、在亮玻璃底 5.1:1（≥4.5）
   amountIncome: '#7CF0B8',
-  amountTransfer: 'rgba(242,240,250,0.76)', // = textSecondary
+  amountTransfer: 'rgba(242,240,250,0.84)', // = textSecondary
   danger: '#FB7185',
   warning: '#FBBF24',
   scrim: 'rgba(0,0,0,0.55)',
@@ -1015,7 +1016,7 @@ export const darkGlass: GlassToken = {
  */
 export const glassPill = {
   light: { fill: '#5B3DF0', text: '#FFFFFF', muted: '#4F4A66' },
-  dark: { fill: '#FFFFFF', text: '#1A1040', muted: 'rgba(242,240,250,0.70)' },
+  dark: { fill: '#FFFFFF', text: '#1A1040', muted: 'rgba(242,240,250,0.84)' },
 } as const;
 
 /**
