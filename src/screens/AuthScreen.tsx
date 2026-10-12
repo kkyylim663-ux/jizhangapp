@@ -130,15 +130,18 @@ export default function AuthScreen({ navigation }: any) {
 
   // 头像（base64 存 AsyncStorage）+ 首次使用日期（算"使用天数"）
   useEffect(() => {
+    let mounted = true;
     (async () => {
       try {
         const saved = await AsyncStorage.getItem(AVATAR_STORAGE_KEY);
+        if (!mounted) return;
         if (saved) setAvatarUri(saved);
         let firstUse = await AsyncStorage.getItem(FIRST_USE_STORAGE_KEY);
         if (!firstUse) {
           firstUse = new Date().toISOString().slice(0, 10);
           await AsyncStorage.setItem(FIRST_USE_STORAGE_KEY, firstUse);
         }
+        if (!mounted) return;
         const days = Math.floor((Date.now() - new Date(`${firstUse}T00:00:00`).getTime()) / 86400000) + 1;
         setUseDays(Math.max(days, 1));
         avatarLoadedRef.current = true;
@@ -147,6 +150,9 @@ export default function AuthScreen({ navigation }: any) {
         avatarLoadedRef.current = true;
       }
     })();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   // 点头像 → 相册选一张 → 裁成方形 → base64 持久化

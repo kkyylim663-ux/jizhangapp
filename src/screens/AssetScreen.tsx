@@ -569,14 +569,18 @@ export default function AssetScreen() {
 
   // 启动时恢复上次保存的拖拽排序
   useEffect(() => {
+    let mounted = true;
     (async () => {
       try {
         const raw = await AsyncStorage.getItem(ASSET_ORDER_KEY);
-        if (raw) setAssetOrder(JSON.parse(raw));
+        if (mounted && raw) setAssetOrder(JSON.parse(raw));
       } catch (e) {
         console.warn('读取账户排序失败', e);
       }
     })();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const persistAssetOrder = (next: Record<string, number>) => {
