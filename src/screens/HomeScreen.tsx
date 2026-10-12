@@ -5,7 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 
 import { useFocusEffect } from '@react-navigation/native';
-import Reanimated, { FadeIn, FadeOut, FadeOutUp, useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
+import Reanimated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -19,7 +19,7 @@ import { useTheme } from '../theme/useTheme';
 import { useLayout } from '../theme/useLayout';
 import { useTabClearance } from '../hooks/useTabClearance';
 import { useTabBarScrollHandler, useTabBarForceHide } from '../context/TabBarAutoHideContext';
-import { ThemeColors, Elevation, Layout, Radius, SemanticColors, Spacing } from '../theme/theme';
+import { ThemeColors, Elevation, Layout, Radius, SemanticColors, Spacing, layout as pageLayout } from '../theme/theme';
 import { formatMoney as fmtMoney, HIDDEN_AMOUNT } from '../utils/formatMoney';
 import { formatDate } from '../utils/formatDate';
 import type { Ledger, Transaction } from '../types';
@@ -59,8 +59,8 @@ const HERO_EYE_RESERVE = 46;
 const HERO_EYE_GAP = 10;
 /** 账单列表卡圆角（V2 稿 26 —— 比 radius.lg(20) 大的内容卡档，只在首页用） */
 const LIST_CARD_RADIUS = 22;
-// V3：账单卡左右外边距 12（卡不再与页面同边距）
-const LIST_CARD_MARGIN = 12;
+// 账单卡左右外边距 = 页面边距令牌 layout.page（与预算卡同一条左右边线；QA 发现 12 与预算卡错位）
+const LIST_CARD_MARGIN = pageLayout.page;
 /** 行间分割线左缩进（V2 稿 70 = 行内边距 16 + 图标圆 42 + 行间距 12，正好与文字左缘对齐） */
 const TX_SEP_INSET = 70;
 /** 列表卡上下露出的卡边（V2 稿 4px） */
@@ -433,7 +433,7 @@ function makeTxRowStyles(semantic: SemanticColors, spacing: Spacing, layout: Lay
       paddingHorizontal: layout.card,
       paddingVertical: 9,
       backgroundColor: semantic.homeCard,
-      // 列表卡左右各留 12（V3） —— 卡体就是这些行 + 日期头拼出来的（SectionList 内容不好整体收窄）
+      // 列表卡左右边距 = LIST_CARD_MARGIN（= 页面令牌，与预算卡同一边线） —— 卡体就是这些行 + 日期头拼出来的（SectionList 内容不好整体收窄）
       marginHorizontal: LIST_CARD_MARGIN,
     },
     // 末行 = 列表卡底边：26 下圆角（只圆下两角 → 行高 60 足够撑出真 26 弧）+ 稿里卡内下 4pt
