@@ -928,20 +928,49 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   // 三个来源都会挡住底部：自绘计算器面板（amountKeypadOpen）、系统键盘（keyboardVisible）、
   // 键盘日期键弹出的 DateRangePickerSheet（datePickerOpen——之前它开/关时会把 Tab 栏放出来，
   // 选完日期正好挡住计算器面板）。任一开着就强制隐藏，全部关了才交还控制权。
+  // 强制隐藏的合并条件：任何覆盖本页的面板 / 键盘 / 弹层开着，栏都必须藏住。
+  // 子组件（BottomSheet）关闭时会自行放栏，所以这里每次渲染都重新断言一次（true），
+  // 保证「计算器仍开着」时栏不会在子弹层关闭的那一刻跳出来。
+  const forceHideWanted =
+    amountKeypadOpen ||
+    keyboardVisible ||
+    datePickerOpen ||
+    dateSheetOpen ||
+    assetPickerOpen ||
+    catSheetOpen ||
+    accountPickerOpen ||
+    receiptPreviewOpen ||
+    newGroupFormOpen ||
+    iconPickerOpen;
+  // 释放防抖：条件持续为假 250ms 后才放栏，任何过渡帧都不闪现
+  const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!isFocused) return; // 没在前台的实例，不该去动全局 Tab bar 状态
-    setTabBarForceHidden(amountKeypadOpen || keyboardVisible || datePickerOpen);
-    // 注意：释放动作不挂在这里的 cleanup 上——每次键盘/日期弹层开关都会先跑 cleanup
-    // 把栏放出来再收回，Tab 栏会在间隙里跳出来。释放只在下面的失焦 effect 里做。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [amountKeypadOpen, keyboardVisible, datePickerOpen, isFocused]);
+    if (forceHideWanted) {
+      if (releaseTimerRef.current) {
+        clearTimeout(releaseTimerRef.current);
+        releaseTimerRef.current = null;
+      }
+      setTabBarForceHidden(true);
+      return;
+    }
+    if (!releaseTimerRef.current) {
+      releaseTimerRef.current = setTimeout(() => {
+        releaseTimerRef.current = null;
+        setTabBarForceHidden(false);
+      }, 250);
+    }
+  });
 
   // 失焦（切走/卸载）时才把强制隐藏交还回去
   useEffect(() => {
     if (!isFocused) {
       setTabBarForceHidden(false);
     }
-    return () => setTabBarForceHidden(false);
+    return () => {
+      if (releaseTimerRef.current) clearTimeout(releaseTimerRef.current);
+      setTabBarForceHidden(false);
+    };
   }, [isFocused]);
 
   const handlePickCategory = (id: string) => {
@@ -1694,7 +1723,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
             底部留白收紧(insets-32)：edge-to-edge 下根视图已延伸到导航条后面，
             再垫满 insets 会在键盘下方多出一条空位——键盘整体下移填补它 */}
         {amountKeypadOpen && (
-          <View style={[styles.stickyFooter, isShort && styles.stickyFooterShort, { paddingBottom: Math.max(insets.bottom - 40, isShort ? 4 : 8), paddingHorizontal: 0 }]}>
+          <View style={[styles.stickyFooter, isShort && styles.stickyFooterShort, { paddingBottom: Math.max(insets.bottom - 40, isShort ? 4 : 8) + (forceHideWanted ? 0 : tabClearance), paddingHorizontal: 0 }]}>
             <AmountCalculatorKeypad
               onPressKey={handleExprKey}
               onPressToday={() => setDatePickerOpen(true)}
@@ -2330,7 +2359,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
           再垫满 insets 会在键盘下方多出一条空位——键盘整体下移填补它 */}
       {amountKeypadOpen && (
         <View
-          style={[styles.stickyFooter, isShort && styles.stickyFooterShort, { paddingBottom: Math.max(insets.bottom - 40, isShort ? 4 : 8), paddingHorizontal: 0 }]}
+          style={[styles.stickyFooter, isShort && styles.stickyFooterShort, { paddingBottom: Math.max(insets.bottom - 40, isShort ? 4 : 8) + (forceHideWanted ? 0 : tabClearance), paddingHorizontal: 0 }]}
         >
           <AmountCalculatorKeypad
             onPressKey={(key) => setAmountCursor(amountExpr.pressKeyAt(key, amountCursor))}
