@@ -14,6 +14,7 @@ import Reanimated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/useTheme';
+import { useBottomSystemInset } from '../hooks/useBottomSystemInset';
 import PressableScale from './PressableScale';
 import { useT } from '../i18n/LanguageContext';
 import { useTabBarForceHide } from '../context/TabBarAutoHideContext';
@@ -96,6 +97,8 @@ export default function DateRangePickerSheet({ visible, start, end, onClose, onA
   const { colors } = theme as { colors: ThemeColors };
   // 遮罩 = 全 App 唯一遮罩色 semantic.scrim；下面 scrimOpacity 是 0..1 的比例（实际透明度 = scrim 的 alpha × 比例）
   const scrimColor = theme.semantic.scrim;
+  // 底部弹层贴屏幕底：底部补白要让出系统导航栏（原来写死 38，不认真机导航条）
+  const bottomInset = useBottomSystemInset();
   const t = useT();
   const now = new Date();
   const [viewMonth, setViewMonth] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1));
@@ -310,7 +313,7 @@ export default function DateRangePickerSheet({ visible, start, end, onClose, onA
 
       {/* 底部卡片:底部锚定、圆角 24、最高 85% 屏高;整体跟手下拉 */}
       <GestureDetector gesture={sheetPanGesture}>
-        <Reanimated.View style={[s.sheet, sheetAnimStyle]}>
+        <Reanimated.View style={[s.sheet, { paddingBottom: Math.max(20, bottomInset + 16) }, sheetAnimStyle]}>
           <View style={s.grabber} />
           {/* 标题栏:✕ 关闭移到右侧 + 标题居中(与选择账本头部同款) */}
           <View style={s.sheetHeader}>

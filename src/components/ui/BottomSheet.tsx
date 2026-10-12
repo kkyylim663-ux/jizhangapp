@@ -30,6 +30,7 @@ import { BackHandler, Pressable, StyleProp, StyleSheet, View, ViewStyle, useWind
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBottomSystemInset } from '../../hooks/useBottomSystemInset';
 import { Spacing } from '../../theme/theme';
 import { useTheme } from '../../theme/useTheme';
 import { useT } from '../../i18n/LanguageContext';
@@ -87,6 +88,8 @@ export function BottomSheet({
 }: BottomSheetProps) {
   const { semantic, spacing, radius, motion } = useTheme();
   const insets = useSafeAreaInsets();
+  // 底部系统栏高度（安卓实测导航条兜底，见 useBottomSystemInset）
+  const bottomInset = useBottomSystemInset();
   const { height: windowHeight } = useWindowDimensions();
   const tr = useT();
   const forceHideTabBar = useTabBarForceHide();
@@ -250,7 +253,7 @@ export function BottomSheet({
             borderTopLeftRadius: radius.xl,
             borderTopRightRadius: radius.xl,
             // 内容底部留白 = 安全区 + 16（用户定版；不能用 max，否则三键导航机型会贴死）
-            paddingBottom: insets.bottom + spacing.lg,
+            paddingBottom: bottomInset + spacing.lg,
             maxHeight: Math.round(windowHeight * maxHeightRatio),
           },
           sheetAnimStyle,

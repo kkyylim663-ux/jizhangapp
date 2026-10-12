@@ -36,6 +36,7 @@ import { LanguageProvider, useT } from './src/i18n/LanguageContext';
 import ComponentGallery from './src/screens/_preview/ComponentGallery';
 import { useNotificationSetup } from './src/hooks/useNotificationSetup';
 import { usePaymentReminders } from './src/hooks/usePaymentReminders';
+import { useBottomSystemInset } from './src/hooks/useBottomSystemInset';
 import {
   TabBarAutoHideProvider,
   useCreateTabBarAutoHide,
@@ -210,13 +211,14 @@ function AddTransactionStack() {
 
 /** 系统导航栏区（底部安全区）实底遮罩：Expo Go 下原生导航栏设置不生效，由 App 自己画 */
 function NavBarScrim() {
-  const insets = useSafeAreaInsets();
+  // 与计算器键盘的底部让位共用同一个高度来源（useBottomSystemInset），遮罩高 == 键盘让出高，中间无缝
+  const bottomInset = useBottomSystemInset();
   const { semantic } = useTheme();
-  if (insets.bottom <= 0) return null;
+  if (bottomInset <= 0) return null;
   return (
     <View
       pointerEvents="none"
-      style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: insets.bottom, backgroundColor: semantic.navBarBg, zIndex: 35 }}
+      style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: bottomInset, backgroundColor: semantic.navBarBg, zIndex: 35 }}
     />
   );
 }

@@ -38,6 +38,7 @@ import { hapticLight, hapticSelection, hapticSuccess, hapticWarning } from '../u
 import { useTheme } from '../theme/useTheme';
 import { useLayout } from '../theme/useLayout';
 import { useTabClearance } from '../hooks/useTabClearance';
+import { useBottomSystemInset } from '../hooks/useBottomSystemInset';
 import { useTabBarScrollHandler, useTabBarForceHide } from '../context/TabBarAutoHideContext';
 import { ThemeColors, SemanticColors, Spacing, Layout, Radius, categoryRing } from '../theme/theme';
 import { useAmountExpression } from '../hooks/useAmountExpression';
@@ -328,6 +329,11 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   // 主题化弹窗（替代系统 Alert）
   const dialog = useDialog();
   const tabClearance = useTabClearance();
+  // 底部系统栏（手势条 / 三键导航）实际高度：键盘面板、底部弹层都要让出它，见 keypadBottomPad
+  const bottomInset = useBottomSystemInset();
+  // 计算器键盘底部让位：iOS 保持原来的紧凑留白（home 指示条在安全区内）；
+  // 安卓必须整条让出系统导航栏——旧的 insets - 40 会让导航条盖住键盘底行（C 0 . 与「完成」）
+  const keypadBottomPad = Platform.OS === 'ios' ? Math.max(insets.bottom - 40, isShort ? 4 : 8) : bottomInset + (isShort ? 4 : 8);
   const onTabScroll = useTabBarScrollHandler(); // 不传参数！
   const setTabBarForceHidden = useTabBarForceHide();
   const isFocused = useIsFocused();
@@ -451,7 +457,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
     // 遮挡高度分两种：自绘计算器面板用 KEYPAD_PANEL_HEIGHT（实算常量，TASK-009 起与
     // 类别网格停止线共用同一个值，不会再估矮越线）；系统键盘（备注框聚焦弹出来的那个）
     // 用 keyboardDidShow 事件给的真实高度，不能套用面板的常量——两个高度并不一样。
-    const occludedHeight = amountKeypadOpen ? KEYPAD_PANEL_HEIGHT : keyboardVisible ? keyboardHeight : 0;
+    const occludedHeight = amountKeypadOpen ? KEYPAD_PANEL_HEIGHT + keypadBottomPad : keyboardVisible ? keyboardHeight : 0;
     const visibleH = Dimensions.get('window').height - insets.top - occludedHeight;
     const targetOffset = Math.max(y - visibleH / 2, 0);
     // 延迟一帧再滚：紧跟在 setAmountKeypadOpen(true) 之后调用时，键盘面板刚出现，
@@ -1767,7 +1773,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
             底部留白收紧(insets-32)：edge-to-edge 下根视图已延伸到导航条后面，
             再垫满 insets 会在键盘下方多出一条空位——键盘整体下移填补它 */}
         {amountKeypadOpen && (
-          <View style={[styles.stickyFooter, isShort && styles.stickyFooterShort, { paddingBottom: Math.max(insets.bottom - 40, isShort ? 4 : 8) + (forceHideWanted ? 0 : tabClearance), paddingHorizontal: 0 }]}>
+          <View style={[styles.stickyFooter, isShort && styles.stickyFooterShort, { paddingBottom: keypadBottomPad + (forceHideWanted ? 0 : tabClearance), paddingHorizontal: 0 }]}>
             <AmountCalculatorKeypad
               onPressKey={handleExprKey}
               onPressToday={() => setDatePickerOpen(true)}
@@ -2164,7 +2170,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
           onRequestClose={() => setIconPickerOpen(false)}
         >
           <TouchableOpacity style={[styles.iconPickerOverlay, { backgroundColor: semantic.scrim }]} activeOpacity={1} onPress={() => setIconPickerOpen(false)}>
-            <Pressable style={styles.iconPickerSheet} onPress={() => {}}>
+            <Pressable style={[styles.iconPickerSheet, { paddingBottom: bottomInset + 16 }]} onPress={() => {}}>
               <View style={styles.iconPickerHeader}>
                 <Text style={styles.iconPickerTitle}>{t('addTx.pickIconTitle')}</Text>
                 <TouchableOpacity
@@ -2420,7 +2426,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
           再垫满 insets 会在键盘下方多出一条空位——键盘整体下移填补它 */}
       {amountKeypadOpen && (
         <View
-          style={[styles.stickyFooter, isShort && styles.stickyFooterShort, { paddingBottom: Math.max(insets.bottom - 40, isShort ? 4 : 8) + (forceHideWanted ? 0 : tabClearance), paddingHorizontal: 0 }]}
+          style={[styles.stickyFooter, isShort && styles.stickyFooterShort, { paddingBottom: keypadBottomPad + (forceHideWanted ? 0 : tabClearance), paddingHorizontal: 0 }]}
         >
           <AmountCalculatorKeypad
             onPressKey={(key) => setAmountCursor(amountExpr.pressKeyAt(key, amountCursor))}
