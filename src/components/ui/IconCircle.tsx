@@ -41,6 +41,8 @@ export interface IconCircleProps {
   icon?: keyof typeof Ionicons.glyphMap;
   /** 选中态：两层外圈（记一笔类别格） */
   selected?: boolean;
+  /** 形状：circle（默认，球面）· tile（V3 首页：圆角方块 + 线条图标，无高光无阴影） */
+  shape?: 'circle' | 'tile';
   style?: ViewStyle;
   children?: React.ReactNode;
 }
@@ -137,6 +139,7 @@ export function IconCircle({
   iconSize,
   icon,
   selected = false,
+  shape = 'circle',
   style,
   children,
 }: IconCircleProps) {
@@ -148,6 +151,24 @@ export function IconCircle({
   // 弧形高光路径按 size 等比缩放（只跟尺寸有关，同尺寸实例共用即可）
   const crescentD = useMemo(() => glossCrescentPath(size), [size]);
   const edgeD = useMemo(() => glossEdgePath(size), [size]);
+
+  if (shape === 'tile') {
+    // V3 首页：圆角方块底 + 类别色线条图标（不走球面渐变 / 高光 / 投影）
+    return (
+      <View
+        style={[
+          styles.root,
+          { width: size, height: size, borderRadius: 12, backgroundColor: semantic.homeIconTile },
+          style,
+        ]}
+      >
+        {icon ? (
+          <Ionicons name={icon} size={iconSize ?? Math.round(size * 0.48)} color={color ?? semantic.textSecondary} />
+        ) : null}
+        {children}
+      </View>
+    );
+  }
 
   // 外投影（§5）：同色投影 80% + 2/3 黑；选中再叠两层外圈（3dp 页面底色打底 + 5dp 外环）
   const outerShadow = [

@@ -441,6 +441,8 @@ export const en = {
     selectCurrency: 'Select Currency',
     // 首页净资产货币下拉的标题（按交互视频 1:1）
     currencyMenuTitle: 'Select Currency',
+    currencySheetTitle: 'Switch currency',
+    currencySearch: 'Search currency',
     ledgerName: 'Ledger',
     notificationTitle: 'Notifications',
     notificationMsg: 'This feature is under development',

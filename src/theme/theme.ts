@@ -589,6 +589,14 @@ export type SemanticColors = {
   warning: string;
   /** 全 App 唯一遮罩色（替换现有 6 种写法） */
   scrim: string;
+  /** V3 首页页面底（渐变之下的纯色底） */
+  homeBg: string;
+  /** V3 首页账单实底卡（不透明，无玻璃） */
+  homeCard: string;
+  /** V3 首页账单卡发丝线 */
+  homeHairline: string;
+  /** V3 首页账单行图标方块底（38dp 圆角方块） */
+  homeIconTile: string;
 };
 
 export const lightSemantic: SemanticColors = {
@@ -617,6 +625,10 @@ export const lightSemantic: SemanticColors = {
   danger: '#E11D48',
   warning: '#D97706',
   scrim: 'rgba(10,8,20,0.40)',
+  homeBg: '#F4F3F8',
+  homeCard: '#FFFFFF',
+  homeHairline: 'rgba(21,19,42,0.07)',
+  homeIconTile: '#F0EDFA',
 };
 
 export const darkSemantic: SemanticColors = {
@@ -649,6 +661,10 @@ export const darkSemantic: SemanticColors = {
   danger: '#FB7185',
   warning: '#FBBF24',
   scrim: 'rgba(0,0,0,0.55)',
+  homeBg: '#0A0910',
+  homeCard: '#16141F',
+  homeHairline: 'rgba(255,255,255,0.07)',
+  homeIconTile: '#221E30',
 };
 
 /**

@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, SectionList, Modal, TextInput, Platform, Keyboard } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, SectionList, Modal, TextInput, Platform, Keyboard, PanResponder } from 'react-native';
 import type { TextStyle } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -51,7 +51,7 @@ const FLASH_ROW_MS = 500;
 
 // ── UI V2 首页版型常量（数值取自 .zcode/design/mockups/G_HomeDark|Light.dc.html 的内联样式）──
 /** Hero 净资产整数段字号（V2 稿：58 / 500；RM 24 / 小数 28 由 MoneyText 按比例派生） */
-const HERO_AMOUNT_SIZE = 58;
+const HERO_AMOUNT_SIZE = 40;
 /** 大金额行盒高（V2 稿 line-height 64；隐藏态的 •••••• 也用它，显隐切换时行高不跳） */
 const HERO_AMOUNT_LINE = 64;
 /** 金额行的「眼睛」占位宽（眼睛 36 + 间距 10，V2 稿 1:1）：金额盒子的宽度上限 = 行宽 − 它 */
@@ -59,7 +59,9 @@ const HERO_EYE_RESERVE = 46;
 /** 金额行与眼睛的间距（V2 稿 10；比 spacing.sm 大 2，按稿 1:1） */
 const HERO_EYE_GAP = 10;
 /** 账单列表卡圆角（V2 稿 26 —— 比 radius.lg(20) 大的内容卡档，只在首页用） */
-const LIST_CARD_RADIUS = 26;
+const LIST_CARD_RADIUS = 22;
+// V3：账单卡左右外边距 12（卡不再与页面同边距）
+const LIST_CARD_MARGIN = 12;
 /** 行间分割线左缩进（V2 稿 70 = 行内边距 16 + 图标圆 42 + 行间距 12，正好与文字左缘对齐） */
 const TX_SEP_INSET = 70;
 /** 列表卡上下露出的卡边（V2 稿 4px） */
@@ -332,11 +334,11 @@ function TxSeparator() {
   const { semantic, layout } = useTheme();
   return (
     // 外层 = 卡的底色（分割线两侧的行都是 surface；不铺底会从 1px 缝里透出后面的渐变）
-    <View style={{ backgroundColor: semantic.surface, marginHorizontal: layout.page }}>
+    <View style={{ backgroundColor: semantic.homeCard, marginHorizontal: LIST_CARD_MARGIN }}>
       <View
         style={{
           height: StyleSheet.hairlineWidth,
-          backgroundColor: semantic.hairline,
+          backgroundColor: semantic.homeHairline,
           marginLeft: TX_SEP_INSET,
         }}
       />
@@ -381,6 +383,8 @@ function TxRow({
 }: TxRowProps) {
   const { semantic, spacing, layout } = useTheme();
   const rowStyles = useMemo(() => makeTxRowStyles(semantic, spacing, layout), [semantic, spacing, layout]);
+  // V3：金额 15 / 600，等宽数字
+  const rowAmountStyle = useMemo(() => ({ fontSize: 15, fontWeight: '600' as const, fontVariant: ['tabular-nums'] as const }), []);
   // 副标题：类别 · 账户（账户缺失时只有类别，不留下孤零零的分隔点）
   const subtitle = [categoryName, accountName].filter((part): part is string => !!part).join(' · ');
   return (
@@ -398,7 +402,7 @@ function TxRow({
       testID={testID}
     >
       {/* 类别图标：42 圆（底色/图标色由 IconCircle 按主题从类别色派生） */}
-      <IconCircle color={categoryColor} icon={categoryIcon} />
+      <IconCircle color={categoryColor} icon={categoryIcon} shape="tile" size={38} />
       {/* 中：flex:1 吃掉剩余宽度，把金额顶到行尾 */}
       <View style={rowStyles.textBlock}>
         <AppText variant="subhead" weight="500" numberOfLines={2}>
@@ -411,7 +415,7 @@ function TxRow({
         )}
       </View>
       {/* 右：金额（MoneyText 自带 flexShrink:0，不要在外面包固定宽度） */}
-      <MoneyText value={amount} kind={kind} variant="body" />
+      <MoneyText value={amount} kind={kind} variant="body" style={rowAmountStyle} />
     </PressableScale>
   );
 }
@@ -426,9 +430,9 @@ function makeTxRowStyles(semantic: SemanticColors, spacing: Spacing, layout: Lay
       minHeight: 60,
       paddingHorizontal: layout.card,
       paddingVertical: spacing.sm,
-      backgroundColor: semantic.surface,
-      // 列表卡左右各留 16 —— 卡体就是这些行 + 日期头拼出来的（SectionList 内容不好整体收窄）
-      marginHorizontal: layout.page,
+      backgroundColor: semantic.homeCard,
+      // 列表卡左右各留 12（V3） —— 卡体就是这些行 + 日期头拼出来的（SectionList 内容不好整体收窄）
+      marginHorizontal: LIST_CARD_MARGIN,
     },
     // 末行 = 列表卡底边：26 下圆角（只圆下两角 → 行高 60 足够撑出真 26 弧）+ 稿里卡内下 4pt
     rowCardBottom: {
@@ -678,20 +682,14 @@ export default function HomeScreen({ navigation }: any) {
   // 用户手选的币种代码（null=未手选过，跟随默认）——列表已按 ABC 排序，不能再用下标，否则默认币种会跟着排序漂移
   const [netWorthCurrency, setNetWorthCurrency] = useState<string | null>(null);
   const [currencyMenuOpen, setCurrencyMenuOpen] = useState(false);
-  // 货币下拉菜单：⇅ 玻璃胶囊与金额行都可触发；悬浮面板锚在 ⇅ 钮下方，
-  // 左右与页面同边距（样式里定死 16）、四角圆角 + 不透明浮层底。只存 top，进退场动画由 Reanimated 承担
-  const currencySwapRef = useRef<View>(null);
-  const [currencyMenuRect, setCurrencyMenuRect] = useState<{ top: number } | null>(null);
+  // V3：币种面板 = ui/BottomSheet（切换币种），搜索词仅在 >6 个币种时出现
+  const [currencyQuery, setCurrencyQuery] = useState('');
   // 金额行实测宽（Δ>0.5 才更新）：只给金额盒子当 maxWidth 用（短金额盒子贴合内容，眼睛紧贴金额；
   // 超长金额被夹住 → MoneyText 内部按档降级）。行宽由页面 flex 决定、与金额字号无关 —— 单向数据流
   const [amountRowW, setAmountRowW] = useState(0);
   const openCurrencyMenu = () => {
     if (totalsByCurrency.length <= 1) return;
-    currencySwapRef.current?.measureInWindow((_x: number, y: number, _w: number, h: number) => {
-      // 面板顶到「⇅」钮底缘下 6px（从钮下方下拉出来、悬浮盖住下方内容）
-      setCurrencyMenuRect({ top: y + h + 6 });
-      setCurrencyMenuOpen(true);
-    });
+    setCurrencyMenuOpen(true);
   };
   const displayTotal =
     totalsByCurrency.find(([c]) => c === (netWorthCurrency ?? defaultNetWorthCurrency)) ?? totalsByCurrency[0];
@@ -701,6 +699,39 @@ export default function HomeScreen({ navigation }: any) {
     : '';
   // 净资产当前选中的币种：本月支出合计、预算都跟随它（每个币种各设各的预算）
   const activeCurrency = displayTotal?.[0] ?? currency;
+  // V3：当前币种在列表中的下标（底部小圆点）；左右滑 = 相邻币种，走同一个 setNetWorthCurrency
+  const curIdx = totalsByCurrency.findIndex(([c]) => c === activeCurrency);
+  const stepCurrencyRef = useRef<(delta: number) => void>(() => {});
+  stepCurrencyRef.current = (delta: number) => {
+    const next = Math.min(totalsByCurrency.length - 1, Math.max(0, curIdx + delta));
+    if (next !== curIdx && totalsByCurrency[next]) setNetWorthCurrency(totalsByCurrency[next][0]);
+  };
+  const swipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 12 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+        onPanResponderRelease: (_e, g) => {
+          if (Math.abs(g.dx) > 40) stepCurrencyRef.current(g.dx < 0 ? 1 : -1);
+        },
+      }),
+    []
+  );
+  // 币种面板行：默认币种（账本基础货币）排第一，其余保持原顺序；搜索按代码 / 中英文名过滤
+  const currencySheetRows = useMemo(() => {
+    const q = currencyQuery.trim().toLowerCase();
+    const rows = totalsByCurrency.filter(([code]) => {
+      if (!q) return true;
+      const zhName = CURRENCY_OPTIONS.find((c) => c.code === code)?.name ?? '';
+      const enName = getEnglishCurrencyName(code) ?? '';
+      return code.toLowerCase().includes(q) || zhName.toLowerCase().includes(q) || enName.toLowerCase().includes(q);
+    });
+    const baseIdx = rows.findIndex(([c]) => c === currency);
+    if (baseIdx > 0) {
+      const [base] = rows.splice(baseIdx, 1);
+      if (base) rows.unshift(base);
+    }
+    return rows;
+  }, [totalsByCurrency, currencyQuery, currency]);
   // 交易所属币种（按账户币种；账户缺失时跟随全局货币）。必须 useCallback：
   // 它进 dayGroups 的依赖数组 —— 函数每帧换新身份会让 sections 每帧重建、列表整表重渲染
   // （验收退回的性能项：切 Tab 慢）
@@ -1137,12 +1168,12 @@ export default function HomeScreen({ navigation }: any) {
     {/* 顶部安全区不由 SafeAreaView 让位（全出血）：V2 的品牌渐变通顶连屏、状态栏压在渐变上
         （状态栏=透明，见 android styles.xml）；内容让位由头部区自身 paddingTop=insets.top 承担
         （见样式 heroTopRow 的 paddingTop 用 insets.top + 14 —— 与稿里「顶部 14」对齐） */}
-    <SafeAreaView style={styles.container} edges={[]}
+    <SafeAreaView style={[styles.container, { backgroundColor: semantic.homeBg }]} edges={[]}
       onTouchStart={() => { Keyboard.dismiss(); }}
     >
       {/* 页面最底层 = 品牌渐变（UI V2.1 §1）：铺满整页（fill）、不再淡出成纯色底，
           卡片 / 列表 / 弹层全部浮在渐变上；网格线只在首页保留 */}
-      <HeroGradient fill grid />
+      <HeroGradient height={330} grid />
       {/* C1：顶部安全区挡板 —— 滚动时内容不从状态栏文字下穿过 */}
       <StatusBarGlass />
       {/* 首页主体 = 一个 SectionList（T09 / H4 / H6）：
@@ -1260,34 +1291,28 @@ export default function HomeScreen({ navigation }: any) {
             </View>
           </View>
 
-          {/* 净资产标签 + 币种玻璃小胶囊（点它 = 原来的切换币种入口；单币种时候按不动，与旧行为一致） */}
-          <View style={styles.heroNetWorthRow}>
-            <AppText variant="subhead" color={onGradientMuted}>
-              {t('home.netWorth')}
-            </AppText>
-            {displayTotal && (
-              // ref 留在外层 View：货币下拉面板的窗口坐标锚点测量沿用它
-              <View ref={currencySwapRef} collapsable={false}>
-                <PressableScale
-                  onPress={openCurrencyMenu}
-                  disabled={totalsByCurrency.length <= 1}
-                  activeScale={0.94}
-                  hitSlop={0}
-                  accessibilityRole="button"
-                  accessibilityLabel={t('home.selectCurrency')}
-                  accessibilityState={{ disabled: totalsByCurrency.length <= 1 }}
-                  testID="home-currency-pill"
-                >
-                  <GlassView radius="full" style={styles.heroCurrencyPill}>
-                    <AppText variant="caption" weight="500" color={onGradientText} numberOfLines={1}>
-                      {activeCurrency}
-                    </AppText>
-                    <Ionicons name="swap-vertical" size={12} color={onGradientText} />
-                  </GlassView>
-                </PressableScale>
-              </View>
-            )}
-          </View>
+          {/* V3：居中玻璃胶囊「净资产 · 币种 ⌄」= 原币种入口（单币种时按不动，与旧行为一致） */}
+          {displayTotal && (
+            <View style={styles.heroNetWorthRow}>
+              <PressableScale
+                onPress={openCurrencyMenu}
+                disabled={totalsByCurrency.length <= 1}
+                activeScale={0.94}
+                hitSlop={0}
+                accessibilityRole="button"
+                accessibilityLabel={t('home.selectCurrency')}
+                accessibilityState={{ disabled: totalsByCurrency.length <= 1 }}
+                testID="home-currency-pill"
+              >
+                <GlassView radius="full" style={styles.heroCurrencyPill}>
+                  <AppText variant="caption" weight="500" color={onGradientText} numberOfLines={1}>
+                    {`${t('home.netWorth')} · ${activeCurrency}`}
+                  </AppText>
+                  <Ionicons name="chevron-down" size={12} color={onGradientText} />
+                </GlassView>
+              </PressableScale>
+            </View>
+          )}
 
           {totalsByCurrency.length === 0 ? (
             /* 无账户（原空状态入口保留）：EmptyState 的文字是深色令牌，直接放渐变上读不了 →
@@ -1311,12 +1336,13 @@ export default function HomeScreen({ navigation }: any) {
                  整行点按仍调出货币下拉（原交互不变）；右侧眼睛 = 原隐藏金额入口 */
               <View
                 style={styles.heroAmountRow}
+                {...swipeResponder.panHandlers}
                 onLayout={(e) => {
                   const w = e.nativeEvent.layout.width;
                   setAmountRowW((prev) => (Math.abs(prev - w) > 0.5 ? w : prev));
                 }}
               >
-                <View style={[styles.heroAmountWrap, amountRowW > 0 && { maxWidth: Math.max(0, amountRowW - HERO_EYE_RESERVE) }]}>
+                <View style={[styles.heroAmountWrap, amountRowW > 0 && { maxWidth: Math.max(0, amountRowW - HERO_EYE_RESERVE * 2) }]}>
                   <PressableScale
                     onPress={openCurrencyMenu}
                     disabled={totalsByCurrency.length <= 1}
@@ -1367,6 +1393,15 @@ export default function HomeScreen({ navigation }: any) {
                 />
               </View>
             )
+          )}
+
+          {/* V3：币种小圆点（5dp，当前 14dp 长条）；只有多于 1 个币种时显示 */}
+          {totalsByCurrency.length > 1 && (
+            <View style={styles.heroDots} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
+              {totalsByCurrency.map(([code], i) => (
+                <View key={code} style={[styles.heroDot, { backgroundColor: onGradientText }, i === curIdx ? styles.heroDotActive : styles.heroDotIdle]} />
+              ))}
+            </View>
           )}
 
           {/* 预算（V2 稿）：玻璃卡 + 8 高白色进度条（>80% warning / >100% danger 仍是原逻辑）；
@@ -1553,67 +1588,71 @@ export default function HomeScreen({ navigation }: any) {
           副行放另一语言名，信息保留不混排）· 右：选中勾；
           选中行 = accentSoft 底 + accentText 字 + accent 勾，未选中 = textPrimary / textSecondary；
           标题只走 i18n（按当前语言显示一种）。⚠ 不用国旗 emoji（Windows / 网页会退化成字母） */}
-      {currencyMenuOpen && (
-        <View style={StyleSheet.absoluteFill}>
-          <Reanimated.View
-            entering={FadeIn.duration(motion.timing.fade)}
-            exiting={FadeOut.duration(motion.timing.fade)}
-            style={StyleSheet.absoluteFill}
-          >
-            <TouchableOpacity style={styles.currencyMenuOverlay} activeOpacity={1} onPress={() => setCurrencyMenuOpen(false)}>
-              <View />
-            </TouchableOpacity>
-          </Reanimated.View>
-          <Reanimated.View
-            entering={FadeInDown.duration(motion.spring.default.duration)}
-            exiting={FadeOutUp.duration(motion.timing.fade)}
-            style={[styles.currencyMenuPanel, { top: currencyMenuRect?.top ?? 160, maxHeight: Math.round(layoutTokens.height * 0.6) }]}
-          >
-            <AppText variant="footnote" color={semantic.textSecondary} style={styles.currencyMenuTitle} numberOfLines={1}>
-              {t('home.currencyMenuTitle')}
-            </AppText>
-            <ScrollView style={styles.currencyMenuScroll} showsVerticalScrollIndicator={false}>
-              {totalsByCurrency.map(([code]) => {
-                const active = code === displayTotal?.[0];
-                const option = CURRENCY_OPTIONS.find((c) => c.code === code);
-                const zhName = option?.name ?? code;
-                const enName = getEnglishCurrencyName(code) ?? zhName;
-                const isZh = homeLang !== 'en';
-                const name = isZh ? zhName : enName;
-                return (
-                  <PressableScale
-                    key={code}
-                    style={[styles.currencyMenuItem, active && styles.currencyMenuItemActive]}
-                    activeScale={0.98}
-                    onPress={() => {
-                      setNetWorthCurrency(code);
-                      setCurrencyMenuOpen(false);
-                    }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${code} ${name}`}
-                    accessibilityState={{ selected: active }}
-                  >
-                    <View style={styles.currencyMenuCodeBox}>
-                      <AppText variant="caption" color={semantic.accentText} numberOfLines={1}>
-                        {code}
-                      </AppText>
-                    </View>
-                    <View style={styles.currencyMenuTextCol}>
-                      <AppText variant="body" color={active ? semantic.accentText : semantic.textPrimary} numberOfLines={1}>
-                        {name}
-                      </AppText>
-                      <AppText variant="footnote" color={semantic.textSecondary} numberOfLines={1}>
-                        {isZh ? enName : zhName}
-                      </AppText>
-                    </View>
-                    {active && <Ionicons name="checkmark" size={20} color={semantic.accent} />}
-                  </PressableScale>
-                );
-              })}
-            </ScrollView>
-          </Reanimated.View>
-        </View>
-      )}
+      {/* V3：切换币种 = ui/BottomSheet（原下拉面板下线，入口只剩一个） */}
+      <BottomSheet
+        visible={currencyMenuOpen}
+        onClose={() => {
+          setCurrencyMenuOpen(false);
+          setCurrencyQuery('');
+        }}
+        title={t('home.currencySheetTitle')}
+        maxHeightRatio={0.7}
+        testID="home-currency-sheet"
+      >
+        {totalsByCurrency.length > 6 && (
+          <TextInput
+            value={currencyQuery}
+            onChangeText={setCurrencyQuery}
+            placeholder={t('home.currencySearch')}
+            placeholderTextColor={semantic.textTertiary}
+            style={[styles.currencySearch, { color: semantic.textPrimary, backgroundColor: semantic.surfaceSunken }]}
+            autoCorrect={false}
+            autoCapitalize="characters"
+            testID="home-currency-search"
+          />
+        )}
+        <ScrollView style={styles.currencyMenuScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          {currencySheetRows.map(([code, total]) => {
+            const active = code === displayTotal?.[0];
+            const option = CURRENCY_OPTIONS.find((c) => c.code === code);
+            const zhName = option?.name ?? code;
+            const enName = getEnglishCurrencyName(code) ?? zhName;
+            const isZh = homeLang !== 'en';
+            const name = isZh ? zhName : enName;
+            return (
+              <PressableScale
+                key={code}
+                style={[styles.currencyMenuItem, active && styles.currencyMenuItemActive]}
+                activeScale={0.98}
+                onPress={() => {
+                  setNetWorthCurrency(code);
+                  setCurrencyMenuOpen(false);
+                  setCurrencyQuery('');
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={`${code} ${name}`}
+                accessibilityState={{ selected: active }}
+              >
+                <View style={styles.currencyMenuCodeBox}>
+                  <AppText variant="caption" color={semantic.accentText} numberOfLines={1}>
+                    {code}
+                  </AppText>
+                </View>
+                <View style={styles.currencyMenuTextCol}>
+                  <AppText variant="body" color={active ? semantic.accentText : semantic.textPrimary} numberOfLines={1}>
+                    {name}
+                  </AppText>
+                  <AppText variant="footnote" color={semantic.textSecondary} numberOfLines={1}>
+                    {isZh ? enName : zhName}
+                  </AppText>
+                </View>
+                <MoneyText value={total} kind="plain" currency={code} variant="footnote" color={semantic.textSecondary} />
+                {active && <Ionicons name="checkmark" size={20} color={semantic.accent} style={styles.currencyCheck} />}
+              </PressableScale>
+            );
+          })}
+        </ScrollView>
+      </BottomSheet>
 
       {/* 删除账本的二级密码验证：只认 6 位 PIN（用户定版：指纹/扫脸不参与删除验证）。
           已设 PIN → verify 验证一次即删；未设 → create 设置完再 verify 一次（确认本人）。
@@ -1701,15 +1740,16 @@ function makeStyles(
     heroNetWorthRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      columnGap: spacing.sm,
+      justifyContent: 'center',
       marginTop: 34,
     },
     // 金额行（V2 稿 margin-top 4）：金额盒子 + 右侧眼睛；间距 = 稿的 10（HERO_EYE_GAP）
     heroAmountRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      columnGap: HERO_EYE_GAP,
+      justifyContent: 'center',
       marginTop: spacing.xs,
+      paddingHorizontal: HERO_EYE_RESERVE,
     },
     // 金额盒子：贴合内容（maxWidth 由 JSX 按实测行宽给），超长时收缩 → MoneyText 内部按档降级
     heroAmountWrap: { flexShrink: 1, minWidth: 0 },
@@ -1718,7 +1758,7 @@ function makeStyles(
     heroHiddenAmount: { fontSize: HERO_AMOUNT_SIZE, lineHeight: HERO_AMOUNT_LINE },
     // 眼睛（V2 稿 36 圆、空心无底）：IconButton 默认触控区 44 —— 这里覆盖成 36 并收紧 minHeight，
     // 外加 hitSlop 4 补回 44 触控
-    heroEyeBtn: { width: 36, height: 36, minHeight: 36, borderRadius: 18 },
+    heroEyeBtn: { width: 36, height: 36, minHeight: 36, borderRadius: 18, position: 'absolute', right: 0, top: '50%', marginTop: -18 },
     // 无账户空状态：EmptyState 的文字是深色令牌，垫一张玻璃卡才在渐变上读得清
     heroEmptyCard: { marginTop: spacing.xl, paddingHorizontal: spacing.md },
     // 预算玻璃卡（V2 稿：圆角 24 · 内边距 16；整卡可点 = 原预算弹窗入口）
@@ -1765,10 +1805,10 @@ function makeStyles(
       borderTopRightRadius: LIST_CARD_RADIUS,
       overflow: 'hidden',
       borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: semantic.hairline,
+      borderBottomColor: semantic.homeHairline,
     },
     // ── 账单列表（V2 / H4）：日期头 = 卡内的一段（12 上 / 4 下 + 16 边距，无底线 —— 与稿一致）──
-    dayHeaderWrap: { backgroundColor: semantic.surface, marginHorizontal: layout.page },
+    dayHeaderWrap: { backgroundColor: semantic.homeCard, marginHorizontal: LIST_CARD_MARGIN },
     // 首组日期头 = 列表卡顶边：26 上圆角（只圆上两角，高度够 → 真 26 弧；不用 4pt 顶帽 ——
     // 4pt 高的圆角块会被 CSS 圆角收缩规则压成 ~2pt，看上去就是直角）
     dayHeaderWrapFirst: {
@@ -1805,28 +1845,19 @@ function makeStyles(
     // 无账单空状态（EmptyState 自带内边距，这里只补与头部区的间距）
     listEmpty: { paddingTop: spacing.lg },
     // 货币下拉（T08 退回定版）：全 App 唯一遮罩色 + 不透明浮层底（surfaceElevated）+ level2 阴影
-    currencyMenuOverlay: { flex: 1, backgroundColor: semantic.scrim },
-    currencyMenuPanel: {
-      position: 'absolute',
-      left: layout.page,
-      right: layout.page,
-      borderRadius: radius.lg,
-      backgroundColor: semantic.surfaceElevated,
-      ...elevation.level2,
-      // 夜间 level2 是纯阴影，补发丝描边撑轮廓（与 ui/Card 同一条规矩）
-      borderWidth: isDark ? StyleSheet.hairlineWidth : 0,
-      borderColor: semantic.hairline,
-      overflow: 'hidden',
-      paddingBottom: spacing.xs,
+    currencySearch: {
+      marginHorizontal: layout.page,
+      marginBottom: spacing.sm,
+      height: 40,
+      borderRadius: radius.md,
+      paddingHorizontal: spacing.md,
+      fontSize: 15,
     },
-    currencyMenuTitle: {
-      paddingHorizontal: layout.card,
-      paddingTop: spacing.md,
-      paddingBottom: spacing.sm,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: semantic.hairline,
-    },
-    // 行多时内部滚动；flexShrink 让它在面板 maxHeight 内收缩，不把面板顶破
+    currencyCheck: { marginLeft: spacing.xs },
+    heroDots: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', columnGap: 6, marginTop: spacing.md },
+    heroDot: { height: 5, width: 5, borderRadius: 3 },
+    heroDotActive: { width: 14, opacity: 1 },
+    heroDotIdle: { opacity: 0.3 },
     currencyMenuScroll: { flexGrow: 0, flexShrink: 1 },
     // 行结构（验收定版）：左币种代码方块 · 中币种名 · 右选中勾
     currencyMenuItem: {

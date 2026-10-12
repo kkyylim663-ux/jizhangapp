@@ -443,6 +443,8 @@ export const zh = {
     selectCurrency: '选择货币',
     // 首页净资产货币下拉的标题（T08 验收：标题只走 i18n 单一语言，不再中英混排）
     currencyMenuTitle: '选择币种',
+    currencySheetTitle: '切换币种',
+    currencySearch: '搜索币种',
     ledgerName: '账本',
     notificationTitle: '消息通知',
     notificationMsg: '这个功能还在开发中',
