@@ -538,7 +538,14 @@ export default function AIScreen({ navigation }: any) {
     >
       {/* 头部:与其他二级页同款——圆框返回键(40×40、1.5px link 描边) + 标题居中 */}
       <View style={styles.headerRow}>
-        <PressableScale onPress={() => navigation.goBack()} style={styles.backBtn} activeScale={0.92}>
+        <PressableScale
+          onPress={() => navigation.goBack()}
+          style={styles.backBtn}
+          activeScale={0.92}
+          accessibilityRole="button"
+          accessibilityLabel={t('common.back')}
+          hitSlop={{ top: 2, bottom: 2, left: 2, right: 2 }}
+        >
           <Ionicons name="chevron-back" size={22} color={colors.textPrimary} />
         </PressableScale>
         <Text style={styles.headerTitle}>{t('ai.title')}</Text>

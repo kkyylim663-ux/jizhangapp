@@ -300,7 +300,9 @@ export default function CategoryManagementScreen({ navigation, route }: any) {
             {custom && (
               <TouchableOpacity
                 style={styles.groupDeleteBtn}
-                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                accessibilityRole="button"
+                accessibilityLabel={t('common.delete')}
+                hitSlop={{ top: 13, bottom: 13, left: 13, right: 13 }}
                 onPress={() => handleDeleteGroup(group, items)}
               >
                 <Ionicons name="trash-outline" size={18} color={semantic.danger} />
