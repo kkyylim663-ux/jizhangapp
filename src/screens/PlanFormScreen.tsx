@@ -35,6 +35,7 @@ import { CursorAmountText } from '../components/CursorAmountText';
 import { useAmountExpression } from '../hooks/useAmountExpression';
 import { useTabBarForceHide } from '../context/TabBarAutoHideContext';
 import { getAssetDisplayBalance } from '../utils/creditCard';
+import { formatMoney } from '../utils/formatMoney';
 import { getCategoryLabel } from '../i18n/categories';
 import { hapticSuccess, hapticWarning } from '../utils/haptics';
 import { ROUTES } from '../navigation/routes';
@@ -48,7 +49,7 @@ function fmt(d: Date): string {
 }
 
 export default function PlanFormScreen({ route, navigation }: any) {
-  const { addPaymentPlan, updatePaymentPlan, deletePaymentPlan, assets, paymentPlans, activeLedgerId, categories, currency, getAssetBalance } = useApp();
+  const { addPaymentPlan, updatePaymentPlan, deletePaymentPlan, assets, paymentPlans, activeLedgerId, categories, currency, getAssetBalance, decimalPlaces } = useApp();
   const { colors, semantic } = useTheme();
   const tr = useT();
   const dialog = useDialog(); // 主题化弹窗（替代系统 Alert）
@@ -255,7 +256,7 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
     // （校验在 handleSave 内部：名称/金额缺失会弹提示，不会误存）
     handleSave(v);
   };
-  const amountDisplay = keypadOpen ? amountExpr.displayValue : amountValue > 0 ? amountValue.toFixed(2) : '0';
+  const amountDisplay = keypadOpen ? amountExpr.displayValue : amountValue > 0 ? formatMoney(amountValue, { decimals: decimalPlaces }) : '0';
   // 规划金额字号：按位数渐缩（与记一笔 Hero 同思路）——34 起、每超 6 位 -0.5px、下限 28
   const planAmountFontSize = Math.max(28, 34 - Math.max(0, amountDisplay.replace('.', '').length - 6) * 0.5);
 
@@ -547,7 +548,7 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
       {assetSheetOpen && (
         <View style={[StyleSheet.absoluteFill, { zIndex: 90, elevation: 90 }]}>
           <Pressable style={StyleSheet.absoluteFill} onPress={closeAssetSheet}>
-            <Reanimated.View style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }, sheetScrimStyle]} />
+            <Reanimated.View style={[StyleSheet.absoluteFill, { backgroundColor: semantic.scrim }, sheetScrimStyle]} />
           </Pressable>
           <GestureDetector gesture={sheetGesture}>
             <Reanimated.View style={[styles.sheetCard, sheetAnimStyle]}>
@@ -692,7 +693,7 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
                               <Text style={styles.sheetGroupFlagText}>{code}</Text>
                             </View>
                             <View style={{ flex: 1 }} />
-                            <Text style={styles.sheetGroupTotal}>{groupTotal.toFixed(2)}</Text>
+                            <Text style={styles.sheetGroupTotal}>{formatMoney(groupTotal, { decimals: decimalPlaces })}</Text>
                             <Ionicons
                               name={expanded ? 'chevron-up' : 'chevron-down'}
                               size={16}
@@ -727,7 +728,7 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
                                       </Text>
                                     </View>
                                     <Text style={styles.sheetGroupRowAmount}>
-                                      {getAssetDisplayBalance(a, getAssetBalance(a.id)).toFixed(2)}
+                                      {formatMoney(getAssetDisplayBalance(a, getAssetBalance(a.id)), { decimals: decimalPlaces })}
                                     </Text>
                                     {sel && (
                                       <Ionicons name="checkmark-circle" size={18} color={colors.income} style={{ marginLeft: 6 }} />
@@ -942,7 +943,7 @@ function makeStyles(colors: ThemeColors, semantic: SemanticColors) {
     sheetGroupCard: {
       borderRadius: 20,
       borderWidth: 1,
-      borderColor: 'rgba(255,255,255,0.12)',
+      borderColor: colors.cardBorder,
       overflow: 'hidden',
     },
     sheetGroupHeader: {
@@ -957,7 +958,7 @@ function makeStyles(colors: ThemeColors, semantic: SemanticColors) {
       height: 26,
       paddingHorizontal: 8,
       borderRadius: 8,
-      backgroundColor: 'rgba(255,255,255,0.14)',
+      backgroundColor: colors.cardBorder,
       alignItems: 'center',
       justifyContent: 'center',
     },
@@ -978,24 +979,24 @@ function makeStyles(colors: ThemeColors, semantic: SemanticColors) {
       paddingBottom: 10,
       paddingTop: 10,
       borderTopWidth: StyleSheet.hairlineWidth,
-      borderTopColor: 'rgba(255,255,255,0.18)',
+      borderTopColor: colors.dividerHair,
     },
     // 卡内账户小框（资产页 assetRowOnGradient 同款）：半透明白底无边框；保留 meta 行（规划页特有）
     sheetGroupRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: 'rgba(255,255,255,0.10)',
+      backgroundColor: colors.tabBlobBg,
       borderRadius: 12,
       paddingVertical: 5,
       paddingHorizontal: 9,
       marginBottom: 3,
     },
-    sheetGroupRowActive: { backgroundColor: 'rgba(255,255,255,0.22)' },
+    sheetGroupRowActive: { backgroundColor: colors.tabEdge },
     sheetGroupRowIcon: {
       width: 30,
       height: 30,
       borderRadius: 15,
-      backgroundColor: '#FFFFFF',
+      backgroundColor: semantic.onAccent,
       alignItems: 'center',
       justifyContent: 'center',
     },
@@ -1059,7 +1060,7 @@ function makeStyles(colors: ThemeColors, semantic: SemanticColors) {
       padding: 12,
       marginTop: 14,
     },
-    autoKnob: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#FFFFFF', margin: 2 },
+    autoKnob: { width: 22, height: 22, borderRadius: 11, backgroundColor: semantic.onAccent, margin: 2 },
     autoKnobOn: { alignSelf: 'flex-end' },
     switchTrack: { width: 46, height: 26, borderRadius: 13, backgroundColor: colors.dividerHair },
     saveFooter: {
