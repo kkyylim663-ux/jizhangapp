@@ -976,7 +976,9 @@ export default function HomeScreen({ navigation }: any) {
               <AppText variant="caption" weight="500" color={semantic.textTertiary}>
                 {`${t('report.expense')} `}
               </AppText>
-              <MoneyText value={section.expense} kind="expense" variant="caption" weight="600" color={semantic.textSecondary} />
+              {/* 支出金额 = 语义支出色（紫，V3 规则），与收入（绿）成对 —— 不覆盖成次要色：
+                  显式 color 会把 amountExpense 语义色盖掉，表头就和下方流水行不一致了 */}
+              <MoneyText value={section.expense} kind="expense" variant="caption" weight="600" />
             </>
           )}
           {section.expense > 0 && section.income > 0 && (
@@ -1550,7 +1552,8 @@ export default function HomeScreen({ navigation }: any) {
                     <AppText variant="caption" color={onGradientMuted}>
                       {`${t('home.budgetUsed')} `}
                     </AppText>
-                    <MoneyText value={thisExpense} variant="caption" color={onGradientMuted} hidden={balanceHidden} />
+                    {/* 已用金额 = 支出金额，走语义支出色（紫）；不覆盖成次要色 */}
+                    <MoneyText value={thisExpense} kind="expense" variant="caption" hidden={balanceHidden} />
                     <AppText variant="caption" color={onGradientMuted}>
                       {' / '}
                     </AppText>
