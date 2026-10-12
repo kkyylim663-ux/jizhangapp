@@ -171,23 +171,17 @@ export default function AddAssetScreen({ route }: any) {
   const sheetListMaxHeight = Math.round(windowHeight * SHEET_LIST_MAX_RATIO);
 
   // 硬件返回键：币种弹层开着 → 先关弹层（拦截，不退出整页——否则填一半的表单全丢）；
-  // 金额键盘开着 → 只收键盘（return true，不连带 pop 页面）；都没开才放行返回
-  // return false = 不拦截，导航器照常 pop 本页
+  // 硬件返回键：只关币种弹层（真正的底部弹层）；其余情况不拦截、不动金额键盘，导航器直接 pop 本页
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (sheetOpen === 'currency') {
         closeCurrencySheet();
         return true;
       }
-      if (amountField !== null || sysKeyboardVisible) {
-        setAmountField(null);
-        setSysKeyboardVisible(false);
-        return true;
-      }
       return false;
     });
     return () => sub.remove();
-  }, [sheetOpen, amountField, sysKeyboardVisible]);
+  }, [sheetOpen]);
 
   // 货币搜索：世界货币表 ~150 种，按代码/中文名/界面语言显示名过滤
   const [currencySearch, setCurrencySearch] = useState('');
