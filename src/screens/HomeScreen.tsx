@@ -837,6 +837,64 @@ const CalendarShell = React.memo(function CalendarShell({
   );
 });
 
+/** hero 金额的一页（每个币种一页，memo）：币种提交 / 列表更新时金额没变就不重渲（MoneyText hero 较重）。
+ *  MoneyText hero：整数 40/700、小数 22/600，挂载即定格、只在数据真变时才逐位滚动；页宽 = 行实测宽。 */
+const HeroAmountPage = React.memo(function HeroAmountPage({
+  code,
+  total,
+  hidden,
+  width,
+  textColor,
+  decimalColor,
+  shadow,
+  styles,
+}: {
+  code: string;
+  total: number;
+  hidden: boolean;
+  width: number;
+  textColor: string;
+  decimalColor: string;
+  shadow: TextStyle;
+  styles: ReturnType<typeof makeStyles>;
+}) {
+  return (
+    <View style={[styles.heroPagerPage, { width, minWidth: width }]}>
+      {hidden ? (
+        <AppText
+          variant="display"
+          color={textColor}
+          style={[styles.heroHiddenAmount, shadow]}
+          numberOfLines={1}
+          ellipsizeMode="clip"
+        >
+          {HIDDEN_AMOUNT}
+        </AppText>
+      ) : (
+        <MoneyText
+          value={total}
+          kind="plain"
+          currency={code}
+          // V2.2：大数字不再带 RM 前缀（上方胶囊已表示币种）——
+          // 小数点后两位照常保留，读屏标签仍带币种
+          variant="display"
+          hero
+          heroSize={HERO_AMOUNT_SIZE}
+          weight="700"
+          heroDecimalSize={22}
+          heroDecimalWeight="600"
+          heroDecimalColor={decimalColor}
+          heroLetterRatio={-0.03}
+          color={textColor}
+          compactFallback={false}
+          accessibilityLabel={fmtMoney(total, { currency: code, showCurrency: true })}
+          style={shadow}
+        />
+      )}
+    </View>
+  );
+});
+
 /** 预算卡的一页（每个币种一页，横滑时随页走）。进度条各页自带补间，切币种不重播。 */
 type BudgetCardPageProps = {
   expense: number;
@@ -853,7 +911,7 @@ type BudgetCardPageProps = {
   onPress: () => void;
   testID?: string;
 };
-function BudgetCardPage({ expense, total, hidden, width, gap, styles, filledH, onFilledLayout, onPress, testID }: BudgetCardPageProps) {
+const BudgetCardPage = React.memo(function BudgetCardPage({ expense, total, hidden, width, gap, styles, filledH, onFilledLayout, onPress, testID }: BudgetCardPageProps) {
   const { semantic, motion } = useTheme();
   const t = useT();
   const pct = total > 0 ? Math.min((expense / total) * 100, 100) : 0;
@@ -931,7 +989,7 @@ function BudgetCardPage({ expense, total, hidden, width, gap, styles, filledH, o
       </PressableScale>
     </View>
   );
-}
+});
 
 
 export default function HomeScreen({ navigation }: any) {
@@ -1165,8 +1223,6 @@ export default function HomeScreen({ navigation }: any) {
   const swipeT0Ref = useRef(0);
   const curIdxRef = useRef(0);
   curIdxRef.current = curIdx;
-  /** 日历卡的「选中日」复位键：横滑换币种时换一个值，真日历据此清掉展开的那天（在屏幕外清，看不到） */
-  const [calSelKey, setCalSelKey] = useState('');
   /** 头部区（hero + 预算）实测高度：邻页预览 / 日历弹层都贴在它正下方 */
   const [heroH, setHeroH] = useState(0);
   /** 「已设预算」卡的实测高度（未设预算的卡用它当最小高，各币种预算卡等高） */
@@ -1201,7 +1257,10 @@ export default function HomeScreen({ navigation }: any) {
       listFrozen.value = 1;
       // 记下「这次是横滑提交」：币种变化的 effect 据此跳过淡出换表，直接换数据并等上屏后无缝交接
       swipeCommitRef.current = row[0];
-      if (__DEV__) swipeT0Ref.current = Date.now();
+      if (__DEV__) {
+        swipeT0Ref.current = Date.now();
+        console.log(`[swipe] --- commit start ${row[0]}`);
+      }
       setNetWorthCurrency(row[0]);
     };
     commitTimerRef.current = setTimeout(attempt, PAGER_COMMIT_DEBOUNCE_MS);
@@ -1422,8 +1481,9 @@ export default function HomeScreen({ navigation }: any) {
   );
 
   // ── 切币种列表过渡：旧列表淡出 → 换数据 → 下一帧起上升入场（只动列表格子，头部 / 预算卡不动）──
-  // shownGroups = 列表真正显示的分组；过渡中冻结在旧数据上，淡出结束才换成当前 dayGroups。
-  const [shownGroups, setShownGroups] = useState(dayGroups);
+  // 列表真正显示的分组（listSections，见下）直接在渲染期推导：平时 = 当前 dayGroups（数据变化同一次渲染就上屏，
+  // 不再靠 effect 里 setState 多渲染一轮）；切币种的淡出过渡期间（holdOldRef）冻结在上一次显示的分组上，换数据时才放开。
+  const holdOldRef = useRef(false);
   const listOutP = useSharedValue(1); // 旧列表淡出 1→0；新列表上升前保持 0（布局在透明状态下完成）
   const listInT = useSharedValue(1); // 新列表上升 0→1（1 = 静止）
   // 日历 ⇄ 列表 = 两张对称的「弹层」：各自有竖向位移（Y）与不透明度（O）两个共享值，
@@ -1449,7 +1509,7 @@ export default function HomeScreen({ navigation }: any) {
   // 淡出结束：只换数据，不在这一帧起动画（换数据会重渲染整张列表，不能和动画起点撞在一起）
   const swapInList = useCallback(() => {
     pendingRiseRef.current = true;
-    setShownGroups(dayGroupsRef.current);
+    holdOldRef.current = false;
     setRiseTick((n) => n + 1);
   }, []);
   // 新数据已经提交渲染后，等两帧（确保画上屏）再起上升动画
@@ -1484,6 +1544,7 @@ export default function HomeScreen({ navigation }: any) {
       // 横滑提交：真列表此刻在屏幕外（位移 = 一页），邻页预览正显示着同一份内容 ——
       // 这里不淡出、不上升，直接换数据；等新列表真的画上屏（两帧）再把真列表移回原位、隐藏预览
       swipeCommitRef.current = null;
+      if (__DEV__) console.log(`[swipe] react commit→effects ${Date.now() - swipeT0Ref.current}ms (target ${activeCurrency}, ${dayGroups.length} day groups)`);
       riseGenRef.current += 1;
       pendingRiseRef.current = false;
       cancelAnimation(listOutP);
@@ -1491,8 +1552,7 @@ export default function HomeScreen({ navigation }: any) {
       listTransitionRef.current = false;
       listOutP.value = 1;
       listInT.value = 1;
-      setShownGroups(dayGroupsRef.current);
-      setCalSelKey(activeCurrency);
+      holdOldRef.current = false;
       requestAnimationFrame(() =>
         requestAnimationFrame(() => {
           // 交接：先告诉 UI 线程真列表装的是哪一页，再解冻 —— 真列表回到它自己那一页的位置（用户若已翻走，它就在屏幕外）
@@ -1512,17 +1572,22 @@ export default function HomeScreen({ navigation }: any) {
       listTransitionRef.current = false;
       listOutP.value = 1;
       listInT.value = 1;
+      holdOldRef.current = false;
+      setRiseTick((n) => n + 1); // 触发一次渲染，让列表换成新币种的分组
       return;
     }
     listTransitionRef.current = true;
+    holdOldRef.current = true;
     listOutP.value = withTiming(0, { duration: LIST_FADE_MS, easing: Easing.out(Easing.quad) }, (finished) => {
       if (finished) runOnJS(swapInList)();
     });
   }, [activeCurrency, listOutP, listInT, swapInList, motion.reduceMotion]);
-  // 非过渡期间数据照常同步（新增 / 编辑账单即时可见）；过渡中跳过，等换数据时再取最新
-  useEffect(() => {
-    if (!listTransitionRef.current) setShownGroups(dayGroups);
-  }, [dayGroups]);
+  // 列表分组：币种刚变（本次渲染还没来得及起淡出）或淡出过渡中 → 停在上一次显示的分组；其余时候 = 当前 dayGroups。
+  // 横滑提交（swipeCommitRef === activeCurrency）不走淡出，直接用新分组。
+  const currencyJustChanged = prevListCurrencyRef.current !== activeCurrency && swipeCommitRef.current !== activeCurrency;
+  const lastListGroupsRef = useRef(dayGroups);
+  const listSections = holdOldRef.current || currencyJustChanged ? lastListGroupsRef.current : dayGroups;
+  lastListGroupsRef.current = listSections;
   const TxSeparatorFaded = useMemo(
     () =>
       function TxSeparatorFadedItem() {
@@ -1749,7 +1814,6 @@ export default function HomeScreen({ navigation }: any) {
   }));
   const calDimStyle = useAnimatedStyle(() => ({ opacity: CAL_DIM_MAX * calP.value }));
   // 列表始终挂着（日历模式下它 opacity 0）；日历模式下列表区的滚动高度夹成「头部 + 日历」，不会滚进一大片空白
-  const listSections = shownGroups;
   const calContentH = calH > 0 ? heroH + calH + tabClearance + 12 : 0;
   const listContentStyle = useMemo(
     () =>
@@ -2059,10 +2123,13 @@ export default function HomeScreen({ navigation }: any) {
   // 算式状态：预填当前预算值（退格逐位改 / C 归零重输 / 可直接按算式），「完成」求值落库
   const budgetExpr = useAmountExpression();
 
+  const openBudgetModalRef = useRef<() => void>(() => {});
+  const openBudgetModalStable = useCallback(() => openBudgetModalRef.current(), []);
   const openBudgetModal = () => {
     budgetExpr.reset(totalBudget || 0);
     setBudgetModalOpen(true);
   };
+  openBudgetModalRef.current = openBudgetModal;
   // 计算器「完成」= 求值保存：0/空 = 清掉这个币种的预算（与旧弹窗语义一致）
   const handleBudgetConfirm = () => {
     const value = budgetExpr.confirm();
@@ -2186,7 +2253,7 @@ export default function HomeScreen({ navigation }: any) {
             styles={styles}
             filledH={budgetFilledH}
             onFilledLayout={onBudgetFilledLayout}
-            onPress={openBudgetModal}
+            onPress={openBudgetModalStable}
             testID={code === activeCurrency ? 'home-budget-card' : undefined}
           />
         ))}
@@ -2199,7 +2266,7 @@ export default function HomeScreen({ navigation }: any) {
         styles={styles}
         filledH={budgetFilledH}
         onFilledLayout={onBudgetFilledLayout}
-        onPress={openBudgetModal}
+        onPress={openBudgetModalStable}
         testID="home-budget-card"
       />
     );
@@ -2255,8 +2322,9 @@ export default function HomeScreen({ navigation }: any) {
         //   —— react-native-web 给每个日期头都套 position:sticky;top:0，包含块是整个内容容器，
         //      所有日期头会永久钉在顶部互相叠着（自检抓到过双头叠影）
         stickySectionHeadersEnabled={Platform.OS !== 'web'}
-        onViewableItemsChanged={onViewableItemsChanged}
-        viewabilityConfig={viewabilityConfig}
+        // 吸顶条只在 web 用（原生用系统吸顶）：原生不订阅可见项变化，列表换数据时少一次 setState 重渲染
+        onViewableItemsChanged={Platform.OS === 'web' ? onViewableItemsChanged : undefined}
+        viewabilityConfig={Platform.OS === 'web' ? viewabilityConfig : undefined}
         onScroll={handleHomeScroll}
         scrollEventThrottle={16}
         contentContainerStyle={listContentStyle}
@@ -2433,39 +2501,17 @@ export default function HomeScreen({ navigation }: any) {
                         ]}
                       >
                         {totalsByCurrency.map(([code, total]) => (
-                          <View key={code} style={[styles.heroPagerPage, { width: amountRowW, minWidth: amountRowW }]}>
-                            {balanceHidden ? (
-                              <AppText
-                                variant="display"
-                                color={onGradientText}
-                                style={[styles.heroHiddenAmount, heroShadow]}
-                                numberOfLines={1}
-                                ellipsizeMode="clip"
-                              >
-                                {HIDDEN_AMOUNT}
-                              </AppText>
-                            ) : (
-                              <MoneyText
-                                value={total}
-                                kind="plain"
-                                currency={code}
-                                // V2.2：大数字不再带 RM 前缀（上方胶囊已表示币种）——
-                                // 小数点后两位照常保留，读屏标签仍带币种
-                                variant="display"
-                                hero
-                                heroSize={HERO_AMOUNT_SIZE}
-                                weight="700"
-                                heroDecimalSize={22}
-                                heroDecimalWeight="600"
-                                heroDecimalColor={semantic.textSecondary}
-                                heroLetterRatio={-0.03}
-                                color={onGradientText}
-                                compactFallback={false}
-                                accessibilityLabel={fmtMoney(total, { currency: code, showCurrency: true })}
-                                style={heroShadow}
-                              />
-                            )}
-                          </View>
+                          <HeroAmountPage
+                            key={code}
+                            code={code}
+                            total={total}
+                            hidden={balanceHidden}
+                            width={amountRowW}
+                            textColor={onGradientText}
+                            decimalColor={semantic.textSecondary}
+                            shadow={heroShadow}
+                            styles={styles}
+                          />
                         ))}
                       </Reanimated.View>
                     </Reanimated.View>
@@ -2509,7 +2555,7 @@ export default function HomeScreen({ navigation }: any) {
               onNextMonth={onCalNextMonth}
               onPressItem={onCalPressItem}
               onSegKeyChange={setCalSeg}
-              selectionKey={calSelKey}
+              selectionKey={activeCurrency}
               onLayoutH={onCalLayoutH}
               debugName="real"
             />
