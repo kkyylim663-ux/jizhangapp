@@ -1843,8 +1843,8 @@ export default function HomeScreen({ navigation }: any) {
                     <AppText variant="caption" color={onGradientMuted}>
                       {`${t('home.budgetUsed')} `}
                     </AppText>
-                    {/* 已用金额 = 支出金额，走语义支出色（紫）；不覆盖成次要色 */}
-                    <MoneyText value={thisExpense} kind="expense" variant="caption" hidden={balanceHidden} />
+                    {/* 已用金额 = 已花的正数：kind 用 plain（不带 − 号），颜色显式取语义支出色（紫） */}
+                    <MoneyText value={thisExpense} kind="plain" color={semantic.amountExpense} variant="caption" hidden={balanceHidden} />
                     <AppText variant="caption" color={onGradientMuted}>
                       {' / '}
                     </AppText>
