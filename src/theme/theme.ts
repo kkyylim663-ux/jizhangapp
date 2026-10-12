@@ -621,7 +621,7 @@ export const lightSemantic: SemanticColors = {
   onAccent: '#FFFFFF',
   accentText: '#6C4DF6',
   accentSoft: 'rgba(108,77,246,0.10)',
-  amountExpense: '#B8A6FF', // V3 新规：全 App 支出金额 = 紫（夜 #B8A6FF / 日 #5B3DF0）
+  amountExpense: '#5B3DF0', // V3 新规：全 App 支出金额 = 紫（日）
   amountIncome: '#0A7A50',
   amountTransfer: '#433E5A', // = textSecondary
   danger: '#E11D48',
@@ -658,7 +658,7 @@ export const darkSemantic: SemanticColors = {
   onAccent: '#FFFFFF',
   accentText: '#A595FF',
   accentSoft: 'rgba(165,149,255,0.14)',
-  amountExpense: '#5B3DF0', // V3 新规：全 App 支出金额 = 紫
+  amountExpense: '#B8A6FF', // V3 新规：全 App 支出金额 = 紫（夜）
   amountIncome: '#3DDC97',
   amountTransfer: 'rgba(242,240,250,0.76)', // = textSecondary
   danger: '#FB7185',
