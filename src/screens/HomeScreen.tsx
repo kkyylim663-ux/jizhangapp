@@ -5,7 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 
 import { useFocusEffect } from '@react-navigation/native';
-import Reanimated, { useSharedValue, useAnimatedStyle, useDerivedValue, withTiming, withSequence, cancelAnimation, runOnJS, Easing } from 'react-native-reanimated';
+import Reanimated, { useSharedValue, useAnimatedStyle, useDerivedValue, withTiming, withSpring, withSequence, cancelAnimation, runOnJS, Easing } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -551,6 +551,64 @@ function GlassRoundButton({
         <Ionicons name={icon} size={20} color={semantic.textPrimary} />
       </GlassView>
     </PressableScale>
+  );
+}
+
+/** 44 玻璃圆钮的「UI 线程点按」版（日历 ⇄ 列表开关用）：
+ *  点按由 Gesture.Tap 在原生线程识别、onEnd 直接在 UI 线程执行 onTapUI（worklet）—— 不经过 JS 线程，
+ *  JS 再忙也不会「点了要停一下才动」；按压缩放也在 UI 线程（共享值 + 弹簧）。
+ *  读屏的「激活」动作走 onActivateJS（JS 线程，只在无障碍场景用）。 */
+function GlassRoundTapButton({
+  icon,
+  accessibilityLabel,
+  accessibilityState,
+  onTapUI,
+  onActivateJS,
+  pressSpring,
+  testID,
+}: {
+  icon: IconName;
+  accessibilityLabel: string;
+  accessibilityState?: React.ComponentProps<typeof PressableScale>['accessibilityState'];
+  onTapUI: () => void;
+  onActivateJS: () => void;
+  pressSpring: { dampingRatio: number; duration: number };
+  testID?: string;
+}) {
+  const { semantic } = useTheme();
+  const scale = useSharedValue(1);
+  const gesture = useMemo(
+    () =>
+      Gesture.Tap()
+        .onBegin(() => {
+          scale.value = withSpring(0.9, pressSpring);
+        })
+        .onFinalize(() => {
+          scale.value = withSpring(1, pressSpring);
+        })
+        .onEnd((_e, success) => {
+          if (success) onTapUI();
+        }),
+    [onTapUI, pressSpring, scale]
+  );
+  const scaleStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+  return (
+    <GestureDetector gesture={gesture}>
+      <Reanimated.View
+        style={[glassRoundStyles.touch, scaleStyle]}
+        accessible
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel}
+        accessibilityState={accessibilityState}
+        accessibilityActions={[{ name: 'activate' }]}
+        onAccessibilityAction={onActivateJS}
+        testID={testID}
+      >
+        <GlassView radius="full" style={glassRoundStyles.glass}>
+          <Ionicons name={icon} size={20} color={semantic.textPrimary} />
+        </GlassView>
+      </Reanimated.View>
+    </GestureDetector>
   );
 }
 
@@ -1346,6 +1404,8 @@ export default function HomeScreen({ navigation }: any) {
   const listInT = useSharedValue(1); // 新列表上升 0→1（1 = 静止）
   const calP = useSharedValue(0); // 日历抽屉进度（0 = 列表，1 = 日历）
   const calHidden = useSharedValue(0); // 1 = 日历已落定，列表整体藏起（仍挂着）
+  const calTarget = useSharedValue(0); // 开关的目标状态（1 = 日历）：UI 线程点按据此决定开 / 关
+  const calReady = useSharedValue(0); // 1 = 日历卡已挂载好，可以直接在 UI 线程起动画
   const listTransitionRef = useRef(false);
   const pendingRiseRef = useRef(false);
   const riseGenRef = useRef(0);
@@ -1619,6 +1679,9 @@ export default function HomeScreen({ navigation }: any) {
   const [calMounted, setCalMounted] = useState(false);
   const calMountedRef = useRef(false);
   calMountedRef.current = calMounted;
+  useEffect(() => {
+    calReady.value = calMounted ? 1 : 0;
+  }, [calMounted, calReady]);
   const [calExiting, setCalExiting] = useState(false);
   const [calSettled, setCalSettled] = useState(false);
   const [calH, setCalH] = useState(0);
@@ -1634,7 +1697,7 @@ export default function HomeScreen({ navigation }: any) {
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const task = InteractionManager.runAfterInteractions(() => {
-      timer = setTimeout(() => setCalMounted(true), 600);
+      timer = setTimeout(() => setCalMounted(true), 300);
     });
     return () => {
       task.cancel();
@@ -1666,30 +1729,31 @@ export default function HomeScreen({ navigation }: any) {
   );
   const onCalEntered = useCallback(() => setCalSettled(true), []);
   const onCalExited = useCallback(() => setCalExiting(false), []);
+  // 重的 state 变化（viewMode / 列表区高度夹取 / 邻页日历挂载等）：动画已经在 UI 线程跑起来之后才提交
+  const commitCalState = useCallback((nextMode: 'detail' | 'calendar') => {
+    if (viewModeRef.current !== nextMode) return;
+    if (nextMode === 'calendar') {
+      setCalExiting(false);
+      setCalSettled(false);
+      setViewMode('calendar');
+    } else {
+      setCalSettled(false);
+      setCalExiting(true);
+      setViewMode('detail');
+    }
+  }, []);
+  // JS 路径（兜底）：日历卡还没预热好时点了 —— 先挂上（藏着），画出来再起动画
   const toggleCalendarMode = useCallback(
     (nextMode: 'detail' | 'calendar') => {
       viewModeRef.current = nextMode;
+      calTarget.value = nextMode === 'calendar' ? 1 : 0;
       const reduce = motion.reduceMotion;
-      // 重的 state 变化（推迟一帧，不和动画起点撞在一起）
-      const commitState = () => {
-        if (viewModeRef.current !== nextMode) return;
-        if (nextMode === 'calendar') {
-          setCalExiting(false);
-          setCalSettled(false);
-          setViewMode('calendar');
-        } else {
-          setCalSettled(false);
-          setCalExiting(true);
-          setViewMode('detail');
-        }
-      };
-      // UI 线程动画：先起，再提交 state
       const run = () => {
         if (viewModeRef.current !== nextMode) return;
         cancelAnimation(calP);
         if (nextMode === 'calendar') {
           if (reduce) {
-            commitState();
+            commitCalState(nextMode);
             calP.value = 1;
             calHidden.value = 1;
             setCalSettled(true);
@@ -1704,7 +1768,7 @@ export default function HomeScreen({ navigation }: any) {
           });
         } else {
           if (reduce) {
-            commitState();
+            commitCalState(nextMode);
             calP.value = 0;
             calHidden.value = 0;
             setCalExiting(false);
@@ -1718,18 +1782,85 @@ export default function HomeScreen({ navigation }: any) {
             }
           });
         }
-        if (!reduce) requestAnimationFrame(commitState);
+        requestAnimationFrame(() => commitCalState(nextMode));
       };
       if (nextMode === 'calendar' && !calMountedRef.current) {
-        // 极少见：预热还没到就点了 —— 先挂上（藏着），画出来再起动画
         setCalMounted(true);
         requestAnimationFrame(() => requestAnimationFrame(run));
         return;
       }
       run();
     },
-    [calP, calHidden, motion.reduceMotion, onCalEntered, onCalExited]
+    [calP, calHidden, calTarget, motion.reduceMotion, onCalEntered, onCalExited, commitCalState]
   );
+  // 动画已在 UI 线程起跑之后（下一帧）才在 JS 线程做的事：触感、提交 state、切回列表时滚回顶部
+  const afterCalToggle = useCallback(
+    (open: boolean) => {
+      const nextMode = open ? 'calendar' : 'detail';
+      viewModeRef.current = nextMode;
+      hapticLight();
+      requestAnimationFrame(() => {
+        commitCalState(nextMode);
+        if (motion.reduceMotion) {
+          if (open) setCalSettled(true);
+          else setCalExiting(false);
+        }
+      });
+      // 切回列表时滚回顶部（避免长列表滚动位置残留、切回来看不到列表头）。
+      // 空账本（dayGroups 为空）没有可滚的 item：不滚，否则 scrollToIndex 越界崩溃
+      if (!open && dayGroupsRef.current.length > 0) {
+        requestAnimationFrame(() => {
+          try {
+            listRef.current?.scrollToLocation({ sectionIndex: 0, itemIndex: 0, animated: false });
+          } catch {
+            // 列表已被卸载或数据已清空：忽略，保持当前位置
+          }
+        });
+      }
+    },
+    [commitCalState, motion.reduceMotion]
+  );
+  const toggleCalendarJS = useCallback(
+    (open: boolean) => {
+      hapticLight();
+      toggleCalendarMode(open ? 'calendar' : 'detail');
+    },
+    [toggleCalendarMode]
+  );
+  // 点按入口（UI 线程 worklet）：先在 UI 线程起动画（从当前进度续跑，连点安全），再 runOnJS 做后续
+  const reduceMotionUI = motion.reduceMotion;
+  const toggleCalUI = useCallback(() => {
+    'worklet';
+    const open = calTarget.value !== 1;
+    calTarget.value = open ? 1 : 0;
+    if (calReady.value === 0) {
+      // 日历卡还没预热好：交给 JS 路径（先挂载再起动画）
+      runOnJS(toggleCalendarJS)(open);
+      return;
+    }
+    cancelAnimation(calP);
+    if (reduceMotionUI) {
+      calP.value = open ? 1 : 0;
+      calHidden.value = open ? 1 : 0;
+    } else if (open) {
+      const dur = CAL_ENTER_MS * Math.max(0.2, 1 - calP.value);
+      calP.value = withTiming(1, { duration: dur, easing: CAL_ENTER_EASE }, (finished) => {
+        if (finished) {
+          calHidden.value = 1;
+          runOnJS(onCalEntered)();
+        }
+      });
+    } else {
+      const dur = CAL_EXIT_MS * Math.max(0.2, calP.value);
+      calP.value = withTiming(0, { duration: dur, easing: CAL_EXIT_EASE }, (finished) => {
+        if (finished) {
+          calHidden.value = 0;
+          runOnJS(onCalExited)();
+        }
+      });
+    }
+    runOnJS(afterCalToggle)(open);
+  }, [calTarget, calReady, calP, calHidden, reduceMotionUI, toggleCalendarJS, afterCalToggle, onCalEntered, onCalExited]);
   const [viewMonth, setViewMonth] = useState(() => {
     const d = new Date();
     return { year: d.getFullYear(), month: d.getMonth() + 1 };
@@ -2171,30 +2302,13 @@ export default function HomeScreen({ navigation }: any) {
                   </View>
                 )}
               </View>
-              <GlassRoundButton
+              <GlassRoundTapButton
                 icon={viewMode === 'detail' ? 'calendar-outline' : 'list-outline'}
                 accessibilityLabel={t('home.toggleView')}
                 accessibilityState={{ selected: viewMode === 'calendar' }}
-                onPress={() => {
-                  hapticLight();
-                  // 用 ref 判断当前模式：state 推迟一帧才变，连点时 viewMode 可能还是旧值
-                  const nextMode = viewModeRef.current === 'detail' ? 'calendar' : 'detail';
-                  toggleCalendarMode(nextMode);
-                  // 切回列表时滚回顶部（避免长列表滚动位置残留、切回来看不到列表头）。
-                  // ⚠ 只在「切回列表」时滚：切到日历时 sections 会置空，
-                  //    此时 scrollToLocation 会因 item 数 0 报错（自检抓到 scrollToIndex out of range）；
-                  //    等一帧让新 sections 上去再滚，SectionList 的公开 API 是 scrollToLocation
-                  // 空账本（dayGroups 为空）没有可滚的 item：不滚，否则 scrollToIndex 越界崩溃
-                  if (nextMode === 'detail' && dayGroups.length > 0) {
-                    requestAnimationFrame(() => {
-                      try {
-                        listRef.current?.scrollToLocation({ sectionIndex: 0, itemIndex: 0, animated: false });
-                      } catch {
-                        // 列表已被卸载或数据已清空：忽略，保持当前位置
-                      }
-                    });
-                  }
-                }}
+                onTapUI={toggleCalUI}
+                onActivateJS={() => toggleCalendarJS(viewModeRef.current === 'detail')}
+                pressSpring={motion.spring.press}
                 testID="home-toggle-view"
               />
             </View>
