@@ -346,22 +346,24 @@ const LIST_RISE_EASE = Easing.bezier(0.22, 1, 0.36, 1);
 // 日历抽屉打开时列表下沉 / 变淡的幅度（C3 使用）
 const CAL_LIST_LIFT = 36;
 const CAL_LIST_OPACITY_MIN = 0.15;
-// 日历底部弹层：进入 420ms 缓出（快起慢落）；退出 320ms 加速离场；遮罩峰值 0.55（× 遮罩色自带透明度）
+// 日历底部弹层：进入 420ms 缓出（快起慢落）；退出 280ms 加速离场；遮罩 = 0.25 × 进度（× 遮罩色自带透明度）
 const CAL_ENTER_MS = 420;
-const CAL_EXIT_MS = 320;
+const CAL_EXIT_MS = 280;
 const CAL_ENTER_EASE = Easing.bezier(0.22, 1, 0.36, 1);
 const CAL_EXIT_EASE = Easing.bezier(0.5, 0, 0.75, 0);
 const CAL_LIFT_MAX = 480;
-const CAL_DIM_MAX = 0.55;
+const CAL_DIM_MAX = 0.25;
 
 /** 列表格子统一的过渡包装：淡出 × 上升 × 日历下沉。所有格子共用同一份计算，没有逐行错峰。
  *  纯 UI 线程 useAnimatedStyle，不用 entering / exiting 属性（Fabric 下会 addViewAt 崩） */
-function ListFx({ outP, rise, calP, shiftX, children }: { outP: SharedValue<number>; rise: SharedValue<number>; calP: SharedValue<number>; shiftX: SharedValue<number>; children: React.ReactNode }) {
+function ListFx({ outP, rise, calP, calHidden, shiftX, children }: { outP: SharedValue<number>; rise: SharedValue<number>; calP: SharedValue<number>; calHidden: SharedValue<number>; shiftX: SharedValue<number>; children: React.ReactNode }) {
   const style = useAnimatedStyle(() => {
     const r = rise.value;
     const c = calP.value;
+    // calHidden = 日历弹层已落定、列表整体藏起（仍挂着，不卸载）；退出时 c 降到 0.75→0.6 之间才渐渐现出
+    const m = calHidden.value === 1 ? Math.min(1, Math.max(0, (0.75 - c) / 0.15)) : 1;
     return {
-      opacity: outP.value * r * (1 - (1 - CAL_LIST_OPACITY_MIN) * c),
+      opacity: m * outP.value * r * (1 - (1 - CAL_LIST_OPACITY_MIN) * c),
       // shiftX = 币种横滑时账单列表跟着 hero 横移的距离（不横滑时恒为 0）
       transform: [{ translateX: shiftX.value }, { translateY: (1 - r) * LIST_RISE_LIFT + CAL_LIST_LIFT * c }],
     };
@@ -699,9 +701,10 @@ const NeighbourList = React.memo(function NeighbourList({
 });
 
 const NOOP = () => {};
-/** 邻页的日历预览：外壳与真日历完全同款（玻璃卡 + 内衬），日历本体就是 MonthCalendarCard
- *  （同月份、同指标分段、该币种自己的逐日数据与热力）。memo：该币种数据不变就不重渲 */
-const NeighbourCalendar = React.memo(function NeighbourCalendar({
+/** 日历卡外壳（真日历与邻页预览共用，memo）：玻璃卡 + 内衬，日历本体是 MonthCalendarCard
+ *  （同月份、同指标分段、该币种自己的逐日数据与热力）。props 全部是稳定引用 ——
+ *  数据不变就不重渲，横滑 / 翻页动画期间 JS 线程不碰它。debugName 只给开发日志数挂载次数。 */
+const CalendarShell = React.memo(function CalendarShell({
   year,
   month,
   days,
@@ -709,6 +712,13 @@ const NeighbourCalendar = React.memo(function NeighbourCalendar({
   monthIncome,
   segKey,
   styles,
+  onPrevMonth = NOOP,
+  onNextMonth = NOOP,
+  onPressItem,
+  onSegKeyChange,
+  selectionKey,
+  onLayoutH,
+  debugName,
 }: {
   year: number;
   month: number;
@@ -717,9 +727,21 @@ const NeighbourCalendar = React.memo(function NeighbourCalendar({
   monthIncome: number;
   segKey: SegKey;
   styles: ReturnType<typeof makeStyles>;
+  onPrevMonth?: () => void;
+  onNextMonth?: () => void;
+  onPressItem?: (id: string) => void;
+  onSegKeyChange?: (key: SegKey) => void;
+  selectionKey?: string;
+  onLayoutH?: (h: number) => void;
+  debugName?: string;
 }) {
+  useEffect(() => {
+    if (!__DEV__) return;
+    console.log(`[cal] mount ${debugName ?? '?'}`);
+    return () => console.log(`[cal] unmount ${debugName ?? '?'}`);
+  }, [debugName]);
   return (
-    <View style={styles.calendarWrap}>
+    <View style={styles.calendarWrap} onLayout={onLayoutH ? (e) => onLayoutH(e.nativeEvent.layout.height) : undefined}>
       <GlassView radius={26} style={styles.calendarCard}>
         <MonthCalendarCard
           year={year}
@@ -727,9 +749,12 @@ const NeighbourCalendar = React.memo(function NeighbourCalendar({
           days={days}
           monthExpense={monthExpense}
           monthIncome={monthIncome}
-          onPrevMonth={NOOP}
-          onNextMonth={NOOP}
+          onPrevMonth={onPrevMonth}
+          onNextMonth={onNextMonth}
+          onPressItem={onPressItem}
           segKey={segKey}
+          onSegKeyChange={onSegKeyChange}
+          selectionKey={selectionKey}
         />
       </GlassView>
     </View>
@@ -1320,6 +1345,7 @@ export default function HomeScreen({ navigation }: any) {
   const listOutP = useSharedValue(1); // 旧列表淡出 1→0；新列表上升前保持 0（布局在透明状态下完成）
   const listInT = useSharedValue(1); // 新列表上升 0→1（1 = 静止）
   const calP = useSharedValue(0); // 日历抽屉进度（0 = 列表，1 = 日历）
+  const calHidden = useSharedValue(0); // 1 = 日历已落定，列表整体藏起（仍挂着）
   const listTransitionRef = useRef(false);
   const pendingRiseRef = useRef(false);
   const riseGenRef = useRef(0);
@@ -1406,12 +1432,12 @@ export default function HomeScreen({ navigation }: any) {
     () =>
       function TxSeparatorFadedItem() {
         return (
-          <ListFx outP={listOutP} rise={listInT} calP={calP} shiftX={listShiftX}>
+          <ListFx outP={listOutP} rise={listInT} calP={calP} calHidden={calHidden} shiftX={listShiftX}>
             <TxSeparator />
           </ListFx>
         );
       },
-    [listOutP, listInT, calP, listShiftX]
+    [listOutP, listInT, calP, calHidden, listShiftX]
   );
 
   // 视图切换时把列表滚回顶部用（只读调用 scrollToOffset，不影响既有滚动行为）
@@ -1490,12 +1516,12 @@ export default function HomeScreen({ navigation }: any) {
     );
   }, [t, getCategoryById, getAssetById, navigation]);
   const renderTxRow = useCallback(({ item, index, section }: { item: Transaction; index: number; section: TxDaySection }) => (
-    <ListFx outP={listOutP} rise={listInT} calP={calP} shiftX={listShiftX}>
+    <ListFx outP={listOutP} rise={listInT} calP={calP} calHidden={calHidden} shiftX={listShiftX}>
       {buildTxRow(item, index, section, item.id === flashTxId)}
     </ListFx>
     // 依赖：渲染期读到的都列进来；stable 的 renderItem 让 VirtualizedList 的 CellRenderer
     //（PureComponent，比较 renderItem 身份 + item 身份）在滚动 / 切 Tab 时跳过重渲染
-  ), [buildTxRow, flashTxId, listOutP, listInT, calP, listShiftX]);
+  ), [buildTxRow, flashTxId, listOutP, listInT, calP, calHidden, listShiftX]);
 
   // 日期头（V2 稿）：左「今天」（15/500）+ 紧跟的「10月10日 周六」（caption 弱化色），
   // 右侧「支出 43.60」（caption 次要色，收入仍用收入绿）—— wrap 行：放不下自动换行，不缩字不省略；
@@ -1550,11 +1576,11 @@ export default function HomeScreen({ navigation }: any) {
   // 列表内的日期头：切币种过渡时跟着列表淡出 / 上滑（吸顶条 / pinnedHeader 仍直接用 renderDayHeader，不动）
   const renderSectionHeaderEntering = useCallback(
     ({ section }: { section: TxDaySection }) => (
-      <ListFx outP={listOutP} rise={listInT} calP={calP} shiftX={listShiftX}>
+      <ListFx outP={listOutP} rise={listInT} calP={calP} calHidden={calHidden} shiftX={listShiftX}>
         {renderDayHeader({ section })}
       </ListFx>
     ),
-    [renderDayHeader, listOutP, listInT, calP, listShiftX]
+    [renderDayHeader, listOutP, listInT, calP, calHidden, listShiftX]
   );
 
   // 行间发丝分割线 = 模块作用域的 TxSeparator（稳定组件标识，见其定义处注释）
@@ -1698,16 +1724,35 @@ export default function HomeScreen({ navigation }: any) {
   const calendarMonthTotals = useMemo(() => monthTotalsOf(dayGroups), [dayGroups, monthTotalsOf]);
   // 日历指标分段（支出 / 收入 / 总额）提到页面里：真日历与邻页预览显示同一个指标
   const [calSeg, setCalSeg] = useState<SegKey>('expense');
-  // 日历模式下，左右邻页币种的日历数据（只在日历渲染时算；其余时候是空数组）
-  const calNeighbours = useMemo(() => {
-    if (!calRendered || totalsByCurrency.length < 2) return [];
-    return [panelCenter - 1, panelCenter + 1].flatMap((i) => {
-      const row = totalsByCurrency[i];
-      if (!row) return [];
-      const groups = dayGroupsMap.get(row[0]) ?? NO_GROUPS;
-      return [{ i, code: row[0], days: buildCalendarDays(groups), totals: monthTotalsOf(groups) }];
-    });
-  }, [calRendered, totalsByCurrency, panelCenter, dayGroupsMap, buildCalendarDays, monthTotalsOf]);
+  // 日历邻页的数据：落定后（calPanelsReady）一次算好每个币种的逐日 Map 与当月合计，
+  // 只在账单 / 月份 / 语言变化时重算 —— 横滑提交（换当前币种）不会让它们换身份，邻页不重渲
+  const calPanelsReady = calRendered && calSettled && totalsByCurrency.length > 1;
+  const calDaysMap = useMemo(() => {
+    const m = new Map<string, Map<string, CalendarDayTotals>>();
+    if (!calPanelsReady) return m;
+    totalsByCurrency.forEach(([code]) => m.set(code, buildCalendarDays(dayGroupsMap.get(code) ?? NO_GROUPS)));
+    return m;
+  }, [calPanelsReady, totalsByCurrency, dayGroupsMap, buildCalendarDays]);
+  const calTotalsMap = useMemo(() => {
+    const m = new Map<string, { expense: number; income: number }>();
+    if (!calPanelsReady) return m;
+    totalsByCurrency.forEach(([code]) => m.set(code, monthTotalsOf(dayGroupsMap.get(code) ?? NO_GROUPS)));
+    return m;
+  }, [calPanelsReady, totalsByCurrency, dayGroupsMap, monthTotalsOf]);
+  // 真日历的稳定回调（CalendarShell 是 memo：回调身份不变，才不会在无关更新时重渲）
+  const ledgerTransactionsRef = useRef(ledgerTransactions);
+  ledgerTransactionsRef.current = ledgerTransactions;
+  const onCalPrevMonth = useCallback(() => shiftCalendarMonthRef.current(-1), []);
+  const onCalNextMonth = useCallback(() => shiftCalendarMonthRef.current(1), []);
+  const onCalPressItem = useCallback(
+    (id: string) => {
+      // 日历明细点一行 = 进编辑（与首页列表行同一个现有入口）
+      const tx = ledgerTransactionsRef.current.find((x) => x.id === id);
+      if (tx) navigation.navigate(ROUTES.ADD_TX, { editTransaction: tx });
+    },
+    [navigation]
+  );
+  const shiftCalendarMonthRef = useRef<(dir: number) => void>(() => {});
   const shiftCalendarMonth = (dir: number) => {
     setViewMonth((vm) => {
       let month = vm.month + dir;
@@ -1717,6 +1762,7 @@ export default function HomeScreen({ navigation }: any) {
       return { year, month };
     });
   };
+  shiftCalendarMonthRef.current = shiftCalendarMonth;
 
   // 每个账本各自的资产合计（按币种），给快速切换账本弹窗用——同一套逻辑，跟 LedgerScreen 的账本列表保持一致
   const ledgerTotals = useMemo(() => {
@@ -1888,33 +1934,40 @@ export default function HomeScreen({ navigation }: any) {
           );
         })
       : null;
-  // 日历模式的邻页：邻币种自己的日历卡（同月份 / 同指标），随真日历一起横移
+  // 日历模式的邻页：其余每个币种各一张日历卡（同月份 / 同指标），按币种代码做 key 一直挂着，
+  // 提交（换当前币种）后实例原样保留、没有新挂载；它们在屏幕外，随真日历一起横移
   const calNeighbourPanels =
-    amountRowW > 0 && calRendered
-      ? calNeighbours.map((nb) => (
-          <SwipePanel
-            key={nb.code}
-            index={nb.i}
-            listIdx={listIdxSV}
-            swipeActive={swipeActive}
-            shiftX={listShiftX}
-            pitch={listPitch}
-            top={heroH}
-            width={winW}
-            sheetP={calP}
-            sheetLift={calLift}
-          >
-            <NeighbourCalendar
-              year={viewMonth.year}
-              month={viewMonth.month}
-              days={nb.days}
-              monthExpense={nb.totals.expense}
-              monthIncome={nb.totals.income}
-              segKey={calSeg}
-              styles={styles}
-            />
-          </SwipePanel>
-        ))
+    amountRowW > 0 && calPanelsReady
+      ? totalsByCurrency.map(([code], i) => {
+          const days = calDaysMap.get(code);
+          const totals = calTotalsMap.get(code);
+          if (!days || !totals) return null;
+          return (
+            <SwipePanel
+              key={code}
+              index={i}
+              listIdx={listIdxSV}
+              swipeActive={swipeActive}
+              shiftX={listShiftX}
+              pitch={listPitch}
+              top={heroH}
+              width={winW}
+              sheetP={calP}
+              sheetLift={calLift}
+            >
+              <CalendarShell
+                year={viewMonth.year}
+                month={viewMonth.month}
+                days={days}
+                monthExpense={totals.expense}
+                monthIncome={totals.income}
+                segKey={calSeg}
+                styles={styles}
+                debugName={`nb-${code}`}
+              />
+            </SwipePanel>
+          );
+        })
       : null;
   const budgetCodes = totalsByCurrency.map(([code]) => code);
   const budgetStrip =
@@ -2009,7 +2062,7 @@ export default function HomeScreen({ navigation }: any) {
         ListEmptyComponent={
           // 日历模式不显示空状态（列表为空是刻意的）；真没账单时才给「记第一笔」
           viewMode === 'calendar' ? null : (
-            <ListFx outP={listOutP} rise={listInT} calP={calP} shiftX={listShiftX}>
+            <ListFx outP={listOutP} rise={listInT} calP={calP} calHidden={calHidden} shiftX={listShiftX}>
               {renderEmptyState()}
             </ListFx>
           )
@@ -2255,27 +2308,21 @@ export default function HomeScreen({ navigation }: any) {
             + 圆角 26 / 内衬 12·10·10（与账单列表卡同一张卡的观感） */}
         {calRendered && (
           <Reanimated.View style={[styles.calendarAbs, { top: calTop }, calEnterStyle]}>
-            <View style={styles.calendarWrap}>
-              <GlassView radius={26} style={styles.calendarCard}>
-                <MonthCalendarCard
-                  year={viewMonth.year}
-                  month={viewMonth.month}
-                  days={calendarDays}
-                  monthExpense={calendarMonthTotals.expense}
-                  monthIncome={calendarMonthTotals.income}
-                  onPrevMonth={() => shiftCalendarMonth(-1)}
-                  onNextMonth={() => shiftCalendarMonth(1)}
-                  segKey={calSeg}
-                  onSegKeyChange={setCalSeg}
-                  selectionKey={calSelKey}
-                  // 日历明细点一行 = 进编辑（与首页列表行同一个现有入口）
-                  onPressItem={(id) => {
-                    const tx = ledgerTransactions.find((x) => x.id === id);
-                    if (tx) navigation.navigate(ROUTES.ADD_TX, { editTransaction: tx });
-                  }}
-                />
-              </GlassView>
-            </View>
+            <CalendarShell
+              year={viewMonth.year}
+              month={viewMonth.month}
+              days={calendarDays}
+              monthExpense={calendarMonthTotals.expense}
+              monthIncome={calendarMonthTotals.income}
+              segKey={calSeg}
+              styles={styles}
+              onPrevMonth={onCalPrevMonth}
+              onNextMonth={onCalNextMonth}
+              onPressItem={onCalPressItem}
+              onSegKeyChange={setCalSeg}
+              selectionKey={calSelKey}
+              debugName="real"
+            />
           </Reanimated.View>
         )}
           </View>
