@@ -405,11 +405,11 @@ function TxRow({
       <IconCircle color={categoryColor} icon={categoryIcon} shape="tile" size={38} />
       {/* 中：flex:1 吃掉剩余宽度，把金额顶到行尾 */}
       <View style={rowStyles.textBlock}>
-        <AppText variant="subhead" weight="600" style={styles.rowTitleText} numberOfLines={2}>
+        <AppText variant="subhead" weight="600" style={rowStyles.rowTitleText} numberOfLines={2}>
           {title}
         </AppText>
         {!!subtitle && (
-          <AppText variant="caption" weight="400" color={semantic.textTertiary} style={styles.rowSubText} numberOfLines={1}>
+          <AppText variant="caption" weight="400" color={semantic.textTertiary} style={rowStyles.rowSubText} numberOfLines={1}>
             {subtitle}
           </AppText>
         )}
@@ -441,6 +441,8 @@ function makeTxRowStyles(semantic: SemanticColors, spacing: Spacing, layout: Lay
       paddingBottom: spacing.sm + LIST_CARD_EDGE,
     },
     textBlock: { flex: 1, minWidth: 0, rowGap: 2 },
+    rowTitleText: { fontSize: 14, lineHeight: 19 },
+    rowSubText: { fontSize: 12, lineHeight: 16 },
   });
 }
 
@@ -1839,8 +1841,6 @@ function makeStyles(
     // 日期标签（今天 / 昨天 / 10月7日 周三）：可被挤窄，合计整块不被挤
     dayHeaderDate: { flexShrink: 1 },
     // V3 字号（设计稿逐值）：行标题 14/600、副标题 12/400、日期头 12、预算文字 12.5
-    rowTitleText: { fontSize: 14, lineHeight: 19 },
-    rowSubText: { fontSize: 12, lineHeight: 16 },
     dayHeaderLabelText: { fontSize: 12, lineHeight: 16 },
     budgetText: { fontSize: 12.5, lineHeight: 17 },
     // 当日合计：wrap 行（放不下自动换行到第二行，右对齐；不缩字、不省略）
