@@ -18,16 +18,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 export const TAB_BAR_HEIGHT = 68;
 /** 栏底距安全区上沿的缝隙（V2.2：贴底，0 = 下沿紧贴系统导航栏上方） */
 export const TAB_BAR_GAP = 0;
-/** 中央「+」圆钮凸出栏顶的高度——UI V2：圆钮收进胶囊内部，不再凸出 */
-export const TAB_BAR_RAISE = 0;
+/** 中央「+」圆钮凸出栏顶的高度 = 圆钮直径的 40%（V3 参考稿：中央圆钮凸出栏顶） */
+export const TAB_BAR_RAISE = 23;
 /** 外壳在栏身之上再加的触摸余量——圆钮已在栏内，无需余量 */
 export const TAB_BAR_SHELL_PAD = 0;
 /** 外壳完整高度（= 栏身 + 凸起 + 触摸余量）：App.tsx 用它当外壳高度 */
 export const TAB_BAR_SHELL_HEIGHT = TAB_BAR_HEIGHT + TAB_BAR_RAISE + TAB_BAR_SHELL_PAD;
 /** 中央「+」圆钮直径（54pt，UI V2） */
-export const TAB_CENTER_BUTTON_SIZE = 54;
-/** 中央圆钮底边距外壳底边（= 栏内垂直居中：(68 − 54) / 2 = 7） */
-export const TAB_CENTER_BUTTON_BOTTOM = (TAB_BAR_HEIGHT - TAB_CENTER_BUTTON_SIZE) / 2;
+export const TAB_CENTER_BUTTON_SIZE = 58;
+/** 中央圆钮底边距外壳底边：圆钮顶部凸出栏顶 40%，其余落在栏身内 */
+export const TAB_CENTER_BUTTON_BOTTOM = TAB_BAR_HEIGHT - TAB_CENTER_BUTTON_SIZE * 0.6;
 
 /**
  * 收起（滑出屏幕）需要的位移：外壳完整高度 + 距底 + 安全区 —— 整栏一起滑出；

@@ -213,7 +213,7 @@ function AddTransactionStack() {
 // 触摸区：整圆都在胶囊里，Android 判得中。
 // 铁律：不加任何按压视觉反馈（无缩放 / 无位移 / 无水波），只保留点击震动。
 function CenterTabButton({ onPress }: { onPress?: () => void }) {
-  const { semantic, gradients, centerButtonShadow } = useTheme();
+  const { semantic } = useTheme();
   const t = useT();
 
   return (
@@ -222,20 +222,25 @@ function CenterTabButton({ onPress }: { onPress?: () => void }) {
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={t('nav.add')}
-      style={[styles.centerButton, { boxShadow: centerButtonShadow }]}
+      style={[styles.centerButton, { boxShadow: '0px 8px 18px rgba(108,77,246,0.45)' }]}
     >
-      {/* 根元素是普通 View（圆角 + overflow 裁切），渐变画在子层 —— 半透明/渐变卡片的铁律写法 */}
+      {/* 根元素是普通 View（圆角 + overflow 裁切），渐变画在子层 */}
       <LinearGradient
-        colors={gradients.accent.colors}
-        locations={gradients.accent.locations as [number, number, ...number[]]}
-        start={gradients.accent.start}
-        end={gradients.accent.end}
+        colors={['#6C4DF6', '#9B5BD6']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
         style={StyleSheet.absoluteFill}
         pointerEvents="none"
       />
-      {/* 顶部内高光（1dp 亮线，稿里 inset 0 1px 0 rgba(255,255,255,.35)） */}
-      <View pointerEvents="none" style={styles.centerButtonHighlight} />
-      <Ionicons name="add" size={24} color={semantic.onAccent} />
+      {/* 顶部柔和高光：上半圆白色渐隐 */}
+      <LinearGradient
+        colors={['rgba(255,255,255,0.32)', 'rgba(255,255,255,0)']}
+        start={{ x: 0.5, y: 0 }}
+        end={{ x: 0.5, y: 1 }}
+        style={styles.centerButtonGloss}
+        pointerEvents="none"
+      />
+      <Ionicons name="add" size={26} color={semantic.onAccent} />
     </Pressable>
   );
 }
@@ -288,7 +293,7 @@ function SlidingTabBarInner(props: any) {
           V2.2：栏身填充换成高不透明度磨砂（夜 88% / 日 90%，semantic.tabBar），
           背后的列表文字不再透出来；模糊层仍是玻璃令牌的强度（不加不减） */}
       <View style={styles.tabBarRow}>
-        <GlassView radius={radius.full} fill={semantic.tabBar} style={styles.tabBarGlass}>
+        <GlassView radius={radius.full} fill={semantic.tabBar} style={[styles.tabBarGlass, { borderWidth: StyleSheet.hairlineWidth, borderColor: semantic.hairline }]}>
           <BottomTabBar {...props} />
         </GlassView>
       </View>
@@ -339,6 +344,8 @@ function resetToRootOnTabPress(tabName: string) {
 // useTheme() 得在它渲染出的子孙组件里调用才能读到值。
 function AppContent() {
   const { isDark, colors, semantic, spacing, radius } = useTheme();
+  // 选中态圆盘（纯状态指示，无按压动画）：夜 白 10% / 日 accent 10%
+  const tabDiscColor = isDark ? 'rgba(255,255,255,0.10)' : semantic.accentSoft;
   const t = useT();
   const tabAutoHide = useCreateTabBarAutoHide();
 
@@ -408,8 +415,8 @@ function AppContent() {
           screenOptions={({ route }) => ({
             headerShown: false,
             // 选中 = 实心图标 + tabActive（夜白 / 日紫）；未选中 = 线框图标 + tabInactive（UI V2 §1）
-            tabBarActiveTintColor: semantic.tabActive,
-            tabBarInactiveTintColor: semantic.tabInactive,
+            tabBarActiveTintColor: semantic.accentText,
+            tabBarInactiveTintColor: semantic.textTertiary,
             // 无障碍读屏名（标签改成函数式渲染后，库不再自动拼「x, tab, n of m」，显式给名字）
             tabBarAccessibilityLabel: tabLabels[route.name] ?? route.name,
             // 标签走统一文字组件：令牌字号 caption2 = 11pt（旧的 13pt 让英文「Settings」
@@ -453,7 +460,13 @@ function AppContent() {
                 android_ripple={undefined}
                 // 水平内边距收到 4：给 11pt 英文标签（Settings 等）多留一点排版余量
                 style={[props.style, { paddingHorizontal: 4 }]}
-              />
+              >
+                {/* 选中圆盘：绝对定位画在图标 + 标签之下，不占排版、不随按压变化 */}
+                {props.accessibilityState?.selected ? (
+                  <View pointerEvents="none" style={[styles.tabDisc, { backgroundColor: tabDiscColor }]} />
+                ) : null}
+                {props.children}
+              </PlatformPressable>
             ),
             tabBarIcon: ({ color, focused }) => {
               const icon = TAB_ICONS[route.name];
@@ -607,7 +620,24 @@ const styles = StyleSheet.create({
     height: TAB_CENTER_BUTTON_SIZE,
     alignItems: 'center',
   },
-  // 中央圆钮本体（UI V2）：54pt 圆，accent 渐变 + 顶部内高光在 JSX 内联给；
+  // 选中圆盘：绝对定位，居中于栏身（高 68）内
+  tabDisc: {
+    position: 'absolute',
+    top: 9,
+    left: 8,
+    right: 8,
+    height: 50,
+    borderRadius: 25,
+  },
+  // 圆钮顶部柔和高光（上半圆）
+  centerButtonGloss: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: '50%',
+  },
+  // 中央圆钮本体（UI V2）：58pt 圆，accent 渐变 + 顶部内高光在 JSX 内联给；
   // 根元素是普通 View（圆角 + overflow 裁切），渐变画在 absolute 子层
   centerButton: {
     width: TAB_CENTER_BUTTON_SIZE,
