@@ -30,6 +30,17 @@ const HIGHLIGHT_MIX = 0.55;
 /** 图标与其底的最低对比（§4：图标 ≥ 3:1） */
 const ICON_MIN_CONTRAST = 3;
 
+/** 浅色档 tile 图标：把线条色逐步压深，直到对 #F0EDFA 底达到 3:1（夜间不动） */
+function tileStrokeOnLight(color: string): string {
+  let c = color;
+  for (let i = 0; i < 8; i++) {
+    const r = contrastRatio(c, '#F0EDFA');
+    if (r === null || r >= 3) break;
+    c = darken(c, 0.1);
+  }
+  return c;
+}
+
 export interface IconCircleProps {
   /** 类别色 / 账户色（hex）；不传 = 中性球（「全部」那种） */
   color?: string;
@@ -163,7 +174,11 @@ export function IconCircle({
         ]}
       >
         {icon ? (
-          <Ionicons name={icon} size={iconSize ?? Math.round(size * 0.48)} color={color ?? semantic.textSecondary} />
+          <Ionicons
+            name={icon}
+            size={iconSize ?? Math.round(size * 0.48)}
+            color={color ? (isDark ? color : tileStrokeOnLight(color)) : semantic.textSecondary}
+          />
         ) : null}
         {children}
       </View>

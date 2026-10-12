@@ -1250,6 +1250,13 @@ export default function HomeScreen({ navigation }: any) {
       {/* 页面最底层 = 品牌渐变（UI V2.1 §1）：铺满整页（fill）、不再淡出成纯色底，
           卡片 / 列表 / 弹层全部浮在渐变上；网格线只在首页保留 */}
       <HeroGradient height={330} grid />
+      {/* 顶部渐变底部淡出到页面底色（硬边修复）：最后 40% 高度从透明过渡到 homeBg */}
+      <LinearGradient
+        colors={isDark ? ['rgba(10,9,16,0)', '#0A0910'] : ['rgba(244,243,248,0)', '#F4F3F8']}
+        locations={[0, 1]}
+        style={styles.heroFadeOverlay}
+        pointerEvents="none"
+      />
       {/* C1：顶部安全区挡板 —— 滚动时内容不从状态栏文字下穿过 */}
       <StatusBarGlass />
       {/* 首页主体 = 一个 SectionList（T09 / H4 / H6）：
@@ -1355,9 +1362,14 @@ export default function HomeScreen({ navigation }: any) {
                   // ⚠ 只在「切回列表」时滚：切到日历时 sections 会置空，
                   //    此时 scrollToLocation 会因 item 数 0 报错（自检抓到 scrollToIndex out of range）；
                   //    等一帧让新 sections 上去再滚，SectionList 的公开 API 是 scrollToLocation
-                  if (nextMode === 'detail') {
+                  // 空账本（dayGroups 为空）没有可滚的 item：不滚，否则 scrollToIndex 越界崩溃
+                  if (nextMode === 'detail' && dayGroups.length > 0) {
                     requestAnimationFrame(() => {
-                      listRef.current?.scrollToLocation({ sectionIndex: 0, itemIndex: 0, animated: false });
+                      try {
+                        listRef.current?.scrollToLocation({ sectionIndex: 0, itemIndex: 0, animated: false });
+                      } catch {
+                        // 列表已被卸载或数据已清空：忽略，保持当前位置
+                      }
                     });
                   }
                 }}
@@ -1934,6 +1946,7 @@ function makeStyles(
     },
     // 日期标签（今天 / 昨天 / 10月7日 周三）：可被挤窄，合计整块不被挤
     dayHeaderDate: { flexShrink: 1 },
+    heroFadeOverlay: { position: 'absolute', left: 0, right: 0, top: 330 * 0.6, height: 330 * 0.4 },
     // V3 字号（设计稿逐值）：行标题 14/600、副标题 12/400、日期头 12、预算文字 12.5
     dayHeaderLabelText: { fontSize: 12, lineHeight: 16 },
     budgetText: { fontSize: 12.5, lineHeight: 17 },

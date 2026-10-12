@@ -23,7 +23,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { ROUTES } from '../navigation/routes';
 import { useTheme } from '../theme/useTheme';
 import { useLayout } from '../theme/useLayout';
-import { useTabClearance } from '../hooks/useTabClearance';
+import { useTabClearance, TAB_BAR_RAISE } from '../hooks/useTabClearance';
 import { useTabBarScrollHandler } from '../context/TabBarAutoHideContext';
 import { useThemeMode, ThemeMode } from '../context/ThemeModeContext';
 import type { Layout, Radius, SemanticColors, Spacing } from '../theme/theme';
@@ -161,7 +161,7 @@ export default function ProfileScreen({ navigation }: any) {
         style={
           contentMaxWidth ? { maxWidth: contentMaxWidth, width: '100%', alignSelf: 'center' } : undefined
         }
-        contentContainerStyle={{ paddingBottom: tabClearance + spacing.huge }}
+        contentContainerStyle={{ paddingBottom: tabClearance + TAB_BAR_RAISE + spacing.huge }}
       >
         <View style={{ paddingHorizontal: pagePadding, paddingTop: insets.top + 14 }}>
           {/* P1 页头（UI V2 稿）：大标题 30/600（text.primary，§3：渐变上不再用白字；
