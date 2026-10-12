@@ -703,6 +703,8 @@ export default function HomeScreen({ navigation }: any) {
   const activeCurrency = displayTotal?.[0] ?? currency;
   // V3 磁吸入场：切换币种（数据变化）时账单卡从下方 28 滑入 + 淡入，较数字滚动晚 120ms 开始；
   // 首次挂载不播；减弱动态效果时直接落终态
+  // 列表 remount 锁存：数据第一次非空后永远是 'ready'（左右滑到空币种不再整表重挂）
+  const hasEverHadDataRef = useRef(false);
   const listEnterY = useSharedValue(0);
   const listEnterOpacity = useSharedValue(1);
   const prevEnterCurRef = useRef<string | null>(null);
@@ -885,6 +887,7 @@ export default function HomeScreen({ navigation }: any) {
     // 列表卡底边 = 末组最后一行：26 下圆角 + 4pt 卡底边（稿里卡内 padding 下 4）
     const isCardBottom = !!section.isLast && index === (section.data?.length ?? 0) - 1;
     return (
+      <Reanimated.View style={listEnterStyle}>
       <TxRow
         title={hasOwnTitle ? ownTitle : catName}
         categoryName={hasOwnTitle ? catName : ''}
@@ -898,10 +901,11 @@ export default function HomeScreen({ navigation }: any) {
         onPress={openEdit}
         testID={`tx-row-${item.id}`}
       />
+      </Reanimated.View>
     );
     // 依赖：渲染期读到的都列进来；stable 的 renderItem 让 VirtualizedList 的 CellRenderer
     //（PureComponent，比较 renderItem 身份 + item 身份）在滚动 / 切 Tab 时跳过重渲染
-  }, [t, getCategoryById, getAssetById, flashTxId, navigation]);
+  }, [t, getCategoryById, getAssetById, flashTxId, navigation, listEnterStyle]);
 
   // 日期头（V2 稿）：左「今天」（15/500）+ 紧跟的「10月10日 周六」（caption 弱化色），
   // 右侧「支出 43.60」（caption 次要色，收入仍用收入绿）—— wrap 行：放不下自动换行，不缩字不省略；
@@ -1189,6 +1193,7 @@ export default function HomeScreen({ navigation }: any) {
     {/* 顶部安全区不由 SafeAreaView 让位（全出血）：V2 的品牌渐变通顶连屏、状态栏压在渐变上
         （状态栏=透明，见 android styles.xml）；内容让位由头部区自身 paddingTop=insets.top 承担
         （见样式 heroTopRow 的 paddingTop 用 insets.top + 14 —— 与稿里「顶部 14」对齐） */}
+  if (dayGroups.length > 0) hasEverHadDataRef.current = true;
     <SafeAreaView style={[styles.container, { backgroundColor: semantic.homeBg }]} edges={[]}
       onTouchStart={() => { Keyboard.dismiss(); }}
     >
@@ -1201,7 +1206,6 @@ export default function HomeScreen({ navigation }: any) {
           头部（Hero 区 + 日历卡）走 ListHeaderComponent，账单按天分组渲染（吸顶日期头 + 圆形图标行）；
           滚动事件继续透传给 Tab 栏自动隐藏（T07 联动）。
           底部悬空区由 App.tsx 的 TabShell 统一预留（68+18+安全区），这里只留一点呼吸感 */}
-      <Reanimated.View style={[styles.listEnterWrap, listEnterStyle]}>
       <SectionList<Transaction, TxDaySection>
         ref={listRef}
         // ⚠ 数据「空 → 非空」时强制重挂列表 —— 验收退回「只出前几行」的真根因：
@@ -1210,7 +1214,7 @@ export default function HomeScreen({ navigation }: any) {
         //   而源码里 _scheduleCellsToRenderUpdate 要求 last >= 0 才允许扩窗口 →
         //   数据随后到达窗口也不会恢复（表现：只有首批几行、滚到底没内容；数据碰巧先到就正常，
         //   所以小数据量时像偶发 bug）。让它在有真实 sections 时用新 key 重挂一次即可解决。
-        key={dayGroups.length === 0 ? 'empty' : 'ready'}
+        key={hasEverHadDataRef.current ? 'ready' : 'empty'}
         // 虚拟化参数（验收要求的性能档）：一屏多一点首批、8 屏窗口、每批 10 条
         initialNumToRender={12}
         maxToRenderPerBatch={10}
@@ -1514,7 +1518,6 @@ export default function HomeScreen({ navigation }: any) {
           </>
         }
       />
-      </Reanimated.View>
       {/* 吸顶日期头（自绘，见 pinnedSection 的注释）：钉在列表视口顶部，与内容里的日期头同款；
           头部区还占着顶部时不显示 —— 只覆盖列表，不盖弹层（zIndex 低于弹层） */}
       {/* 只在列表视图显示：切到日历视图时列表（含吸顶条）必须完全不显示（验收退回第 2 条） */}
@@ -1861,7 +1864,6 @@ function makeStyles(
     },
     // 日期标签（今天 / 昨天 / 10月7日 周三）：可被挤窄，合计整块不被挤
     dayHeaderDate: { flexShrink: 1 },
-    listEnterWrap: { flex: 1 },
     // V3 字号（设计稿逐值）：行标题 14/600、副标题 12/400、日期头 12、预算文字 12.5
     dayHeaderLabelText: { fontSize: 12, lineHeight: 16 },
     budgetText: { fontSize: 12.5, lineHeight: 17 },
