@@ -1432,7 +1432,8 @@ export default function HomeScreen({ navigation }: any) {
                     ref={pagerRef}
                     horizontal
                     snapToInterval={amountRowW}
-                    decelerationRate="fast"
+                    // 默认衰减率：甩得越重滑得越远（可跨多页），snapToInterval 兜住吸附；
+                    // fast 会让惯性很快停死（甩多重都只翻一页）
                     showsHorizontalScrollIndicator={false}
                     scrollEventThrottle={16}
                     onScroll={handlePagerScroll}

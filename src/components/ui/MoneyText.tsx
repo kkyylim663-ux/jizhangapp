@@ -111,7 +111,8 @@ export interface MoneyTextProps extends FormatMoneyOptions {
   weight?: FontWeightKey;
   /** 颜色覆盖（默认按 kind 取 semantic 语义色） */
   color?: string;
-  /** 数字变化时逐位滚动（默认 true；挂载与首屏数据到位不滚） */
+  /** 数字变化时逐位滚动：**默认只 Hero 滚**（V2.2c 定版：其余金额一律直接换内容，任何情况
+   *  都不做逐位滚动 —— 切币种时下方合计/预算换值不再播滚动动画）；显式传参可覆盖 */
   roll?: boolean;
   /**
    * 超大金额的字号阶梯（默认：基准 ≥40 时 [40,34,28,22,18]，否则不降级）；
@@ -425,7 +426,7 @@ export function MoneyText({
   hidden,
   decimals,
   color,
-  roll = true,
+  roll,
   shrinkLadder,
   compactFallback = false,
   hero = false,
@@ -443,6 +444,8 @@ export function MoneyText({
   // 各档尺寸在下面按「降级阶梯」从基准档算出（见 heroLadder）
   const heroIntSize = hero ? heroSize : 0;
   const baseSize = hero ? heroIntSize : token.fontSize;
+  // 逐位滚动开关：默认只 Hero 滚（V2.2c）；显式传 roll 可强制开/关
+  const rollEnabled = roll ?? hero;
   // 软获取：不在 AppDialogProvider 里时返回 null（长按看全文自动禁用，不报错）
   const dialog = useDialogOptional();
 
@@ -660,8 +663,8 @@ export function MoneyText({
 
     // 首屏数据到位（挂载后 600ms 内的首次赋值）不滚动：不算「用户操作引起的变化」
     const isFirstLoad = Date.now() - mountedAtRef.current < FIRST_LOAD_WINDOW_MS;
-    const canRoll = roll && !motion.reduceMotion && !isFirstLoad;
-    if (roll && motion.reduceMotion && !isFirstLoad) {
+    const canRoll = rollEnabled && !motion.reduceMotion && !isFirstLoad;
+    if (rollEnabled && motion.reduceMotion && !isFirstLoad) {
       crossfade.value = 0;
       crossfade.value = withTiming(1, { duration: motion.timing.fade, easing: motion.easing.out });
     }
@@ -681,7 +684,7 @@ export function MoneyText({
       );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rollText, roll, motion]);
+  }, [rollText, rollEnabled, motion]);
 
   /* ------------------------------------------------------------- 渲染 */
 
@@ -884,7 +887,7 @@ export function MoneyText({
         {shownText}
       </AppText>
     );
-    const fadedTextEl = roll && motion.reduceMotion ? <Animated.View style={crossfadeStyle}>{textEl}</Animated.View> : textEl;
+    const fadedTextEl = rollEnabled && motion.reduceMotion ? <Animated.View style={crossfadeStyle}>{textEl}</Animated.View> : textEl;
 
     if (longPressable && dialog) {
       return (
