@@ -5,7 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 
 import { useFocusEffect } from '@react-navigation/native';
-import Reanimated, { FadeIn, FadeOut, FadeOutUp, useSharedValue, useAnimatedStyle, withTiming, withSpring, withDelay } from 'react-native-reanimated';
+import Reanimated, { FadeIn, FadeOut, FadeOutUp, useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -700,8 +700,6 @@ export default function HomeScreen({ navigation }: any) {
     : '';
   // 净资产当前选中的币种：本月支出合计、预算都跟随它（每个币种各设各的预算）
   const activeCurrency = displayTotal?.[0] ?? currency;
-  // V3 磁吸入场：切换币种（数据变化）时账单卡从下方 28 滑入 + 淡入，较数字滚动晚 120ms 开始；
-  // 首次挂载不播；减弱动态效果时直接落终态
   // 头部首次进场（挂载时淡入 + 微上滑）与日历卡进场：共享值 + useEffect，不用 entering 动画
   const heroEnterP = useSharedValue(0);
   const heroEnterStyle = useAnimatedStyle(() => ({
@@ -712,33 +710,8 @@ export default function HomeScreen({ navigation }: any) {
     heroEnterP.value = withTiming(1, { duration: 240, easing: motion.easing.out });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const calEnterP = useSharedValue(1);
-  const calEnterStyle = useAnimatedStyle(() => ({ opacity: calEnterP.value, transform: [{ translateY: (1 - calEnterP.value) * 12 }] }));
-  useEffect(() => {
-    if (viewMode !== 'calendar') return;
-    calEnterP.value = 0;
-    calEnterP.value = withTiming(1, { duration: 240, easing: motion.easing.out });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode]);
   // 列表 remount 锁存：数据第一次非空后永远是 'ready'（左右滑到空币种不再整表重挂）
   const hasEverHadDataRef = useRef(false);
-  const listEnterY = useSharedValue(0);
-  const listEnterOpacity = useSharedValue(1);
-  const prevEnterCurRef = useRef<string | null>(null);
-  useEffect(() => {
-    const prev = prevEnterCurRef.current;
-    prevEnterCurRef.current = activeCurrency;
-    if (prev === null || prev === activeCurrency || motion.reduceMotion) return;
-    listEnterY.value = 28;
-    listEnterOpacity.value = 0;
-    listEnterY.value = withDelay(120, withSpring(0, motion.spring.snap));
-    listEnterOpacity.value = withDelay(120, withTiming(1, { duration: motion.timing.fade, easing: motion.easing.out }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCurrency]);
-  const listEnterStyle = useAnimatedStyle(() => ({
-    opacity: listEnterOpacity.value,
-    transform: [{ translateY: listEnterY.value }],
-  }));
   // V3：当前币种在列表中的下标（底部小圆点）；左右滑 = 相邻币种，走同一个 setNetWorthCurrency
   const curIdx = totalsByCurrency.findIndex(([c]) => c === activeCurrency);
   const stepCurrencyRef = useRef<(delta: number) => void>(() => {});
@@ -904,7 +877,6 @@ export default function HomeScreen({ navigation }: any) {
     // 列表卡底边 = 末组最后一行：26 下圆角 + 4pt 卡底边（稿里卡内 padding 下 4）
     const isCardBottom = !!section.isLast && index === (section.data?.length ?? 0) - 1;
     return (
-      <Reanimated.View style={listEnterStyle}>
       <TxRow
         title={hasOwnTitle ? ownTitle : catName}
         categoryName={hasOwnTitle ? catName : ''}
@@ -918,11 +890,10 @@ export default function HomeScreen({ navigation }: any) {
         onPress={openEdit}
         testID={`tx-row-${item.id}`}
       />
-      </Reanimated.View>
     );
     // 依赖：渲染期读到的都列进来；stable 的 renderItem 让 VirtualizedList 的 CellRenderer
     //（PureComponent，比较 renderItem 身份 + item 身份）在滚动 / 切 Tab 时跳过重渲染
-  }, [t, getCategoryById, getAssetById, flashTxId, navigation, listEnterStyle]);
+  }, [t, getCategoryById, getAssetById, flashTxId, navigation]);
 
   // 日期头（V2 稿）：左「今天」（15/500）+ 紧跟的「10月10日 周六」（caption 弱化色），
   // 右侧「支出 43.60」（caption 次要色，收入仍用收入绿）—— wrap 行：放不下自动换行，不缩字不省略；
@@ -998,6 +969,14 @@ export default function HomeScreen({ navigation }: any) {
   // 只在日历模式消费 dayGroups 派生数据，账单列表及其全部逻辑零改动。
   // viewMonth 独立记忆：切回详情再进来月份不重置
   const [viewMode, setViewMode] = useState<'detail' | 'calendar'>('detail');
+  const calEnterP = useSharedValue(1);
+  const calEnterStyle = useAnimatedStyle(() => ({ opacity: calEnterP.value, transform: [{ translateY: (1 - calEnterP.value) * 12 }] }));
+  useEffect(() => {
+    if (viewMode !== 'calendar') return;
+    calEnterP.value = 0;
+    calEnterP.value = withTiming(1, { duration: 240, easing: motion.easing.out });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode]);
   const [viewMonth, setViewMonth] = useState(() => {
     const d = new Date();
     return { year: d.getFullYear(), month: d.getMonth() + 1 };

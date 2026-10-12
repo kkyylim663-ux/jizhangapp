@@ -23,8 +23,6 @@ export const motion = {
     sheet: { dampingRatio: 0.85, duration: 400 },
     /** 按压反馈：按下即响应（不等松手） */
     press: { dampingRatio: 1, duration: 180 },
-    /** 磁吸入场（列表卡滑入）：轻微过冲；Reanimated withSpring 原生参数 */
-    snap: { damping: 14, stiffness: 180, mass: 0.9 },
   },
   timing: {
     /** 仅用于淡入淡出 */
@@ -50,7 +48,6 @@ export const reducedMotion: MotionTokens = {
     default: { dampingRatio: 1, duration: 150 },
     sheet: { dampingRatio: 1, duration: 150 },
     press: { dampingRatio: 1, duration: 150 },
-    snap: { damping: 40, stiffness: 400, mass: 1 },
   },
   timing: { fade: 150, numberRoll: 0, numberRollTotal: 0 },
   easing: { out: Easing.out(Easing.cubic) },
