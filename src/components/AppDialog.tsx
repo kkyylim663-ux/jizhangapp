@@ -151,7 +151,8 @@ function DialogHost({
         accessible={false}
       >
         {/* 卡片 = UI V2.1 §2 唯一玻璃材质（填充 / 描边 / 顶部内高光 / 投影 / 模糊回退） */}
-        <GlassView radius={radius.lg} style={[styles.card, { padding: layout.card }]}>
+        {/* 填充覆盖为不透明卡色 homeCard（同 BottomSheet 面板）：Android 无模糊，默认玻璃 fill 半透明会透出背后内容 */}
+        <GlassView radius={radius.lg} fill={semantic.homeCard} style={[styles.card, { padding: layout.card }]}>
           {/* 卡内点击不穿透到遮罩（响应者挂在内容层；材质层只画材质） */}
           <View onStartShouldSetResponder={() => true} accessibilityViewIsModal>
             {request && (
