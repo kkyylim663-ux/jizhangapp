@@ -922,7 +922,8 @@ const BudgetCardPage = React.memo(function BudgetCardPage({ expense, total, hidd
   const barColor = over ? semantic.danger : pctText >= 80 ? semantic.warning : semantic.textPrimary;
   // 进度条：宽度变化走令牌时长补间（目的：state indication）；fill 是 overflow:hidden 轨道里
   // 无子元素的绝对定位元素——唯一放行的 width 动画，圆角不会被 scaleX 拉糊。
-  const progress = useSharedValue(0);
+  // 初始值 = 当前百分比（首帧进度条就在正确位置，不靠动画跑过）；之后百分比变化才补间
+  const progress = useSharedValue(pct);
   useEffect(() => {
     progress.set(withTiming(pct, { duration: motion.spring.default.duration, easing: motion.easing.out }));
   }, [pct, progress, motion]);
@@ -1022,6 +1023,9 @@ export default function HomeScreen({ navigation }: any) {
   const t = useT();
   const { langMode: homeLang } = useLanguage();
   const insets = useSafeAreaInsets();
+  const { width: winW, height: screenH } = useWindowDimensions();
+  // 头部区行宽的「首帧默认值」= 窗口宽 − 左右页边距：首帧就能按它排版，不等 onLayout 量到（量到后再校正）
+  const initialRowW = Math.max(0, Math.round(winW - 2 * pageLayout.page));
   // 版型分级（计划 8.2 第 2 条）：矮屏 / 平板等内容收窄仍用它，不再用 Dimensions
   const layoutTokens = useLayout();
 
@@ -1137,7 +1141,7 @@ export default function HomeScreen({ navigation }: any) {
   const [currencyQuery, setCurrencyQuery] = useState('');
   // 金额行实测宽（Δ>0.5 才更新）：只给金额盒子当 maxWidth 用（短金额盒子贴合内容，眼睛紧贴金额；
   // 超长金额被夹住 → MoneyText 内部按档降级）。行宽由页面 flex 决定、与金额字号无关 —— 单向数据流
-  const [amountRowW, setAmountRowW] = useState(0);
+  const [amountRowW, setAmountRowW] = useState(initialRowW);
   const openCurrencyMenu = () => {
     if (totalsByCurrency.length <= 1) return;
     setCurrencyMenuOpen(true);
@@ -1146,16 +1150,7 @@ export default function HomeScreen({ navigation }: any) {
     totalsByCurrency.find(([c]) => c === (netWorthCurrency ?? defaultNetWorthCurrency)) ?? totalsByCurrency[0];
   // 净资产当前选中的币种：本月支出合计、预算都跟随它（每个币种各设各的预算）
   const activeCurrency = displayTotal?.[0] ?? currency;
-  // 头部首次进场（挂载时淡入 + 微上滑）与日历卡进场：共享值 + useEffect，不用 entering 动画
-  const heroEnterP = useSharedValue(0);
-  const heroEnterStyle = useAnimatedStyle(() => ({
-    opacity: heroEnterP.value,
-    transform: [{ translateY: (1 - heroEnterP.value) * 12 }],
-  }));
-  useEffect(() => {
-    heroEnterP.value = withTiming(1, { duration: 240, easing: motion.easing.out });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // 头部区（顶栏 / 净资产 / 金额 / 预算）首帧就是完全可见的 —— 不再有「挂载淡入」：可见性不依赖任何动画有没有跑过
   // 列表 remount 锁存：数据第一次非空后永远是 'ready'（左右滑到空币种不再整表重挂）
   const hasEverHadDataRef = useRef(false);
   // V3：当前币种在列表中的下标（底部小圆点）
@@ -1165,10 +1160,11 @@ export default function HomeScreen({ navigation }: any) {
   // 松手只翻相邻一页（位移 > 3% 页宽或速度 > 80px/s），动画结束才把 netWorthCurrency 提交一次；
   // 胶囊文字 / 小圆点不 setState：它们直接从共享值 pagerX 读页位置（pagerPos），拖动中零重渲染。
   // 每页 MoneyText 挂载即定格、只在数据真变时才逐位滚动。
-  const pagerX = useSharedValue(0);
+  // 初始值 = 首帧就正确的位置（页宽取默认行宽、页下标取当前币种）：胶囊文字 / 圆点 / 页条不依赖「量到宽度」或任何动画
+  const pagerX = useSharedValue(-Math.max(0, curIdx) * initialRowW);
   const pagerStart = useSharedValue(0);
-  const pagerW = useSharedValue(0);
-  const pagerN = useSharedValue(1);
+  const pagerW = useSharedValue(initialRowW);
+  const pagerN = useSharedValue(Math.max(1, totalsByCurrency.length));
   /** 1 = 正在拖动或翻页动画中（布局同步不许碰 pagerX） */
   const pagerBusy = useSharedValue(0);
   // ── 横滑时账单列表 / 日历 / 预算卡跟着 hero 一起走（轮播感）──
@@ -1183,9 +1179,9 @@ export default function HomeScreen({ navigation }: any) {
   // listPitch：列表一页的间距 = 窗口宽（hero 的页宽是行宽 = 窗口宽 − 32，位移按比例放大）。
   const swipeActive = useSharedValue(0);
   const listFrozen = useSharedValue(0);
-  const listIdxSV = useSharedValue(0);
-  const pagerTargetIdx = useSharedValue(0);
-  const listPitch = useSharedValue(0);
+  const listIdxSV = useSharedValue(Math.max(0, curIdx));
+  const pagerTargetIdx = useSharedValue(Math.max(0, curIdx));
+  const listPitch = useSharedValue(winW);
   /** 邻页预览 / 日历邻页的横向位移基准：(pagerX + 基准页×页宽) × 列表页距 / hero 页宽；不横滑时为 0 */
   const swipeShiftX = useDerivedValue(() =>
     swipeActive.value === 1 && pagerW.value > 0
@@ -1785,7 +1781,6 @@ export default function HomeScreen({ navigation }: any) {
   const onCalLayoutH = useCallback((h: number) => setCalH((prev) => (Math.abs(prev - h) >= 1 ? h : prev)), []);
   const calRendered = viewMode === 'calendar';
   const calSettled = viewMode === 'calendar';
-  const { width: winW, height: screenH } = useWindowDimensions();
   // 列表一页的间距 = 窗口宽（UI 线程读）
   useEffect(() => {
     listPitch.value = winW;
@@ -2341,7 +2336,7 @@ export default function HomeScreen({ navigation }: any) {
             顶部一行（账本胶囊 + 铃铛/日历 44 圆钮）→ 净资产 + 币种玻璃胶囊 → 大金额 + 眼睛 → 预算玻璃卡。
             实测高度写进 heroHeightRef：吸顶日期头据此判断头部区是否已滚出屏幕 */}
         <Reanimated.View
-          style={[styles.heroBlock, { paddingTop: insets.top + 14 }, heroEnterStyle]}
+          style={[styles.heroBlock, { paddingTop: insets.top + 14 }]}
           onLayout={(e) => {
             heroHeightRef.current = e.nativeEvent.layout.height;
             const h = e.nativeEvent.layout.height;
