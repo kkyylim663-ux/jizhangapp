@@ -34,6 +34,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { LayoutChangeEvent, Pressable, StyleProp, StyleSheet, TextStyle, View } from 'react-native';
 import Animated, {
+  LinearTransition,
   runOnJS,
   SharedValue,
   useAnimatedStyle,
@@ -624,6 +625,11 @@ export function MoneyText({
   const [cells, setCells] = useState<MoneyCell[]>(() => splitCells(rollText, null, false));
   const [hasRolled, setHasRolled] = useState(false);
   const progress = useSharedValue(1);
+  // 减弱动态效果：文字变化时的 150ms 淡入（不滚动、不位移）
+  const crossfade = useSharedValue(1);
+  const crossfadeStyle = useAnimatedStyle(() => ({ opacity: crossfade.value }));
+  // 数字位数变化时容器宽度做布局过渡（不跳变）；减弱动态效果时关闭
+  const rowLayout = motion.reduceMotion ? undefined : LinearTransition.duration(motion.timing.numberRollTotal * 0.6);
   const prevTextRef = useRef<string | null>(null);
   const mountedAtRef = useRef(Date.now());
 
@@ -644,6 +650,10 @@ export function MoneyText({
     // 首屏数据到位（挂载后 600ms 内的首次赋值）不滚动：不算「用户操作引起的变化」
     const isFirstLoad = Date.now() - mountedAtRef.current < FIRST_LOAD_WINDOW_MS;
     const canRoll = roll && !motion.reduceMotion && !isFirstLoad;
+    if (roll && motion.reduceMotion && !isFirstLoad) {
+      crossfade.value = 0;
+      crossfade.value = withTiming(1, { duration: motion.timing.fade, easing: motion.easing.out });
+    }
     const next = splitCells(rollText, prevText, canRoll);
     setCells(next);
 
@@ -784,8 +794,9 @@ export function MoneyText({
     };
 
     const heroContent = (
-      <View
+      <Animated.View
         style={[styles.row, containerStyle]}
+        layout={rowLayout}
         onLayout={measureWidth}
         accessible={!longPressable}
         accessibilityLabel={longPressable ? undefined : a11yLabel}
@@ -821,7 +832,7 @@ export function MoneyText({
           </AppText>
         ) : null}
         {heroMeasureLayer}
-      </View>
+      </Animated.View>
     );
 
     if (longPressable && dialog) {
@@ -861,6 +872,7 @@ export function MoneyText({
         {shownText}
       </AppText>
     );
+    const fadedTextEl = roll && motion.reduceMotion ? <Animated.View style={crossfadeStyle}>{textEl}</Animated.View> : textEl;
 
     if (longPressable && dialog) {
       return (
@@ -872,22 +884,23 @@ export function MoneyText({
           accessibilityLabel={a11yLabel}
           accessibilityHint={fullText}
         >
-          {textEl}
+          {fadedTextEl}
           {measureLayer}
         </Pressable>
       );
     }
     return (
       <>
-        {textEl}
+        {fadedTextEl}
         {measureLayer}
       </>
     );
   }
 
   return (
-    <View
+    <Animated.View
       style={[styles.row, containerStyle]}
+      layout={rowLayout}
       onLayout={measureWidth}
       accessible
       accessibilityLabel={a11yLabel}
@@ -908,7 +921,7 @@ export function MoneyText({
         />
       ))}
       {measureLayer}
-    </View>
+    </Animated.View>
   );
 }
 
