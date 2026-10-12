@@ -61,6 +61,26 @@ const HERO_EYE_RESERVE = 46;
 const HERO_EYE_GAP = 10;
 /** 账单列表卡圆角（V2 稿 26 —— 比 radius.lg(20) 大的内容卡档，只在首页用） */
 const LIST_CARD_RADIUS = 22;
+// ── 币种分页（手势）调参：真机 logcat 里的 [pager] 日志可以对照着调 ──
+/** 甩动速度超过它才算「甩」（px/s） */
+const PAGER_FLING_V = 500;
+/** 速度超过它时方向用速度判定，否则用位移判定（px/s） */
+const PAGER_DIR_V = 300;
+/** 拖动位移超过页宽的这个比例也翻一页（慢拖过半） */
+const PAGER_DIST_FRAC = 0.25;
+/** 速度超过 PAGER_FLING_V 之后，每多这么多 px/s 额外翻一页 */
+const PAGER_EXTRA_V_STEP = 700;
+/** 翻页动画时长：基准 320ms，每多翻一页 +60ms；ease-out cubic，无回弹 */
+const PAGER_BASE_MS = 320;
+const PAGER_EXTRA_MS = 60;
+/** 与 Gesture.Pan().activeOffsetX 一致：激活时的 10px 要扣掉，否则第一帧会跳 10px */
+const PAGER_ACTIVATE_OFFSET = 10;
+/** 开发构建下打印每次甩动的 velocityX / translationX / pages */
+const PAGER_DEBUG = __DEV__;
+
+function logPagerFling(vx: number, tx: number, pages: number) {
+  console.log(`[pager] velocityX=${Math.round(vx)} translationX=${Math.round(tx)} pages=${pages}`);
+}
 // 账单卡左右外边距 = 页面边距令牌 layout.page（与预算卡同一条左右边线；QA 发现 12 与预算卡错位）
 const LIST_CARD_MARGIN = pageLayout.page;
 /** 行间分割线左缩进（V2 稿 70 = 行内边距 16 + 图标圆 42 + 行间距 12，正好与文字左缘对齐） */
@@ -757,6 +777,8 @@ export default function HomeScreen({ navigation }: any) {
   const pagerStart = useSharedValue(0);
   const pagerW = useSharedValue(0);
   const pagerN = useSharedValue(1);
+  /** 1 = 正在拖动或翻页动画中（布局同步不许碰 pagerX） */
+  const pagerBusy = useSharedValue(0);
   const pagerStripStyle = useAnimatedStyle(() => ({ transform: [{ translateX: pagerX.value }] }));
   /** 拖动 / 动画中的「预览页下标」（由 reaction 同步；null = 未就绪，用已提交的 curIdx） */
   const [previewIdx, setPreviewIdx] = useState<number | null>(null);
@@ -781,17 +803,21 @@ export default function HomeScreen({ navigation }: any) {
   const pagerGesture = useMemo(() => {
     const pan = Gesture.Pan()
       .enabled(multiPage)
-      // 水平位移超过 10 才激活；竖向超过 14 就放弃 → 竖向滚动交给外层列表
-      .activeOffsetX([-10, 10])
+      .activeOffsetX([-PAGER_ACTIVATE_OFFSET, PAGER_ACTIVATE_OFFSET])
+      // 竖向超过 14 就放弃 → 竖向滚动交给外层列表
       .failOffsetY([-14, 14])
       .onStart(() => {
+        // 在途动画先停，再从停下的位置开始拖（起点在这里记，不在 onBegin 记）
         cancelAnimation(pagerX);
+        pagerBusy.value = 1;
         pagerStart.value = pagerX.value;
       })
       .onUpdate((e) => {
         const w = pagerW.value;
+        // translationX 从手指按下算起，含激活前的 10px → 扣掉，保证拖动连续
+        const tx = e.translationX - (e.translationX > 0 ? PAGER_ACTIVATE_OFFSET : -PAGER_ACTIVATE_OFFSET);
         const min = -(pagerN.value - 1) * w;
-        let nx = pagerStart.value + e.translationX;
+        let nx = pagerStart.value + tx;
         // 两端橡皮筋：越界部分只跟 35%
         if (nx > 0) nx = nx * 0.35;
         else if (nx < min) nx = min + (nx - min) * 0.35;
@@ -799,20 +825,35 @@ export default function HomeScreen({ navigation }: any) {
       })
       .onEnd((e) => {
         const w = pagerW.value;
-        if (w <= 0) return;
-        // 甩动速度投影 0.22s 后，四舍五入到目标页（夹在首尾之间）
-        const proj = pagerX.value + e.velocityX * 0.22;
-        let idx = Math.round(-proj / w);
+        if (w <= 0) {
+          pagerBusy.value = 0;
+          return;
+        }
+        const n = pagerN.value;
+        const v = e.velocityX;
+        const absV = Math.abs(v);
+        const tx = e.translationX - (e.translationX > 0 ? PAGER_ACTIVATE_OFFSET : -PAGER_ACTIVATE_OFFSET);
+        // 确定性翻页：从按下时所在页出发，按方向走 pages 页（不再靠速度投影，避免只翻一页）
+        const startIdx = Math.round(-pagerStart.value / w);
+        const dir = absV > PAGER_DIR_V ? (v < 0 ? 1 : -1) : tx < 0 ? 1 : -1;
+        const basePages = Math.abs(tx) > PAGER_DIST_FRAC * w || absV > PAGER_FLING_V ? 1 : 0;
+        const extra = Math.floor(Math.max(0, absV - PAGER_FLING_V) / PAGER_EXTRA_V_STEP);
+        const pages = Math.min(basePages + extra, Math.max(0, n - 1));
+        let idx = startIdx + dir * pages;
         if (idx < 0) idx = 0;
-        if (idx > pagerN.value - 1) idx = pagerN.value - 1;
+        if (idx > n - 1) idx = n - 1;
+        if (PAGER_DEBUG) runOnJS(logPagerFling)(v, tx, pages);
         const target = -idx * w;
         if (reduceMotion) {
           pagerX.value = target;
+          pagerBusy.value = 0;
           runOnJS(pagerSettle)(idx);
           return;
         }
-        // 临界阻尼（缓出三次方，无回弹）；只有动画自然结束才提交，被新手势打断则不提交
-        pagerX.value = withTiming(target, { duration: 320, easing: Easing.out(Easing.cubic) }, (finished) => {
+        const ms = pages === 0 ? 220 : PAGER_BASE_MS + PAGER_EXTRA_MS * (pages - 1);
+        // 只有动画自然结束才提交；被新手势打断（finished=false）不提交
+        pagerX.value = withTiming(target, { duration: ms, easing: Easing.out(Easing.cubic) }, (finished) => {
+          pagerBusy.value = 0;
           if (finished) runOnJS(pagerSettle)(idx);
         });
       });
@@ -841,6 +882,11 @@ export default function HomeScreen({ navigation }: any) {
   // 页宽 / 页数变化（首次测量、增减币种）：瞬时对准当前页，不播动画
   useEffect(() => {
     if (amountRowW <= 0) return;
+    // 拖动 / 翻页中只更新宽度，不动 pagerX（否则在途动画会被砍掉）
+    if (pagerBusy.value) {
+      pagerW.value = amountRowW;
+      return;
+    }
     const wanted = netWorthCurrency ?? defaultNetWorthCurrency;
     const idx = Math.max(0, totalsByCurrency.findIndex(([c]) => c === wanted));
     cancelAnimation(pagerX);
@@ -1625,7 +1671,7 @@ export default function HomeScreen({ navigation }: any) {
                 style={styles.heroAmountRow}
                 onLayout={(e) => {
                   const w = e.nativeEvent.layout.width;
-                  setAmountRowW((prev) => (Math.abs(prev - w) > 0.5 ? w : prev));
+                  setAmountRowW((prev) => (Math.abs(prev - w) >= 1 ? w : prev));
                 }}
               >
                 {amountRowW > 0 && (
