@@ -61,33 +61,16 @@ const HERO_EYE_RESERVE = 46;
 const HERO_EYE_GAP = 10;
 /** 账单列表卡圆角（V2 稿 26 —— 比 radius.lg(20) 大的内容卡档，只在首页用） */
 const LIST_CARD_RADIUS = 22;
-// ── 币种分页（手势）调参：真机 logcat 里的 [pager] 日志可以对照着调 ──
-/** 甩动速度超过它才算「甩」（px/s） */
-const PAGER_FLING_V = 500;
-/** 速度超过它时方向用速度判定，否则用位移判定（px/s） */
-const PAGER_DIR_V = 300;
-/** 拖动位移超过页宽的这个比例也翻一页（慢拖过半） */
-const PAGER_DIST_FRAC = 0.25;
-/** 速度超过 PAGER_EXTRA_FROM_V 之后，每多 PAGER_EXTRA_STEP_V px/s 额外翻一页（见上） */
-const PAGER_EXTRA_FROM_V = 900;
-const PAGER_EXTRA_STEP_V = 900;
-/** 速度带来的额外页数上限（2 页）；总页数再封顶 PAGER_MAX_PAGES（3 页），v/w 很大时也一样封顶 */
-const PAGER_EXTRA_CAP = 2;
-const PAGER_MAX_PAGES = 3;
-/** 顶部 HUD（只在开发构建）：显示 n / startIdx / velocityX / pages / targetIdx / 已提交币种 / 当前页，方便真机截图对照调参 */
-const SHOW_PAGER_HUD = __DEV__;
-type PagerHud = { n: number; start: number; v: number; pages: number; target: number };
-/** 翻页动画时长：基准 320ms，每多翻一页 +60ms；ease-out cubic，无回弹 */
-const PAGER_BASE_MS = 320;
-const PAGER_EXTRA_MS = 60;
+// ── 币种分页（手势）：一次滑动只翻相邻的一页，不管甩得多快 ──
+/** 位移超过页宽的这个比例 → 翻一页 */
+const PAGER_DIST_FRAC = 0.2;
+/** 沿滑动方向的速度超过它 → 翻一页（px/s） */
+const PAGER_FLICK_V = 400;
+/** 翻页 / 回弹动画：300ms 缓出，无回弹（只有两端有橡皮筋） */
+const PAGER_SETTLE_MS = 300;
+const PAGER_SETTLE_EASE = Easing.bezier(0.22, 1, 0.36, 1);
 /** 与 Gesture.Pan().activeOffsetX 一致：激活时的 10px 要扣掉，否则第一帧会跳 10px */
 const PAGER_ACTIVATE_OFFSET = 10;
-/** 开发构建下打印每次甩动的 velocityX / translationX / pages */
-const PAGER_DEBUG = __DEV__;
-
-function logPagerFling(vx: number, tx: number, pages: number) {
-  console.log(`[pager] velocityX=${Math.round(vx)} translationX=${Math.round(tx)} pages=${pages}`);
-}
 // 账单卡左右外边距 = 页面边距令牌 layout.page（与预算卡同一条左右边线；QA 发现 12 与预算卡错位）
 const LIST_CARD_MARGIN = pageLayout.page;
 /** 行间分割线左缩进（V2 稿 70 = 行内边距 16 + 图标圆 42 + 行间距 12，正好与文字左缘对齐） */
@@ -800,7 +783,7 @@ export default function HomeScreen({ navigation }: any) {
   const curIdx = totalsByCurrency.findIndex(([c]) => c === activeCurrency);
   // ── 净资产横移 = UI 线程手势分页（替换旧的横向 ScrollView 分页：安卓惯性被截断、拖动中 setState 打断甩动）──
   // 页条 = 一个 translateX 的横向 strip，页宽 = 行实测宽 pagerW；拖动实时跟手，越界橡皮筋；
-  // 松手时按甩动速度投影出目标页（甩得快可以跨多页），动画结束才把 netWorthCurrency 提交一次；
+  // 松手只翻相邻一页（位移 > 20% 页宽或速度 > 400px/s），动画结束才把 netWorthCurrency 提交一次；
   // 胶囊文字 / 小圆点不 setState：它们直接从共享值 pagerX 读页位置（pagerPos），拖动中零重渲染。
   // 每页 MoneyText 挂载即定格、只在数据真变时才逐位滚动。
   const pagerX = useSharedValue(0);
@@ -820,7 +803,6 @@ export default function HomeScreen({ navigation }: any) {
     (best, [code]) => (pillLabelOf(code).length > best.length ? pillLabelOf(code) : best),
     pillLabelOf(curCode)
   );
-  const [pagerHud, setPagerHud] = useState<PagerHud | null>(null);
 
   // 手势回调里要读最新的 totals / activeCurrency：走 ref，手势对象只在「多页 / 减弱动效」变化时重建
   const pagerSettleRef = useRef<(idx: number) => void>(() => {});
@@ -866,19 +848,16 @@ export default function HomeScreen({ navigation }: any) {
         }
         const n = pagerN.value;
         const v = e.velocityX;
-        const absV = Math.abs(v);
         const tx = e.translationX - (e.translationX > 0 ? PAGER_ACTIVATE_OFFSET : -PAGER_ACTIVATE_OFFSET);
-        // 终点只在这里算一次：起点页 + 方向 × 页数（页数 = 基础 1 页 + 限额的速度额外页，总数封顶）
+        // 起点页 ±1：位移过 20% 页宽，或沿滑动方向的速度 > 400 → 翻到相邻页；否则回弹。
+        // 无论甩得多快都只翻一页（经典分页轮播），左滑 → 下一个币种，右滑 → 上一个
         const startIdx = Math.round(-pagerStart.value / w);
-        const dir = absV > PAGER_DIR_V ? (v < 0 ? 1 : -1) : tx < 0 ? 1 : -1;
-        const basePages = Math.abs(tx) > PAGER_DIST_FRAC * w || absV > PAGER_FLING_V ? 1 : 0;
-        const extra = Math.min(PAGER_EXTRA_CAP, Math.floor(Math.max(0, absV - PAGER_EXTRA_FROM_V) / PAGER_EXTRA_STEP_V));
-        const pages = Math.min(basePages + extra, PAGER_MAX_PAGES, Math.max(0, n - 1));
-        let idx = startIdx + dir * pages;
+        const dir = tx !== 0 ? (tx < 0 ? 1 : -1) : v < 0 ? 1 : -1;
+        const flick = (dir === 1 && v < -PAGER_FLICK_V) || (dir === -1 && v > PAGER_FLICK_V);
+        const flip = Math.abs(tx) > PAGER_DIST_FRAC * w || flick;
+        let idx = flip ? startIdx + dir : startIdx;
         if (idx < 0) idx = 0;
         if (idx > n - 1) idx = n - 1;
-        if (PAGER_DEBUG) runOnJS(logPagerFling)(v, tx, pages);
-        if (SHOW_PAGER_HUD) runOnJS(setPagerHud)({ n, start: startIdx, v: Math.round(v), pages, target: idx });
         const target = -idx * w;
         if (reduceMotion) {
           pagerX.value = target;
@@ -886,9 +865,8 @@ export default function HomeScreen({ navigation }: any) {
           runOnJS(pagerSettle)(idx);
           return;
         }
-        const ms = pages === 0 ? 220 : PAGER_BASE_MS + PAGER_EXTRA_MS * (pages - 1);
         // 只有动画自然结束才提交一次；被新手势打断（finished=false）不提交
-        pagerX.value = withTiming(target, { duration: ms, easing: Easing.out(Easing.cubic) }, (finished) => {
+        pagerX.value = withTiming(target, { duration: PAGER_SETTLE_MS, easing: PAGER_SETTLE_EASE }, (finished) => {
           pagerBusy.value = 0;
           if (finished) runOnJS(pagerSettle)(idx);
         });
@@ -1660,14 +1638,6 @@ export default function HomeScreen({ navigation }: any) {
             </View>
           </View>
 
-          {SHOW_PAGER_HUD && (
-            <Text style={styles.pagerHud} pointerEvents="none">
-              {pagerHud
-                ? `[pager] n=${pagerHud.n} start=${pagerHud.start} v=${pagerHud.v} pages=${pagerHud.pages} target=${pagerHud.target}\n`
-                : '[pager] —\n'}
-              {`committed=${curCode} shown=${curIdx}`}
-            </Text>
-          )}
           {/* V3：居中玻璃胶囊「净资产 · 币种 ⌄」= 原币种入口（单币种时按不动，与旧行为一致） */}
           {displayTotal && (
             <View style={styles.heroNetWorthRow}>
@@ -2275,8 +2245,6 @@ function makeStyles(
     // 胶囊：所有币种文字叠在同一格里；占位文字不可见
     pillStack: { alignItems: 'center', justifyContent: 'center' },
     pillSpacer: { opacity: 0 },
-    // 开发用顶部 HUD（SHOW_PAGER_HUD，正式包不显示）
-    pagerHud: { position: 'absolute', left: 8, top: 0, zIndex: 20, fontSize: 10, lineHeight: 13, color: '#FF2D55' },
     heroDotActive: { width: 14, opacity: 1 },
     heroDotIdle: { opacity: 0.3 },
     currencyMenuScroll: { flexGrow: 0, flexShrink: 1 },
