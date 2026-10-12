@@ -35,6 +35,7 @@ import { AmountCalculatorKeypad } from '../components/AmountCalculatorKeypad';
 import { useAmountExpression } from '../hooks/useAmountExpression';
 import PinSheet from '../components/PinSheet';
 import MonthCalendarCard, { CalendarDayTotals } from '../components/MonthCalendarCard';
+import type { SegKey } from '../components/MonthCalendarCard';
 import { useAppLock } from '../context/AppLockContext';
 import { useDialog } from '../components/AppDialog';
 import { ROUTES } from '../navigation/routes';
@@ -634,6 +635,8 @@ function SwipePanel({
   pitch,
   top,
   width,
+  sheetP,
+  sheetLift,
   children,
 }: {
   index: number;
@@ -643,13 +646,20 @@ function SwipePanel({
   pitch: SharedValue<number>;
   top: number;
   width: number;
+  /** 日历邻页：跟真日历弹层同一个进度（sheetP）与下沉距离，横滑时与真日历的竖向位置一致 */
+  sheetP?: SharedValue<number>;
+  sheetLift?: number;
   children: React.ReactNode;
 }) {
   const style = useAnimatedStyle(() => {
     const base = listIdx.value;
+    const p = sheetP ? sheetP.value : 1;
     return {
-      opacity: swipeActive.value === 1 && index !== base ? 1 : 0,
-      transform: [{ translateX: (index - base) * pitch.value + shiftX.value }],
+      opacity: swipeActive.value === 1 && index !== base ? (sheetP ? 0.6 + 0.4 * p : 1) : 0,
+      transform: [
+        { translateX: (index - base) * pitch.value + shiftX.value },
+        { translateY: sheetP ? (1 - p) * (sheetLift ?? 0) : 0 },
+      ],
     };
   });
   return (
@@ -686,6 +696,44 @@ const NeighbourList = React.memo(function NeighbourList({
     });
   }
   return <>{out}</>;
+});
+
+const NOOP = () => {};
+/** 邻页的日历预览：外壳与真日历完全同款（玻璃卡 + 内衬），日历本体就是 MonthCalendarCard
+ *  （同月份、同指标分段、该币种自己的逐日数据与热力）。memo：该币种数据不变就不重渲 */
+const NeighbourCalendar = React.memo(function NeighbourCalendar({
+  year,
+  month,
+  days,
+  monthExpense,
+  monthIncome,
+  segKey,
+  styles,
+}: {
+  year: number;
+  month: number;
+  days: Map<string, CalendarDayTotals>;
+  monthExpense: number;
+  monthIncome: number;
+  segKey: SegKey;
+  styles: ReturnType<typeof makeStyles>;
+}) {
+  return (
+    <View style={styles.calendarWrap}>
+      <GlassView radius={26} style={styles.calendarCard}>
+        <MonthCalendarCard
+          year={year}
+          month={month}
+          days={days}
+          monthExpense={monthExpense}
+          monthIncome={monthIncome}
+          onPrevMonth={NOOP}
+          onNextMonth={NOOP}
+          segKey={segKey}
+        />
+      </GlassView>
+    </View>
+  );
 });
 
 /** 预算卡的一页（每个币种一页，横滑时随页走）。进度条各页自带补间，切币种不重播。 */
@@ -1552,7 +1600,8 @@ export default function HomeScreen({ navigation }: any) {
   const calTop = heroH;
   const calEnterStyle = useAnimatedStyle(() => ({
     opacity: 0.6 + 0.4 * calP.value,
-    transform: [{ translateY: (1 - calP.value) * calLift }],
+    // translateX = 横滑换币种时日历跟着 hero 横移（平时为 0）
+    transform: [{ translateX: listShiftX.value }, { translateY: (1 - calP.value) * calLift }],
   }));
   const calDimStyle = useAnimatedStyle(() => ({ opacity: CAL_DIM_MAX * Math.sin(Math.PI * calP.value) }));
   // 日历模式下列表：落定前保留（冻结），落定后清空
@@ -1599,46 +1648,66 @@ export default function HomeScreen({ navigation }: any) {
     return { year: d.getFullYear(), month: d.getMonth() + 1 };
   });
   // 日历数据源：dayGroups 已按日聚合好（同币种过滤、排除转账），摊平成 Map 给日历卡
-  const calendarDays = useMemo(() => {
-    const map = new Map<string, CalendarDayTotals>();
-    dayGroups.forEach((g) =>
-      map.set(g.date, {
-        expense: g.expense,
-        income: g.income,
-        // 逐笔明细（点日期展开）：字段与首页列表行一一对应，回落规则也一致——
-        // 标题 = 备注（计划名也当备注用），无备注时标题落到类别名、副标题只留账户（与 T09 小修同款）
-        items: g.items.map((item) => {
-          const cat = getCategoryById(item.categoryId);
-          const catName = cat ? getCategoryLabel(cat, t) : UNCATEGORIZED_NAME;
-          const ownTitle = item.note?.trim() || item.displayName?.trim() || '';
-          return {
-            id: item.id,
-            note: ownTitle.length > 0 ? ownTitle : catName,
-            categoryName: ownTitle.length > 0 ? catName : '',
-            categoryIcon: (cat?.icon ?? UNCATEGORIZED_ICON) as IconName,
-            categoryColor: cat?.color ?? UNCATEGORIZED_COLOR,
-            accountName: item.assetId ? getAssetById(item.assetId)?.name : undefined,
-            amount: item.amount,
-            type: item.type as 'expense' | 'income',
-          };
-        }),
-      })
-    );
-    return map;
+  const buildCalendarDays = useCallback(
+    (groups: TxDaySection[]) => {
+      const map = new Map<string, CalendarDayTotals>();
+      groups.forEach((g) =>
+        map.set(g.date, {
+          expense: g.expense,
+          income: g.income,
+          // 逐笔明细（点日期展开）：字段与首页列表行一一对应，回落规则也一致——
+          // 标题 = 备注（计划名也当备注用），无备注时标题落到类别名、副标题只留账户（与 T09 小修同款）
+          items: g.items.map((item) => {
+            const cat = getCategoryById(item.categoryId);
+            const catName = cat ? getCategoryLabel(cat, t) : UNCATEGORIZED_NAME;
+            const ownTitle = item.note?.trim() || item.displayName?.trim() || '';
+            return {
+              id: item.id,
+              note: ownTitle.length > 0 ? ownTitle : catName,
+              categoryName: ownTitle.length > 0 ? catName : '',
+              categoryIcon: (cat?.icon ?? UNCATEGORIZED_ICON) as IconName,
+              categoryColor: cat?.color ?? UNCATEGORIZED_COLOR,
+              accountName: item.assetId ? getAssetById(item.assetId)?.name : undefined,
+              amount: item.amount,
+              type: item.type as 'expense' | 'income',
+            };
+          }),
+        })
+      );
+      return map;
+    },
     // ⚠ t 是全局稳定引用，依赖必须带 langMode，切语言明细标题才会重算
-  }, [dayGroups, getCategoryById, getAssetById, t, homeLang]);
+    [getCategoryById, getAssetById, t, homeLang]
+  );
+  const calendarDays = useMemo(() => buildCalendarDays(dayGroups), [dayGroups, buildCalendarDays]);
   // 当月合计：只加总 viewMonth 当月的日子（dayGroups 含跨月历史，需按月份前缀过滤）
-  const calendarMonthTotals = useMemo(() => {
-    const prefix = `${viewMonth.year}-${String(viewMonth.month).padStart(2, '0')}-`;
-    let expense = 0;
-    let income = 0;
-    dayGroups.forEach((g) => {
-      if (!g.date.startsWith(prefix)) return;
-      expense += g.expense;
-      income += g.income;
+  const monthTotalsOf = useCallback(
+    (groups: TxDaySection[]) => {
+      const prefix = `${viewMonth.year}-${String(viewMonth.month).padStart(2, '0')}-`;
+      let expense = 0;
+      let income = 0;
+      groups.forEach((g) => {
+        if (!g.date.startsWith(prefix)) return;
+        expense += g.expense;
+        income += g.income;
+      });
+      return { expense, income };
+    },
+    [viewMonth]
+  );
+  const calendarMonthTotals = useMemo(() => monthTotalsOf(dayGroups), [dayGroups, monthTotalsOf]);
+  // 日历指标分段（支出 / 收入 / 总额）提到页面里：真日历与邻页预览显示同一个指标
+  const [calSeg, setCalSeg] = useState<SegKey>('expense');
+  // 日历模式下，左右邻页币种的日历数据（只在日历渲染时算；其余时候是空数组）
+  const calNeighbours = useMemo(() => {
+    if (!calRendered || totalsByCurrency.length < 2) return [];
+    return [panelCenter - 1, panelCenter + 1].flatMap((i) => {
+      const row = totalsByCurrency[i];
+      if (!row) return [];
+      const groups = dayGroupsMap.get(row[0]) ?? NO_GROUPS;
+      return [{ i, code: row[0], days: buildCalendarDays(groups), totals: monthTotalsOf(groups) }];
     });
-    return { expense, income };
-  }, [dayGroups, viewMonth]);
+  }, [calRendered, totalsByCurrency, panelCenter, dayGroupsMap, buildCalendarDays, monthTotalsOf]);
   const shiftCalendarMonth = (dir: number) => {
     setViewMonth((vm) => {
       let month = vm.month + dir;
@@ -1818,6 +1887,34 @@ export default function HomeScreen({ navigation }: any) {
             </SwipePanel>
           );
         })
+      : null;
+  // 日历模式的邻页：邻币种自己的日历卡（同月份 / 同指标），随真日历一起横移
+  const calNeighbourPanels =
+    amountRowW > 0 && calRendered
+      ? calNeighbours.map((nb) => (
+          <SwipePanel
+            key={nb.code}
+            index={nb.i}
+            listIdx={listIdxSV}
+            swipeActive={swipeActive}
+            shiftX={listShiftX}
+            pitch={listPitch}
+            top={heroH}
+            width={winW}
+            sheetP={calP}
+            sheetLift={calLift}
+          >
+            <NeighbourCalendar
+              year={viewMonth.year}
+              month={viewMonth.month}
+              days={nb.days}
+              monthExpense={nb.totals.expense}
+              monthIncome={nb.totals.income}
+              segKey={calSeg}
+              styles={styles}
+            />
+          </SwipePanel>
+        ))
       : null;
   const budgetCodes = totalsByCurrency.map(([code]) => code);
   const budgetStrip =
@@ -2152,6 +2249,7 @@ export default function HomeScreen({ navigation }: any) {
           {budgetStrip}
         </Reanimated.View>
         {neighbourPanels}
+        {calNeighbourPanels}
         {/* 日历视图卡（只在日历模式渲染，与旧行为一致——切回详情即卸载）；
             卡面 = GlassView（UI V2.1 §2：全 App 唯一毛玻璃材质，P_Calendar 稿整张日历就是一块玻璃）
             + 圆角 26 / 内衬 12·10·10（与账单列表卡同一张卡的观感） */}
@@ -2167,6 +2265,9 @@ export default function HomeScreen({ navigation }: any) {
                   monthIncome={calendarMonthTotals.income}
                   onPrevMonth={() => shiftCalendarMonth(-1)}
                   onNextMonth={() => shiftCalendarMonth(1)}
+                  segKey={calSeg}
+                  onSegKeyChange={setCalSeg}
+                  selectionKey={calSelKey}
                   // 日历明细点一行 = 进编辑（与首页列表行同一个现有入口）
                   onPressItem={(id) => {
                     const tx = ledgerTransactions.find((x) => x.id === id);
