@@ -128,6 +128,14 @@ export interface MoneyTextProps extends FormatMoneyOptions {
   hero?: boolean;
   /** Hero 整数段字号（默认 58），其余部件按稿比例派生：RM ≈ 0.414×、小数 ≈ 0.483× */
   heroSize?: number;
+  /** Hero 小数段字号（dp，按 heroSize 等比；默认 = 比例派生 0.483×）—— 首页 40 整数配 22 小数 */
+  heroDecimalSize?: number;
+  /** Hero 小数段字重（默认 300）*/
+  heroDecimalWeight?: FontWeightKey;
+  /** Hero 小数段颜色（默认 = 金额色并降 0.7 透明度；传入后按该色、不降透明度）*/
+  heroDecimalColor?: string;
+  /** Hero 整数段字距比例（默认 -0.0414；首页传 -0.03）*/
+  heroLetterRatio?: number;
   /** 文本/布局微调（color / opacity / margin / textAlign 等；flexShrink 默认 0 = 金额不被挤压） */
   style?: StyleProp<TextStyle>;
   /** 读屏文本（默认 = 完整金额，即使屏上显示的是紧凑格式） */
@@ -372,6 +380,10 @@ export function MoneyText({
   compactFallback = false,
   hero = false,
   heroSize = 58,
+  heroDecimalSize,
+  heroDecimalWeight,
+  heroDecimalColor,
+  heroLetterRatio,
   style,
   accessibilityLabel,
 }: MoneyTextProps) {
@@ -425,7 +437,7 @@ export function MoneyText({
     weight ?? (String(token.fontWeight) as FontWeightKey),
     MIN_AMOUNT_WEIGHT
   );
-  const heroIntWeight: FontWeightKey = MIN_AMOUNT_WEIGHT;
+  const heroIntWeight: FontWeightKey = hero && weight ? weight : MIN_AMOUNT_WEIGHT;
 
   // 本组件被允许占的宽度（onLayout 实测：卡片里 = 卡片内宽，行内跟着自己的框走）
   const [availableWidth, setAvailableWidth] = useState(0);
@@ -515,8 +527,9 @@ export function MoneyText({
 
   // Hero 渲染尺寸：各部件都从**当前档**（可能是降级后的 50/42/34）派生，保证整串等比缩放
   const heroPrefixSize = Math.round(fontSize * HERO_PREFIX_RATIO);
-  const heroDecimalsSize = Math.round(fontSize * HERO_DECIMALS_RATIO);
-  const heroLetterSpacing = Math.round(fontSize * HERO_LETTER_RATIO * 10) / 10;
+  const heroDecimalsSize =
+    heroDecimalSize != null ? Math.round(heroDecimalSize * (fontSize / heroSize)) : Math.round(fontSize * HERO_DECIMALS_RATIO);
+  const heroLetterSpacing = Math.round(fontSize * (heroLetterRatio ?? HERO_LETTER_RATIO) * 10) / 10;
   const heroLineHeight = Math.round(fontSize * HERO_LINE_RATIO);
 
   /* -------------------------------------------------- 布局 / 文本样式拆分 */
@@ -648,7 +661,7 @@ export function MoneyText({
           {heroPartsFull.prefix ? (
             <AppText
               variant={variant}
-              weight="300"
+              weight={heroDecimalWeight ?? '300'}
               color="transparent"
               numberOfLines={1}
               style={{ fontSize: Math.round(heroSize * HERO_PREFIX_RATIO), lineHeight: Math.round(heroSize * HERO_PREFIX_RATIO * 1.15), marginRight: HERO_PREFIX_GAP }}
@@ -672,10 +685,10 @@ export function MoneyText({
           {heroPartsFull.decimals ? (
             <AppText
               variant={variant}
-              weight="300"
+              weight={heroDecimalWeight ?? '300'}
               color="transparent"
               numberOfLines={1}
-              style={{ fontSize: Math.round(heroSize * HERO_DECIMALS_RATIO), lineHeight: Math.round(heroSize * HERO_DECIMALS_RATIO * 1.15) }}
+              style={{ fontSize: Math.round(heroDecimalSize ?? heroSize * HERO_DECIMALS_RATIO), lineHeight: Math.round((heroDecimalSize ?? heroSize * HERO_DECIMALS_RATIO) * 1.15) }}
             >
               {heroPartsFull.decimals}
             </AppText>
@@ -683,10 +696,10 @@ export function MoneyText({
           {heroPartsFull.suffix ? (
             <AppText
               variant={variant}
-              weight="300"
+              weight={heroDecimalWeight ?? '300'}
               color="transparent"
               numberOfLines={1}
-              style={{ fontSize: Math.round(heroSize * HERO_DECIMALS_RATIO), lineHeight: Math.round(heroSize * HERO_DECIMALS_RATIO * 1.15) }}
+              style={{ fontSize: Math.round(heroDecimalSize ?? heroSize * HERO_DECIMALS_RATIO), lineHeight: Math.round((heroDecimalSize ?? heroSize * HERO_DECIMALS_RATIO) * 1.15) }}
             >
               {heroPartsFull.suffix}
             </AppText>
@@ -713,7 +726,7 @@ export function MoneyText({
     const heroDecimalsStyle: TextStyle = {
       fontSize: heroDecimalsSize,
       lineHeight: Math.round(heroDecimalsSize * 1.15),
-      opacity: 0.7,
+      opacity: heroDecimalColor ? 1 : 0.7,
     };
 
     const heroContent = (
@@ -742,12 +755,12 @@ export function MoneyText({
           />
         ))}
         {heroParts.decimals ? (
-          <AppText variant={variant} weight="300" color={resolvedColor} style={[heroDecimalsStyle, cellTextStyle]} numberOfLines={1}>
+          <AppText variant={variant} weight={heroDecimalWeight ?? '300'} color={heroDecimalColor ?? resolvedColor} style={[heroDecimalsStyle, cellTextStyle]} numberOfLines={1}>
             {heroParts.decimals}
           </AppText>
         ) : null}
         {heroParts.suffix ? (
-          <AppText variant={variant} weight="300" color={resolvedColor} style={[heroDecimalsStyle, cellTextStyle]} numberOfLines={1}>
+          <AppText variant={variant} weight={heroDecimalWeight ?? '300'} color={heroDecimalColor ?? resolvedColor} style={[heroDecimalsStyle, cellTextStyle]} numberOfLines={1}>
             {heroParts.suffix}
           </AppText>
         ) : null}

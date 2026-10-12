@@ -1311,6 +1311,17 @@ export default function HomeScreen({ navigation }: any) {
                   <Ionicons name="chevron-down" size={12} color={onGradientText} />
                 </GlassView>
               </PressableScale>
+                  <IconButton
+                    icon={balanceHidden ? 'eye-off-outline' : 'eye-outline'}
+                    size={20}
+                    color={onGradientMuted}
+                    style={styles.heroEyeBtn}
+                    hitSlop={4}
+                    accessibilityLabel={t('home.toggleAmount')}
+                    accessibilityState={{ checked: !balanceHidden }}
+                    onPress={toggleBalanceHidden}
+                    testID="home-toggle-amount"
+                  />
             </View>
           )}
 
@@ -1342,7 +1353,7 @@ export default function HomeScreen({ navigation }: any) {
                   setAmountRowW((prev) => (Math.abs(prev - w) > 0.5 ? w : prev));
                 }}
               >
-                <View style={[styles.heroAmountWrap, amountRowW > 0 && { maxWidth: Math.max(0, amountRowW - HERO_EYE_RESERVE * 2) }]}>
+                <View style={[styles.heroAmountWrap, amountRowW > 0 && { maxWidth: Math.max(0, amountRowW) }]}>
                   <PressableScale
                     onPress={openCurrencyMenu}
                     disabled={totalsByCurrency.length <= 1}
@@ -1372,6 +1383,11 @@ export default function HomeScreen({ navigation }: any) {
                         variant="display"
                         hero
                         heroSize={HERO_AMOUNT_SIZE}
+                        weight="700"
+                        heroDecimalSize={22}
+                        heroDecimalWeight="600"
+                        heroDecimalColor={semantic.textSecondary}
+                        heroLetterRatio={-0.03}
                         color={onGradientText}
                         compactFallback={false}
                         accessibilityLabel={heroAmountLabel}
@@ -1380,17 +1396,6 @@ export default function HomeScreen({ navigation }: any) {
                     )}
                   </PressableScale>
                 </View>
-                <IconButton
-                  icon={balanceHidden ? 'eye-off-outline' : 'eye-outline'}
-                  size={20}
-                  color={onGradientMuted}
-                  style={styles.heroEyeBtn}
-                  hitSlop={4}
-                  accessibilityLabel={t('home.toggleAmount')}
-                  accessibilityState={{ checked: !balanceHidden }}
-                  onPress={toggleBalanceHidden}
-                  testID="home-toggle-amount"
-                />
               </View>
             )
           )}
@@ -1741,6 +1746,7 @@ function makeStyles(
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
+      columnGap: spacing.sm,
       marginTop: 34,
     },
     // 金额行（V2 稿 margin-top 4）：金额盒子 + 右侧眼睛；间距 = 稿的 10（HERO_EYE_GAP）
@@ -1749,7 +1755,6 @@ function makeStyles(
       alignItems: 'center',
       justifyContent: 'center',
       marginTop: spacing.xs,
-      paddingHorizontal: HERO_EYE_RESERVE,
     },
     // 金额盒子：贴合内容（maxWidth 由 JSX 按实测行宽给），超长时收缩 → MoneyText 内部按档降级
     heroAmountWrap: { flexShrink: 1, minWidth: 0 },
@@ -1758,7 +1763,7 @@ function makeStyles(
     heroHiddenAmount: { fontSize: HERO_AMOUNT_SIZE, lineHeight: HERO_AMOUNT_LINE },
     // 眼睛（V2 稿 36 圆、空心无底）：IconButton 默认触控区 44 —— 这里覆盖成 36 并收紧 minHeight，
     // 外加 hitSlop 4 补回 44 触控
-    heroEyeBtn: { width: 36, height: 36, minHeight: 36, borderRadius: 18, position: 'absolute', right: 0, top: '50%', marginTop: -18 },
+    heroEyeBtn: { width: 32, height: 32, minHeight: 32, borderRadius: 16 },
     // 无账户空状态：EmptyState 的文字是深色令牌，垫一张玻璃卡才在渐变上读得清
     heroEmptyCard: { marginTop: spacing.xl, paddingHorizontal: spacing.md },
     // 预算玻璃卡（V2 稿：圆角 24 · 内边距 16；整卡可点 = 原预算弹窗入口）
