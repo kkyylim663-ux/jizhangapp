@@ -62,10 +62,10 @@ const HERO_EYE_GAP = 10;
 /** 账单列表卡圆角（V2 稿 26 —— 比 radius.lg(20) 大的内容卡档，只在首页用） */
 const LIST_CARD_RADIUS = 22;
 // ── 币种分页（手势）：一次滑动只翻相邻的一页，不管甩得多快 ──
-/** 位移超过页宽的这个比例 → 翻一页 */
-const PAGER_DIST_FRAC = 0.2;
+/** 位移超过页宽的这个比例 → 翻一页（8%，灵敏） */
+const PAGER_DIST_FRAC = 0.08;
 /** 沿滑动方向的速度超过它 → 翻一页（px/s） */
-const PAGER_FLICK_V = 400;
+const PAGER_FLICK_V = 200;
 /** 翻页 / 回弹动画：300ms 缓出，无回弹（只有两端有橡皮筋） */
 const PAGER_SETTLE_MS = 300;
 const PAGER_SETTLE_EASE = Easing.bezier(0.22, 1, 0.36, 1);
@@ -783,7 +783,7 @@ export default function HomeScreen({ navigation }: any) {
   const curIdx = totalsByCurrency.findIndex(([c]) => c === activeCurrency);
   // ── 净资产横移 = UI 线程手势分页（替换旧的横向 ScrollView 分页：安卓惯性被截断、拖动中 setState 打断甩动）──
   // 页条 = 一个 translateX 的横向 strip，页宽 = 行实测宽 pagerW；拖动实时跟手，越界橡皮筋；
-  // 松手只翻相邻一页（位移 > 20% 页宽或速度 > 400px/s），动画结束才把 netWorthCurrency 提交一次；
+  // 松手只翻相邻一页（位移 > 8% 页宽或速度 > 200px/s），动画结束才把 netWorthCurrency 提交一次；
   // 胶囊文字 / 小圆点不 setState：它们直接从共享值 pagerX 读页位置（pagerPos），拖动中零重渲染。
   // 每页 MoneyText 挂载即定格、只在数据真变时才逐位滚动。
   const pagerX = useSharedValue(0);
@@ -849,7 +849,7 @@ export default function HomeScreen({ navigation }: any) {
         const n = pagerN.value;
         const v = e.velocityX;
         const tx = e.translationX - (e.translationX > 0 ? PAGER_ACTIVATE_OFFSET : -PAGER_ACTIVATE_OFFSET);
-        // 起点页 ±1：位移过 20% 页宽，或沿滑动方向的速度 > 400 → 翻到相邻页；否则回弹。
+        // 起点页 ±1：位移过 8% 页宽，或沿滑动方向的速度 > 200 → 翻到相邻页；否则回弹。
         // 无论甩得多快都只翻一页（经典分页轮播），左滑 → 下一个币种，右滑 → 上一个
         const startIdx = Math.round(-pagerStart.value / w);
         const dir = tx !== 0 ? (tx < 0 ? 1 : -1) : v < 0 ? 1 : -1;
