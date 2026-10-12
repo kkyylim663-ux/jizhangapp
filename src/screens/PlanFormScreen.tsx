@@ -49,7 +49,7 @@ function fmt(d: Date): string {
 }
 
 export default function PlanFormScreen({ route, navigation }: any) {
-  const { addPaymentPlan, updatePaymentPlan, deletePaymentPlan, assets, paymentPlans, activeLedgerId, categories, currency, getAssetBalance, decimalPlaces } = useApp();
+  const { addPaymentPlan, updatePaymentPlan, deletePaymentPlan, assets, activeAssets, paymentPlans, activeLedgerId, categories, currency, getAssetBalance, decimalPlaces } = useApp();
   const { colors, semantic } = useTheme();
   const tr = useT();
   const dialog = useDialog(); // 主题化弹窗（替代系统 Alert）
@@ -102,11 +102,11 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
   // 自己已有的币种集合（账户里出现过的币种，去重、ABC 字母序——2026-09-24 用户定版），供 ALL 下拉面板列出
   const ownCurrencies = useMemo(() => {
     const codes: string[] = [];
-    assets.forEach((a) => {
+    activeAssets.forEach((a) => {
       if (a.currency && !codes.includes(a.currency)) codes.push(a.currency);
     });
     return codes.sort((c1, c2) => c1.localeCompare(c2));
-  }, [assets]);
+  }, [activeAssets]);
 
   // —— 账户弹层下滑收起手势：与记一笔账户弹层完全同款（manualActivation Pan + sharedValue 动画）——
   // - 列表滚到顶部时往下拖 → 接管手势，整块面板跟手下移，松手超过 120px / 快速甩动就收起
@@ -655,7 +655,7 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
                 // 资产页同款「一币一大卡」（与记一笔两处弹层同款）：任何时候都是大卡——
                 // 选了某币种=只显示那一张卡；账户行保留 meta 行与币种前缀余额（规划页特有）
                 const kw = assetSearch.trim().toLowerCase();
-                const visible = assets.filter((a) => {
+                const visible = activeAssets.filter((a) => {
                   const matchSearch = !kw || `${a.name} ${a.currency} ${a.type}`.toLowerCase().includes(kw);
                   // 币种筛选：ALL 下拉里点了 USD 之类后，列表只显示该币种的账户
                   const matchCurrency = assetCurrencyFilter === 'all' || a.currency === assetCurrencyFilter;

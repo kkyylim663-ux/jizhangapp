@@ -47,7 +47,7 @@ export default function AIScreen({ navigation }: any) {
 
   const {
     categories,
-    assets,
+    activeAssets,
     addTransaction,
   } = useApp();
 
@@ -108,9 +108,10 @@ export default function AIScreen({ navigation }: any) {
   // Default asset
   // ---------------------------------------------------------
 
+  // 只从未归档账户里取默认账户（归档账户不能再被记一笔自动带出）
   const defaultAsset =
-    assets.find((a: any) => a.isDefault) ??
-    assets[0];
+    activeAssets.find((a: any) => a.isDefault) ??
+    activeAssets[0];
 
   // ---------------------------------------------------------
   // Request microphone permission
