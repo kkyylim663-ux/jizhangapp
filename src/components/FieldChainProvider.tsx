@@ -1,4 +1,6 @@
 import React, { createContext, ReactNode, useContext, useMemo, useRef, useState } from 'react';
+import { useTheme } from '../theme/useTheme';
+import type { SemanticColors } from '../theme/theme';
 import {
   InputAccessoryView,
   Keyboard,
@@ -68,6 +70,8 @@ export function FieldChainProvider({
   children,
 }: FieldChainProviderProps) {
   const refs = useRef<Record<string, TextInput | null>>({});
+  const { semantic } = useTheme();
+  const styles = useMemo(() => makeStyles(semantic), [semantic]);
   const [focusedField, setFocusedField] = useState<string | null>(null);
   // 用 id + 字段列表拼出唯一的 accessoryViewID，避免同一屏多组表单互相干扰
   const accessoryViewID = useMemo(() => `${id}-${fields.join('-')}`, [id, fields]);
@@ -116,19 +120,21 @@ export function FieldChainProvider({
   );
 }
 
-const styles = StyleSheet.create({
-  bar: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: '#F2F2F7',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#C7C7CC',
-  },
-  barButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#007AFF',
-  },
-});
+function makeStyles(semantic: SemanticColors) {
+  return StyleSheet.create({
+    bar: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+      backgroundColor: semantic.surfaceElevated,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: semantic.hairline,
+    },
+    barButtonText: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: semantic.accentText,
+    },
+  });
+}
