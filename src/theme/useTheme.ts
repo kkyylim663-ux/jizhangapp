@@ -72,6 +72,8 @@ export interface AppTheme {
     heroDark: HeroGradientToken;
     heroLight: HeroGradientToken;
     accent: LinearGradientToken;
+    /** 键盘「完成」键渐变（紫 → 亮紫） */
+    keyConfirm: LinearGradientToken;
     /** 跟随当前主题的 hero 渐变（= isDark ? heroDark : heroLight） */
     hero: HeroGradientToken;
   };
@@ -121,6 +123,7 @@ export function useTheme(override?: 'light' | 'dark'): AppTheme {
       heroDark: gradients.heroDark,
       heroLight: gradients.heroLight,
       accent: gradients.accent,
+      keyConfirm: gradients.keyConfirm,
       hero: isDark ? gradients.heroDark : gradients.heroLight,
     },
     glass: isDark ? darkGlass : lightGlass,

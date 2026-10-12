@@ -553,6 +553,16 @@ export type SemanticColors = {
   surfaceSunken: string;
   /** 记一笔键盘面板底（独立一档，日夜都是面板色） */
   keypadPanel: string;
+  /** 数字键 / 日期键 / 备注胶囊的实底（分开的圆角块，不是整面板一个底） */
+  keyTile: string;
+  /** 键按下时的底色（比 keyTile 略深） */
+  keyTilePressed: string;
+  /** 键的发丝描边（几乎看不见，只给夜间面板的块面一点边界） */
+  keyTileHairline: string;
+  /** 退格键 / 收据芯片的淡紫实底（实底，不用 accentSoft 半透明：半透明叠在面板上会把紫字压到 4:1 以下） */
+  keyAccentTile: string;
+  /** 退格键图标 / 收据芯片字：深一档的紫，在 keyAccentTile 上 ≥4.5:1（日间 accentText #6C4DF6 只有 4.08） */
+  keyAccentText: string;
   /** 悬浮 Tab 栏栏身（V2.2 定稿：高不透明度磨砂 —— 夜 88% / 日 90%，模糊仍走玻璃令牌） */
   tabBar: string;
   /** Tab 选中色（夜白 / 日紫）；未选中色见 tabInactive */
@@ -611,7 +621,12 @@ export const lightSemantic: SemanticColors = {
   surface: '#FFFFFF',
   surfaceElevated: '#FFFFFF',
   surfaceSunken: '#F3F2F8',
-  keypadPanel: '#FFFFFF',
+  keypadPanel: '#F3F1FA', // 日间键盘面板：浅薰衣草底，白色圆角键浮在上面（稿 G_AddLight）
+  keyTile: '#FFFFFF',
+  keyTilePressed: '#E9E5F6',
+  keyTileHairline: 'rgba(17,17,26,0.06)',
+  keyAccentTile: '#E6E0FC',
+  keyAccentText: '#5B3DF0',
   // Tab 栏 = 唯一玻璃材质（§2）+ V2.2 高不透明度栏身填充：后面的列表文字不再透出来
   tabBar: 'rgba(255,255,255,0.94)',
   tabActive: '#5B3DF0',
@@ -648,6 +663,11 @@ export const darkSemantic: SemanticColors = {
   surfaceElevated: '#1E1E2A',
   surfaceSunken: '#1A1A22',
   keypadPanel: '#121219',
+  keyTile: '#1E1B2A',
+  keyTilePressed: '#2B2740',
+  keyTileHairline: 'rgba(255,255,255,0.07)',
+  keyAccentTile: '#2B2547',
+  keyAccentText: '#A595FF',
   // Tab 栏 = 唯一玻璃材质（§2）+ V2.2 高不透明度栏身填充：后面的列表文字不再透出来
   tabBar: 'rgba(14,10,30,0.92)',
   tabActive: '#FFFFFF',
@@ -882,6 +902,8 @@ export const gradients: {
   heroDark: HeroGradientToken;
   heroLight: HeroGradientToken;
   accent: LinearGradientToken;
+  /** 键盘「完成」键：accent 紫 → 亮紫（稿 G_Add，135°） */
+  keyConfirm: LinearGradientToken;
 } = {
   heroDark: {
     // linear 165°: #140A3A 0% → #24125E 35% → #3B1A6E 60% → #4A1E52 82% → #140C22 100%
@@ -914,6 +936,12 @@ export const gradients: {
   accent: {
     colors: ['#6C4DF6', '#9B5BD6', '#D06C96'],
     locations: [0, 0.5, 1],
+    start: { x: 0, y: 0 },
+    end: { x: 1, y: 1 },
+  },
+  keyConfirm: {
+    colors: ['#6C4DF6', '#9B5BD6'],
+    locations: [0, 1],
     start: { x: 0, y: 0 },
     end: { x: 1, y: 1 },
   },

@@ -45,7 +45,7 @@ import { useAmountExpression } from '../hooks/useAmountExpression';
 import { getExpressionTotal } from '../utils/amountExpression';
 import { formatMoney } from '../utils/formatMoney';
 import { formatDate as formatDateLabel } from '../utils/formatDate';
-import { AmountCalculatorKeypad } from '../components/AmountCalculatorKeypad';
+import { AmountCalculatorKeypad, keypadPanelHeight } from '../components/AmountCalculatorKeypad';
 import { CursorAmountText } from '../components/CursorAmountText';
 import { ReceiptCameraModal } from '../components/ReceiptCameraModal';
 import AppText from '../components/ui/AppText';
@@ -312,10 +312,6 @@ const SESSION_PICKED_KEY = '@jizhang/sessionPickedCategories';
 const CATEGORY_ORDER_KEY = '@jizhang/categoryOrder';
 // TASK-009：不设上限——历史里有多少就往网格铺多少，直到"全部"按钮碰到自绘计算器为止
 const RECENT_CATEGORY_HISTORY_LIMIT = Infinity;
-// 自绘计算器面板高度（实算：4 行按键 × CELL_HEIGHT 70 + 备注条(28+padding 10+发丝线)≈318，
-// +stickyFooter paddingTop 6 ≈ 324，取 328 留 hairline 余量）——
-// TASK-009 类别网格停止线用它，比旧的 320 估算更准（真机 17 个越线就是估矮了）
-const KEYPAD_PANEL_HEIGHT = 328;
 
 export default function AddTransactionScreen({ navigation, route }: any) {
   const { categories, categoryGroups, addCategory, addCategoryGroup, deleteCategoryGroup, addTransaction, updateTransaction, addTransfer, updateCategory, deleteCategory, deleteTransaction, assets, activeAssets, getAssetBalance, currencySymbol, currency, activeLedgerId, paymentPlans, addPaymentPlan } =
@@ -323,7 +319,10 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   const insets = useSafeAreaInsets();
   const { colors, isDark, semantic, spacing, layout, radius } = useTheme();
   // 矮屏（可用高 < 700）：金额卡内边距 / 行距再收紧一档，保证「金额 + 至少 2 行类别 + 键盘」一屏可见
-  const { isShort, categoryColumns } = useLayout();
+  const { isShort, categoryColumns, keypadKeyHeight } = useLayout();
+  // 自绘计算器面板总高（备注行 + 4 行分格键 + 缝，随键高档位变化；不含底部安全区补白）。
+  // 遮挡高度与类别网格停止线都用它，和键盘真实渲染高度保持一致
+  const keypadPanelH = keypadPanelHeight(keypadKeyHeight, isShort, true);
   const t = useT();
   const { langMode } = useLanguage();
   // 主题化弹窗（替代系统 Alert）
@@ -454,10 +453,10 @@ export default function AddTransactionScreen({ navigation, route }: any) {
     if (y == null) return;
     // 键盘（自绘计算器面板，或者系统输入法）常驻在底部会占掉一截屏幕，真正"看得见"的
     // 区域没有整个屏幕那么高，用"可视区域高度的一半"当作目标位置的偏移量，而不是死算像素中点。
-    // 遮挡高度分两种：自绘计算器面板用 KEYPAD_PANEL_HEIGHT（实算常量，TASK-009 起与
+    // 遮挡高度分两种：自绘计算器面板用 keypadPanelH（按键高算出的实际面板高，与
     // 类别网格停止线共用同一个值，不会再估矮越线）；系统键盘（备注框聚焦弹出来的那个）
     // 用 keyboardDidShow 事件给的真实高度，不能套用面板的常量——两个高度并不一样。
-    const occludedHeight = amountKeypadOpen ? KEYPAD_PANEL_HEIGHT + keypadBottomPad : keyboardVisible ? keyboardHeight : 0;
+    const occludedHeight = amountKeypadOpen ? keypadPanelH + keypadBottomPad : keyboardVisible ? keyboardHeight : 0;
     const visibleH = Dimensions.get('window').height - insets.top - occludedHeight;
     const targetOffset = Math.max(y - visibleH / 2, 0);
     // 延迟一帧再滚：紧跟在 setAmountKeypadOpen(true) 之后调用时，键盘面板刚出现，
