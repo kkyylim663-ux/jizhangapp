@@ -551,7 +551,7 @@ export type SemanticColors = {
   surfaceSunken: string;
   /** 记一笔键盘面板底（独立一档，日夜都是面板色） */
   keypadPanel: string;
-  /** 悬浮 Tab 栏栏身（夜：不透明深面 / 日：近白半透明 94%） */
+  /** 悬浮 Tab 栏栏身（V2.2 定稿：高不透明度磨砂 —— 夜 88% / 日 90%，模糊仍走玻璃令牌） */
   tabBar: string;
   /** Tab 选中色（夜白 / 日紫）；未选中色见 tabInactive */
   tabActive: string;
@@ -594,8 +594,8 @@ export const lightSemantic: SemanticColors = {
   surfaceElevated: '#FFFFFF',
   surfaceSunken: '#F3F2F8',
   keypadPanel: '#FFFFFF',
-  // Tab 栏走唯一玻璃材质（§2）：栏身 = 日间玻璃填充
-  tabBar: 'rgba(255,255,255,0.55)',
+  // Tab 栏 = 唯一玻璃材质（§2）+ V2.2 高不透明度栏身填充：后面的列表文字不再透出来
+  tabBar: 'rgba(255,255,255,0.90)',
   tabActive: '#5B3DF0',
   tabInactive: '#6A6680', // = textTertiary（§3：Tab 未选中）
   hairline: 'rgba(20,20,40,0.06)',
@@ -622,8 +622,8 @@ export const darkSemantic: SemanticColors = {
   surfaceElevated: '#1E1E2A',
   surfaceSunken: '#1A1A22',
   keypadPanel: '#121219',
-  // Tab 栏走唯一玻璃材质（§2）：栏身 = 夜间玻璃填充
-  tabBar: 'rgba(14,10,30,0.46)',
+  // Tab 栏 = 唯一玻璃材质（§2）+ V2.2 高不透明度栏身填充：后面的列表文字不再透出来
+  tabBar: 'rgba(14,10,30,0.88)',
   tabActive: '#FFFFFF',
   // ⚠ 不是 textTertiary（0.56）：Tab 标签是 11pt 小字（§4 要 4.5:1），而浮空 Tab 栏是玻璃 +
   //    模糊，实测栏内底色会被下方内容提亮到 rgb(90-104, 80-93, 96-144) —— 0.56 只有 3.0-3.4:1。

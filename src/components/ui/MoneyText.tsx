@@ -92,6 +92,8 @@ export interface MoneyTextProps extends FormatMoneyOptions {
   value: number;
   /** 字号档位（默认 body） */
   variant?: TypographyVariant;
+  /** 字重覆盖（默认跟随 variant 令牌）——V2.2 资产页：行余额 17/500、分组净资产合计 22/600 */
+  weight?: FontWeightKey;
   /** 颜色覆盖（默认按 kind 取 semantic 语义色） */
   color?: string;
   /** 数字变化时逐位滚动（默认 true；挂载与首屏数据到位不滚） */
@@ -301,12 +303,15 @@ function RollingCell({
 function MeasureLayer({
   text,
   variant,
+  weight,
   textStyle,
   boxWidth,
   onMeasured,
 }: {
   text: string;
   variant: TypographyVariant;
+  /** 字重覆盖（与可见文本一致，量宽才准） */
+  weight?: FontWeightKey;
   textStyle: StyleProp<TextStyle>;
   boxWidth: number;
   onMeasured: (width: number) => void;
@@ -315,6 +320,7 @@ function MeasureLayer({
     <View pointerEvents="none" accessible={false} style={[styles.measureBox, { width: boxWidth }]}>
       <AppText
         variant={variant}
+        weight={weight}
         color="transparent"
         numberOfLines={1}
         style={textStyle}
@@ -331,6 +337,7 @@ function MeasureLayer({
 export function MoneyText({
   value,
   variant = 'body',
+  weight,
   kind = 'plain',
   currency,
   showCurrency,
@@ -437,10 +444,15 @@ export function MoneyText({
   // ⚠ |值| ≥ 1e21 时 JS 的 toFixed 会吐指数写法（"1.23e+21"）—— 这种文本一律走紧凑格式，
   //   屏幕上不能出现 e+21 这种东西（现实金额到不了这个量级，属于数据异常兜底）。
   const unusableText = /e[+-]\d/.test(fullText);
+  // V2.2：自动紧凑格式只给「真的省得下宽度」的金额（≥1000，紧凑成 1.2k 才有意义）。
+  // 千元以下的完整写法本来就短（−5.00），紧凑化会把小数去掉尾零变成「−5」——
+  // 用户验收退回「全 App 金额一律两位小数」（日历除外，它是显式传 compact 的那一个）。
+  const compactWorthwhile = Math.abs(value) >= 1000;
   const useCompact = hero
-    ? compactFallback && !hidden && heroBaseWidth !== null && availableWidth > 0 && heroTier < 0
+    ? compactFallback && !hidden && compactWorthwhile && heroBaseWidth !== null && availableWidth > 0 && heroTier < 0
     : compactFallback &&
       !hidden &&
+      compactWorthwhile &&
       (unusableText || (measuredEm !== null && fullTier < 0 && availableWidth > 0));
   const shownText = useMemo(
     () => (useCompact ? formatMoney(value, { ...formatOptions, compact: true }) : fullText),
@@ -553,6 +565,7 @@ export function MoneyText({
     <MeasureLayer
       text={fullText}
       variant={variant}
+      weight={weight}
       textStyle={[sizeStyle, cellTextStyle]}
       boxWidth={Math.ceil((ladder[0] ?? token.fontSize) * estimatedEm + spacingTotal) * 2 + 24}
       onMeasured={(w) => {
@@ -723,6 +736,7 @@ export function MoneyText({
     const textEl = (
       <AppText
         variant={variant}
+        weight={weight}
         color={resolvedColor}
         style={[sizeStyle, longPressable ? cellTextStyle : style]}
         numberOfLines={1}
@@ -774,6 +788,7 @@ export function MoneyText({
           progress={progress}
           startFraction={cell.delay / (motion.timing.numberRoll + STAGGER_MAX_STEPS * STAGGER_MS)}
           variant={variant}
+          weight={weight}
           textStyle={[sizeStyle, cellTextStyle]}
           color={resolvedColor}
         />

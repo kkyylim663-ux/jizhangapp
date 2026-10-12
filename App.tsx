@@ -1,5 +1,10 @@
 import React, { useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
+// V2.2：Android 系统导航栏按钮明暗跟随应用主题（声明式，非 Android 端渲染 null）
+// —— 栏身底色不需要 API：SDK 57 强制 edge-to-edge，导航条后面就是页面根视图的
+//    semantic.bg（日 #F5F2FB / 夜 #06050C），app.json 的 expo-navigation-bar 插件
+//    关掉了系统对比度蒙层（enforceContrast: false），底色原样透出
+import { NavigationBar } from 'expo-navigation-bar';
 import { useFonts } from 'expo-font';
 import { View, StyleSheet, Pressable, Animated, Platform } from 'react-native';
 import { NavigationContainer, CommonActions, DarkTheme, DefaultTheme, useNavigation } from '@react-navigation/native';
@@ -247,7 +252,7 @@ function SlidingTabBar(props: any) {
 function SlidingTabBarInner(props: any) {
   const insets = useSafeAreaInsets();
   const { translateY, opacity } = useTabBarAutoHide();
-  const { radius } = useTheme();
+  const { radius, semantic } = useTheme();
   const { state, navigation } = props;
 
   // 中央「+」的按压：与 react-navigation 内层 BottomTabItem 的行为逐字一致
@@ -279,9 +284,11 @@ function SlidingTabBarInner(props: any) {
       ]}
     >
       {/* 内层栏（react-navigation 自带）：几何（高度 / 全圆角）留在 screenOptions 的 tabBarStyle；
-          材质（填充 / 描边 / 顶部内高光 / 投影 / 模糊回退）统一走 UI V2.1 §2 的 GlassView */}
+          材质（填充 / 描边 / 顶部内高光 / 投影 / 模糊回退）统一走 UI V2.1 §2 的 GlassView。
+          V2.2：栏身填充换成高不透明度磨砂（夜 88% / 日 90%，semantic.tabBar），
+          背后的列表文字不再透出来；模糊层仍是玻璃令牌的强度（不加不减） */}
       <View style={styles.tabBarRow}>
-        <GlassView radius={radius.full} style={styles.tabBarGlass}>
+        <GlassView radius={radius.full} fill={semantic.tabBar} style={styles.tabBarGlass}>
           <BottomTabBar {...props} />
         </GlassView>
       </View>
@@ -499,6 +506,9 @@ function AppContent() {
           改成根据 isDark 显式指定，才能和应用内其他地方的主题联动一致 */}
       <AppLockOverlay />
       <StatusBar style={isDark ? 'light' : 'dark'} />
+      {/* V2.2 系统导航栏：日 #F5F2FB 底 + 深色按钮 / 夜 #06050C 底 + 浅色按钮，
+          随主题切换（style 的可选值里 dark = 深色按钮、light = 浅色按钮） */}
+      <NavigationBar style={isDark ? 'light' : 'dark'} />
     </>
   );
 }

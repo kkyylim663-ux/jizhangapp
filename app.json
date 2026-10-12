@@ -46,7 +46,14 @@
       "expo-audio",
       "expo-sharing",
       "expo-notifications",
-      "expo-localization"
+      "expo-localization",
+      [
+        "expo-navigation-bar",
+        {
+          "enforceContrast": false,
+          "style": "dark"
+        }
+      ]
     ],
     "extra": {
       "eas": {

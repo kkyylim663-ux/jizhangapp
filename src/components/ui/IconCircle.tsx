@@ -1,8 +1,8 @@
 // IconCircle.tsx
 // UI V2.1 §5：所有圆形图标（类别 / 账户 / 计划 / 设置行 / 账本……）= 同色系立体光泽球。
 //   结构（自上而下）：外投影 → 球面径向渐变（亮 0% → 基色 48% → 暗 100%）
-//     → 顶部白内阴影 + 底部暗内阴影 → 顶部高光条（49% × 9%，left 14% / top 4%，白 75% → 0）
-//     → 白图标（带 0 1 1 细阴影）
+//     → 顶部白内阴影 + 底部暗内阴影 → 左上弧形高光月牙（V2.2：贴球面、两端尖、白 70% → 0）
+//     + 右下淡反光弧（白 18%）→ 白图标（带 0 1 1 细阴影）
 //   颜色：亮色 = 基色混白 55%，暗色 = 基色混黑 32%；中性项（「全部」「已暂停」）基色 #8E8AA6；
 //   日夜同一套；§4 的硬指标作用在**图标真正压着的那部分球面**上（亮档与基色各压到 ≥3:1，
 //   高光不压到图标上 —— 详见 ballColors 与 gloss 两处注释）。
@@ -16,8 +16,7 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, View, ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import Svg, { Circle, Defs, RadialGradient, Stop } from 'react-native-svg';
+import Svg, { Circle, Defs, LinearGradient, Path, RadialGradient, Stop } from 'react-native-svg';
 import { useTheme } from '../../theme/useTheme';
 import { categoryRing } from '../../theme/theme';
 import { contrastRatio, darken, mixWithBlack, mixWithWhite, withAlpha } from './color';
@@ -68,6 +67,70 @@ function ballColors(color?: string): { base: string; light: string; dark: string
   return { base, light, dark: mixWithBlack(base, 0.32) };
 }
 
+/* ------------------------------------------------- 弧形高光（V2.2 真机复查第 3 条）
+ * 旧的「左上矩形横条」像贴纸；改成贴合球面的月牙 Path：
+ *   外沿 = 沿圆边的弧（半径 = 0.94 × 球半径，留一丝防锯齿）；
+ *   内沿 = 穿过两端尖点、半径更小（向球心鼓）的弧 → 月牙形、两端收尖；
+ *   填充白 70% → 0（左上端最亮）；右下边缘再补一道很淡的反光弧（白 18%，细）。
+ * 全部按 size 的比例算 → 42 / 48 及各降级尺寸等比缩放；日夜同一套。
+ *
+ * ⚠ 角度被对比度验收卡死，别随手改回去：对比度工具把图标文字 bbox +3px 框的四条边
+ *   当背景采样线；该框在 34–48 球径下到四角的半径是 0.85–0.92 个球半径 —— 亮片只要
+ *   压到左上 / 右下这两个**对角角区**，采样背景就被提亮（实测白 70% 月牙会把
+ *   采样边缘里的最常见色抬成 rgb(240,248,240) → 白图标 3:1 直接失败）。所以：
+ *     月牙只走 229°→262°（左上 1/4 弧里、对角角区之上的一段，离开框的上/左边线）；
+ *     反光弧只走 53°→79°（右下边缘、对角角区之下，整段低于框的下边线）。
+ *   图标本体（+3px 环）离球心只有 ~0.31 球径，两片高光都远在它之外。
+ */
+const CRESCENT_GRADIENT_ID = 'icglossCrescent';
+const EDGE_GLOSS_GRADIENT_ID = 'icglossEdge';
+/** 三点外接圆半径（内沿弧要精确穿过「中段厚度点」，两端自然收尖） */
+function circumradius(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  m: { x: number; y: number }
+): number {
+  const d = 2 * (a.x * (b.y - m.y) + b.x * (m.y - a.y) + m.x * (a.y - b.y));
+  if (Math.abs(d) < 1e-6) return 1e6; // 三点共线：退化成极大半径 ≈ 直线
+  const aa = a.x * a.x + a.y * a.y;
+  const bb = b.x * b.x + b.y * b.y;
+  const mm = m.x * m.x + m.y * m.y;
+  const ux = (aa * (b.y - m.y) + bb * (m.y - a.y) + mm * (a.y - b.y)) / d;
+  const uy = (aa * (m.x - b.x) + bb * (a.x - m.x) + mm * (b.x - a.x)) / d;
+  return Math.hypot(a.x - ux, a.y - uy);
+}
+/** 左上弧形高光月牙（角度受限的 1/4 弧段，见文件头说明） */
+function glossCrescentPath(size: number): string {
+  const c = size / 2;
+  const r = c * 0.94; // 外沿半径（贴圆边）
+  const deg = Math.PI / 180;
+  const a0 = 229 * deg; // 起点：对角角区之上（屏幕坐标：0° 右 / 90° 下）
+  const a1 = 262 * deg; // 终点：近顶端
+  const mid = (a0 + a1) / 2;
+  const pA = { x: c + r * Math.cos(a0), y: c + r * Math.sin(a0) };
+  const pB = { x: c + r * Math.cos(a1), y: c + r * Math.sin(a1) };
+  // 中段厚度 ≈ 0.13 × 外沿半径 → 内沿弧穿过这个点（半径更小、向球心鼓 → 月牙形）
+  const pM = { x: c + r * 0.87 * Math.cos(mid), y: c + r * 0.87 * Math.sin(mid) };
+  const ri = circumradius(pA, pB, pM);
+  return [
+    `M ${pA.x} ${pA.y}`,
+    `A ${r} ${r} 0 0 1 ${pB.x} ${pB.y}`, // 外沿：顺圆边（顺时针）
+    `A ${ri} ${ri} 0 0 0 ${pA.x} ${pA.y}`, // 内沿：回头弧（逆时针、半径更小）→ 两端尖
+    'Z',
+  ].join(' ');
+}
+/** 右下边缘的淡反光弧（白 18%，细；整段在对比度采样框下边线之外） */
+function glossEdgePath(size: number): string {
+  const c = size / 2;
+  const r = c * 0.92;
+  const deg = Math.PI / 180;
+  const a0 = 53 * deg;
+  const a1 = 79 * deg;
+  const pA = { x: c + r * Math.cos(a0), y: c + r * Math.sin(a0) };
+  const pB = { x: c + r * Math.cos(a1), y: c + r * Math.sin(a1) };
+  return `M ${pA.x} ${pA.y} A ${r} ${r} 0 0 1 ${pB.x} ${pB.y}`;
+}
+
 export function IconCircle({
   color,
   size = 42,
@@ -82,6 +145,9 @@ export function IconCircle({
   const radius = size / 2;
   // 渐变定义 id 带基色指纹：同色实例共用一份定义（web 的 url(#id) 按文档解析），异色不会串
   const ballId = `ic3d${base.replace(/[^0-9a-zA-Z]/g, '')}`;
+  // 弧形高光路径按 size 等比缩放（只跟尺寸有关，同尺寸实例共用即可）
+  const crescentD = useMemo(() => glossCrescentPath(size), [size]);
+  const edgeD = useMemo(() => glossEdgePath(size), [size]);
 
   // 外投影（§5）：同色投影 80% + 2/3 黑；选中再叠两层外圈（3dp 页面底色打底 + 5dp 外环）
   const outerShadow = [
@@ -111,7 +177,7 @@ export function IconCircle({
         style,
       ]}
     >
-      {/* 球面：radial-gradient(circle at 32% 26%, 亮 → 基色 48% → 暗) */}
+      {/* 球面：radial-gradient(circle at 32% 26%, 亮 → 基色 48% → 暗) + V2.2 弧形高光 */}
       <Svg width={size} height={size} style={StyleSheet.absoluteFill} pointerEvents="none">
         <Defs>
           <RadialGradient id={ballId} cx="32%" cy="26%" r="1">
@@ -119,22 +185,30 @@ export function IconCircle({
             <Stop offset="0.48" stopColor={base} />
             <Stop offset="1" stopColor={dark} />
           </RadialGradient>
+          {/* 月牙高光：上端白 70% → 下端 0（objectBoundingBox 与 size 无关，全实例共用一份） */}
+          <LinearGradient id={CRESCENT_GRADIENT_ID} x1="50%" y1="0%" x2="50%" y2="100%">
+            <Stop offset="0" stopColor="#FFFFFF" stopOpacity={0.7} />
+            <Stop offset="1" stopColor="#FFFFFF" stopOpacity={0} />
+          </LinearGradient>
+          {/* 右下反光弧：两端淡出、中段白 18% */}
+          <LinearGradient id={EDGE_GLOSS_GRADIENT_ID} x1="0%" y1="0%" x2="100%" y2="0%">
+            <Stop offset="0" stopColor="#FFFFFF" stopOpacity={0} />
+            <Stop offset="0.5" stopColor="#FFFFFF" stopOpacity={0.18} />
+            <Stop offset="1" stopColor="#FFFFFF" stopOpacity={0} />
+          </LinearGradient>
         </Defs>
         <Circle cx={radius} cy={radius} r={radius} fill={`url(#${ballId})`} />
+        {/* 左上弧形高光（V2.2）：贴球面的月牙，两端收尖（几何见 glossCrescentPath 注释） */}
+        <Path d={crescentD} fill={`url(#${CRESCENT_GRADIENT_ID})`} />
+        {/* 右下边缘淡反光弧（白 18%，细；两端淡出） */}
+        <Path
+          d={edgeD}
+          fill="none"
+          stroke={`url(#${EDGE_GLOSS_GRADIENT_ID})`}
+          strokeWidth={Math.max(1, Math.round(size * 0.035 * 100) / 100)}
+          strokeLinecap="round"
+        />
       </Svg>
-      {/* 左上高光：白 75% → 0（§5 的左上椭圆高光）。
-          ⚠ 几何是硬指标，别把它做大：白图标正好落在球面中部，高光只要盖到图标上，
-          图标与球面的对比就掉到 1.2–2.4:1（实测 #AB47BC 1.77 / 中性球 1.97 / #43A047 1.19）。
-          高光的**强段**（顶部 75%）留在图标（+ 3px 采样环）之上 —— 49% 宽 × 9% 高、
-          left 14% / top 4%：各种球径（34/38/42/48）图标环的上沿都在 17–20% 处，
-          高光在 13% 处已淡到 0，图标环只吃到球面的亮档 / 基色（两者都已按 ≥3:1 压深） */}
-      <LinearGradient
-        colors={['rgba(255,255,255,0.75)', 'rgba(255,255,255,0)']}
-        start={{ x: 0.5, y: 0 }}
-        end={{ x: 0.5, y: 1 }}
-        style={styles.gloss}
-        pointerEvents="none"
-      />
       {/* 内阴影层：压在高光之上、图标之下 */}
       <View
         pointerEvents="none"
@@ -158,15 +232,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
-  },
-  gloss: {
-    position: 'absolute',
-    left: '14%',
-    top: '4%',
-    width: '49%',
-    height: '9%',
-    borderRadius: 999,
-    overflow: 'hidden',
   },
   // 图标细阴影（§5：0 1 1 rgba(0,0,0,.28)）
   icon: {

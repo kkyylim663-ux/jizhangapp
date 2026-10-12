@@ -25,6 +25,9 @@ import { useTheme } from '../../theme/useTheme';
 export interface GlassViewProps {
   /** 圆角（数值或 'full'；默认 999 全圆；卡片传 26） */
   radius?: number | 'full';
+  /** 填充色覆盖（默认取令牌 glass.fill）。给 V2.2 的 Tab 栏用：栏身要更高不透明度
+   *  （夜 88% / 日 90%）挡住背后滚动的列表文字，其余玻璃件一律不传、保持原样） */
+  fill?: string;
   /** 模糊强度覆盖（默认取令牌 24） */
   intensity?: number;
   /** 投影开关（默认开；列表行等已在大卡内的玻璃件可关掉，阴影只留在大卡上） */
@@ -36,6 +39,7 @@ export interface GlassViewProps {
 
 export function GlassView({
   radius = 'full',
+  fill,
   intensity,
   shadow = true,
   pointerEvents,
@@ -61,7 +65,7 @@ export function GlassView({
         styles.root,
         {
           borderRadius: radius === 'full' ? 999 : radius,
-          backgroundColor: glass.fill,
+          backgroundColor: fill ?? glass.fill,
           borderWidth: glass.borderWidth,
           borderColor: glass.borderColor,
           boxShadow: shadow ? glass.shadow : undefined,

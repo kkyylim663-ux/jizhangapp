@@ -1339,7 +1339,8 @@ export default function HomeScreen({ navigation }: any) {
                         value={displayTotal[1]}
                         kind="plain"
                         currency={displayTotal[0]}
-                        showCurrency
+                        // V2.2：大数字不再带 RM 前缀（上方 MYR 胶囊已表示币种）——
+                        // 小数点后两位照常保留，读屏标签（heroAmountLabel）仍带币种
                         variant="display"
                         hero
                         heroSize={HERO_AMOUNT_SIZE}
