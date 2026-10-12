@@ -995,20 +995,49 @@ export default function AddTransactionScreen({ navigation, route }: any) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overlayOpen, isFocused]);
 
-  // 安卓硬件返回键：计算器面板开着 → 先收起面板（已输入的金额先求值落回，不丢）并拦截，
-  // 不退出整页；弹层开着时由弹层自己的 BackHandler 先处理（后注册者先收到事件）。
-  // 只在本页聚焦时拦截，否则切到别的 Tab 后返回键会被这里误吞。
-  // 用 ref 转发最新闭包（金额表达式每按一键都变，监听只挂一次）
-  const backPressRef = useRef<() => boolean>(() => false);
-  backPressRef.current = () => {
-    if (!isFocused || !amountKeypadOpen || overlayOpen) return false;
-    if (calculatorTarget === 'amount') commitAmount();
-    else commitTransferField();
-    setAmountKeypadOpen(false);
-    return true;
+  // 安卓硬件返回键（页面级）：只关闭「浮层」，永不收起计算器键盘（键盘上有「完成」保存键，
+  // 收起了就存不了）。有浮层开着 → 关掉最上面那一层并拦截；没有 → 返回 false，走正常的返回上一页。
+  // 底部抽屉 / 日期面板 / 弹窗自己注册的 BackHandler 是后注册的，先处理，走不到这里。
+  // 只在本页聚焦时处理。用 ref 转发最新闭包，监听只挂一次。
+  const closeTopOverlayRef = useRef<() => boolean>(() => false);
+  closeTopOverlayRef.current = () => {
+    if (!isFocused) return false;
+    if (iconPickerOpen) {
+      setIconPickerOpen(false);
+      return true;
+    }
+    if (newGroupFormOpen) {
+      setNewGroupFormOpen(false);
+      return true;
+    }
+    if (receiptPreviewOpen) {
+      setReceiptPreviewOpen(false);
+      return true;
+    }
+    if (datePickerOpen) {
+      setDatePickerOpen(false);
+      return true;
+    }
+    if (dateSheetOpen) {
+      setDateSheetOpen(false);
+      return true;
+    }
+    if (assetPickerOpen) {
+      setAssetPickerOpen(false);
+      return true;
+    }
+    if (accountPickerOpen) {
+      setAccountPickerOpen(false);
+      return true;
+    }
+    if (catSheetOpen) {
+      setCatSheetOpen(false);
+      return true;
+    }
+    return false;
   };
   useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => backPressRef.current());
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => closeTopOverlayRef.current());
     return () => sub.remove();
   }, []);
 
