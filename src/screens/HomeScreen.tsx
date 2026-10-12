@@ -384,7 +384,7 @@ function TxRow({
   const { semantic, spacing, layout } = useTheme();
   const rowStyles = useMemo(() => makeTxRowStyles(semantic, spacing, layout), [semantic, spacing, layout]);
   // V3：金额 15 / 600，等宽数字
-  const rowAmountStyle = useMemo(() => ({ fontSize: 15, fontWeight: '600' as const, fontVariant: ['tabular-nums'] as const }), []);
+  const rowAmountStyle = useMemo(() => ({ fontSize: 15, lineHeight: 20, fontVariant: ['tabular-nums'] as const }), []);
   // 副标题：类别 · 账户（账户缺失时只有类别，不留下孤零零的分隔点）
   const subtitle = [categoryName, accountName].filter((part): part is string => !!part).join(' · ');
   return (
@@ -405,17 +405,17 @@ function TxRow({
       <IconCircle color={categoryColor} icon={categoryIcon} shape="tile" size={38} />
       {/* 中：flex:1 吃掉剩余宽度，把金额顶到行尾 */}
       <View style={rowStyles.textBlock}>
-        <AppText variant="subhead" weight="500" numberOfLines={2}>
+        <AppText variant="subhead" weight="600" style={styles.rowTitleText} numberOfLines={2}>
           {title}
         </AppText>
         {!!subtitle && (
-          <AppText variant="caption" color={semantic.textSecondary} numberOfLines={1}>
+          <AppText variant="caption" weight="400" color={semantic.textTertiary} style={styles.rowSubText} numberOfLines={1}>
             {subtitle}
           </AppText>
         )}
       </View>
       {/* 右：金额（MoneyText 自带 flexShrink:0，不要在外面包固定宽度） */}
-      <MoneyText value={amount} kind={kind} variant="body" style={rowAmountStyle} />
+      <MoneyText value={amount} kind={kind} variant="body" weight="600" style={rowAmountStyle} />
     </PressableScale>
   );
 }
@@ -429,7 +429,7 @@ function makeTxRowStyles(semantic: SemanticColors, spacing: Spacing, layout: Lay
       columnGap: spacing.md,
       minHeight: 60,
       paddingHorizontal: layout.card,
-      paddingVertical: spacing.sm,
+      paddingVertical: 9,
       backgroundColor: semantic.homeCard,
       // 列表卡左右各留 12（V3） —— 卡体就是这些行 + 日期头拼出来的（SectionList 内容不好整体收窄）
       marginHorizontal: LIST_CARD_MARGIN,
@@ -895,21 +895,21 @@ export default function HomeScreen({ navigation }: any) {
         </AppText>
       )}
       <View style={styles.dayHeaderRow}>
-        <AppText variant="subhead" weight="500" style={styles.dayHeaderDate} numberOfLines={1}>
+        <AppText variant="caption" weight="600" color={semantic.textSecondary} style={styles.dayHeaderLabelText} numberOfLines={1}>
           {section.label}
         </AppText>
         {!!section.dateSub && (
-          <AppText variant="caption" color={semantic.textTertiary} numberOfLines={1}>
+          <AppText variant="caption" weight="500" color={semantic.textTertiary} style={styles.dayHeaderLabelText} numberOfLines={1}>
             {section.dateSub}
           </AppText>
         )}
         <View style={styles.dayHeaderTotals}>
           {section.expense > 0 && (
             <>
-              <AppText variant="caption" color={semantic.textSecondary}>
+              <AppText variant="caption" weight="500" color={semantic.textTertiary}>
                 {`${t('report.expense')} `}
               </AppText>
-              <MoneyText value={section.expense} variant="caption" color={semantic.textSecondary} />
+              <MoneyText value={section.expense} kind="expense" variant="caption" weight="600" color={semantic.textSecondary} />
             </>
           )}
           {section.expense > 0 && section.income > 0 && (
@@ -919,10 +919,10 @@ export default function HomeScreen({ navigation }: any) {
           )}
           {section.income > 0 && (
             <>
-              <AppText variant="caption" color={semantic.textSecondary}>
+              <AppText variant="caption" weight="500" color={semantic.textTertiary}>
                 {`${t('report.income')} `}
               </AppText>
-              <MoneyText value={section.income} variant="caption" color={semantic.amountIncome} />
+              <MoneyText value={section.income} variant="caption" weight="600" color={semantic.amountIncome} />
             </>
           )}
         </View>
@@ -1132,7 +1132,7 @@ export default function HomeScreen({ navigation }: any) {
     ? semantic.danger
     : budgetPctText >= 80
       ? semantic.warning
-      : semantic.onAccent;
+      : semantic.textPrimary;
 
   // 预算进度条：宽度变化走令牌时长补间（目的：state indication）；fill 是 overflow:hidden 轨道里
   // 无子元素的绝对定位元素——唯一放行的 width 动画，圆角不会被 scaleX 拉糊。
@@ -1305,7 +1305,7 @@ export default function HomeScreen({ navigation }: any) {
                 testID="home-currency-pill"
               >
                 <GlassView radius="full" style={styles.heroCurrencyPill}>
-                  <AppText variant="caption" weight="500" color={onGradientText} numberOfLines={1}>
+                  <AppText variant="caption" weight="600" color={onGradientText} style={styles.budgetText} numberOfLines={1}>
                     {`${t('home.netWorth')} · ${activeCurrency}`}
                   </AppText>
                   <Ionicons name="chevron-down" size={12} color={onGradientText} />
@@ -1416,17 +1416,19 @@ export default function HomeScreen({ navigation }: any) {
               {totalBudget > 0 ? (
                 <>
                   <View style={styles.budgetCardHead}>
-                    <AppText variant="footnote" weight="500" color={onGradientText} numberOfLines={1}>
+                    <AppText variant="footnote" weight="500" color={semantic.textSecondary} style={styles.budgetText} numberOfLines={1}>
                       {t('home.budgetLabel')}
                     </AppText>
                     <View style={styles.budgetCardHeadRight}>
-                      <AppText variant="footnote" color={onGradientMuted}>
+                      <AppText variant="footnote" weight="500" color={semantic.textSecondary} style={styles.budgetText}>
                         {budgetOver ? t('home.budgetOverLabel') : t('home.budgetLeftLabel')}
                       </AppText>
                       <MoneyText
                         value={budgetOver ? thisExpense - totalBudget : totalBudget - thisExpense}
                         variant="footnote"
-                        color={budgetOver ? semantic.danger : onGradientText}
+                        weight="600"
+                        color={budgetOver ? semantic.danger : semantic.textPrimary}
+                        style={styles.budgetText}
                         hidden={balanceHidden}
                       />
                     </View>
@@ -1779,7 +1781,7 @@ function makeStyles(
     budgetCardHeadRight: { flexDirection: 'row', alignItems: 'baseline', columnGap: spacing.xs, flexShrink: 1 },
     // 进度条（V2 稿：8 高圆头白条；轨道 = 白 22%）
     budgetTrack: {
-      height: 8,
+      height: 6,
       borderRadius: radius.full,
       backgroundColor: withAlpha(semantic.onAccent, 0.22),
       overflow: 'hidden',
@@ -1836,6 +1838,11 @@ function makeStyles(
     },
     // 日期标签（今天 / 昨天 / 10月7日 周三）：可被挤窄，合计整块不被挤
     dayHeaderDate: { flexShrink: 1 },
+    // V3 字号（设计稿逐值）：行标题 14/600、副标题 12/400、日期头 12、预算文字 12.5
+    rowTitleText: { fontSize: 14, lineHeight: 19 },
+    rowSubText: { fontSize: 12, lineHeight: 16 },
+    dayHeaderLabelText: { fontSize: 12, lineHeight: 16 },
+    budgetText: { fontSize: 12.5, lineHeight: 17 },
     // 当日合计：wrap 行（放不下自动换行到第二行，右对齐；不缩字、不省略）
     dayHeaderTotals: {
       flexDirection: 'row',
