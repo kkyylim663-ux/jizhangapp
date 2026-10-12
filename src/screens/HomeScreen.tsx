@@ -1627,7 +1627,7 @@ export default function HomeScreen({ navigation }: any) {
             return (
               <PressableScale
                 key={code}
-                style={[styles.currencyMenuItem, active && { backgroundColor: isDark ? '#1F1A35' : '#F0EDFE' }]}
+                style={[styles.currencyMenuItem, active && { backgroundColor: semantic.selectedRow }]}
                 activeScale={0.98}
                 onPress={() => {
                   setNetWorthCurrency(code);

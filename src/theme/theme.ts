@@ -597,6 +597,8 @@ export type SemanticColors = {
   homeHairline: string;
   /** V3 首页账单行图标方块底（38dp 圆角方块） */
   homeIconTile: string;
+  /** 选中行底（10% 紫压在卡色上，不透明）：日 #F0EDFE / 夜 #1F1A35 */
+  selectedRow: string;
 };
 
 export const lightSemantic: SemanticColors = {
@@ -629,6 +631,7 @@ export const lightSemantic: SemanticColors = {
   homeCard: '#FFFFFF',
   homeHairline: 'rgba(21,19,42,0.07)',
   homeIconTile: '#F0EDFA',
+  selectedRow: '#F0EDFE',
 };
 
 export const darkSemantic: SemanticColors = {
@@ -665,6 +668,7 @@ export const darkSemantic: SemanticColors = {
   homeCard: '#16141F',
   homeHairline: 'rgba(255,255,255,0.07)',
   homeIconTile: '#221E30',
+  selectedRow: '#1F1A35',
 };
 
 /**
