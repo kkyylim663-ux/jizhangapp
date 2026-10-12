@@ -102,6 +102,8 @@ const USAGE_BAR_GRADIENT = { start: { x: 0, y: 0.5 }, end: { x: 1, y: 0.5 } } as
 /** 额度使用率预警点（与预算条同一套语义：≥80% warning、≥100% danger） */
 const USAGE_WARN_PCT = 80;
 const USAGE_FULL_PCT = 100;
+/** 已归档账户行的淡化透明度（仍可读，区别于活跃账户） */
+const ARCHIVED_ROW_OPACITY = 0.7;
 
 function toDateStr(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -541,7 +543,21 @@ function computeAssetFlowStats(
 }
 
 export default function AssetScreen() {
-  const { assets, transactions, getAssetBalance, deleteAsset, setDefaultAsset, updateAsset } = useApp();
+  const {
+    assets,
+    activeAssets,
+    transactions,
+    getAssetBalance,
+    deleteAsset,
+    archiveAsset,
+    unarchiveAsset,
+    assetRecordCount,
+    setDefaultAsset,
+    updateAsset,
+  } = useApp();
+  // 已归档账户（底部可折叠分组，默认收起）
+  const archivedAssets = useMemo(() => assets.filter((a) => !!a.archivedAt), [assets]);
+  const [archivedOpen, setArchivedOpen] = useState(false);
   type AssetItem = (typeof assets)[number];
   const { semantic, typography, spacing, radius, layout } = useTheme();
   const { pagePadding, contentMaxWidth } = useLayout();
@@ -599,6 +615,25 @@ export default function AssetScreen() {
   };
 
   // V2.2：顶部净资产汇总卡已删（各币种资产 / 负债汇总随之退役），页面只保留下面的币种分组列表
+
+  // 有记录的账户不删除：归档（隐藏、不计净资产，历史保持不变，可随时恢复）
+  const handleArchive = (id: string, assetName: string) => {
+    const count = assetRecordCount(id);
+    dialog.alert({
+      title: t('asset.archiveTitle', { name: assetName }),
+      message: t('asset.archiveMsg', { count }),
+      buttons: [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('asset.archive'),
+          onPress: () => {
+            closeDetail();
+            archiveAsset(id);
+          },
+        },
+      ],
+    });
+  };
 
   const handleDelete = (id: string, assetName: string) => {
     dialog.alert({
@@ -863,8 +898,8 @@ export default function AssetScreen() {
   }, []);
 
   const groupedAssets = useMemo(() => {
-    const byCurrency: Record<string, typeof assets> = {};
-    assets.forEach((a) => {
+    const byCurrency: Record<string, typeof activeAssets> = {};
+    activeAssets.forEach((a) => {
       if (!byCurrency[a.currency]) byCurrency[a.currency] = [];
       byCurrency[a.currency].push(a);
     });
@@ -884,7 +919,7 @@ export default function AssetScreen() {
           return (typeOrder[a.type] ?? 99) - (typeOrder[b.type] ?? 99);
         }),
       }));
-  }, [assets, typeOrder, assetOrder]);
+  }, [activeAssets, typeOrder, assetOrder]);
 
   /** 浏览模式的一行：图标方块 + 名称 + 余额；信用卡换成"欠款 + 可用 / 还款日 + 使用率细条" */
   const renderAssetRow = (a: AssetItem) => {
@@ -1033,7 +1068,7 @@ export default function AssetScreen() {
               ))}
             </GlassView>
           </View>
-        ) : (
+        ) : activeAssets.length === 0 ? null : (
           // ---------- 浏览模式：所有币种组放进**同一张玻璃卡**（V2.2c），
           // 组之间用卡内小节标题（币种胶囊 + 合计）+ hairline 分隔 ----------
           <View style={[styles.groupsCardWrap, { paddingHorizontal: pagePadding }]}>
@@ -1063,6 +1098,52 @@ export default function AssetScreen() {
                   </View>
                 );
               })}
+            </GlassView>
+          </View>
+        )}
+
+        {/* 已归档账户：折叠分组，行变淡；恢复按钮在行下方 */}
+        {!reorderMode && archivedAssets.length > 0 && (
+          <View style={[styles.groupsCardWrap, { paddingHorizontal: pagePadding, marginTop: spacing.lg }]}>
+            <GlassView radius={26} style={styles.groupsCard}>
+              <PressableScale
+                onPress={() => setArchivedOpen((v) => !v)}
+                activeScale={0.98}
+                style={styles.archivedHeader}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: archivedOpen }}
+                testID="asset-archived-toggle"
+              >
+                <AppText variant="subhead" weight="600" color={semantic.textSecondary}>
+                  {t('asset.archived')} · {archivedAssets.length}
+                </AppText>
+                <Ionicons
+                  name={archivedOpen ? 'chevron-up' : 'chevron-down'}
+                  size={18}
+                  color={semantic.textTertiary}
+                />
+              </PressableScale>
+              {archivedOpen &&
+                archivedAssets.map((a) => (
+                  <View key={a.id}>
+                    <View style={styles.groupSeparator} />
+                    <View style={{ opacity: ARCHIVED_ROW_OPACITY }}>{renderAssetRow(a)}</View>
+                    <View style={styles.archivedActionRow}>
+                      <PressableScale
+                        onPress={() => unarchiveAsset(a.id)}
+                        activeScale={0.95}
+                        style={[styles.archivedUnarchiveBtn, { borderColor: semantic.hairline }]}
+                        accessibilityRole="button"
+                        accessibilityLabel={t('asset.unarchive')}
+                        testID={`asset-unarchive-${a.id}`}
+                      >
+                        <AppText variant="footnote" weight="600" color={semantic.accentText}>
+                          {t('asset.unarchive')}
+                        </AppText>
+                      </PressableScale>
+                    </View>
+                  </View>
+                ))}
             </GlassView>
           </View>
         )}
@@ -1284,13 +1365,34 @@ export default function AssetScreen() {
                 style={styles.sheetButton}
                 testID="asset-detail-save"
               />
-              <Button
-                title={t('asset.deleteAccount')}
-                variant="destructive"
-                onPress={() => sheetAsset && handleDelete(sheetAsset.id, sheetAsset.name)}
-                style={styles.sheetButton}
-                testID="asset-detail-delete"
-              />
+              {sheetAsset && sheetAsset.archivedAt ? (
+                <Button
+                  title={t('asset.unarchive')}
+                  variant="secondary"
+                  onPress={() => {
+                    unarchiveAsset(sheetAsset.id);
+                    closeDetail();
+                  }}
+                  style={styles.sheetButton}
+                  testID="asset-detail-unarchive"
+                />
+              ) : sheetAsset && assetRecordCount(sheetAsset.id) > 0 ? (
+                <Button
+                  title={t('asset.archive')}
+                  variant="secondary"
+                  onPress={() => handleArchive(sheetAsset.id, sheetAsset.name)}
+                  style={styles.sheetButton}
+                  testID="asset-detail-archive"
+                />
+              ) : (
+                <Button
+                  title={t('asset.deleteAccount')}
+                  variant="destructive"
+                  onPress={() => sheetAsset && handleDelete(sheetAsset.id, sheetAsset.name)}
+                  style={styles.sheetButton}
+                  testID="asset-detail-delete"
+                />
+              )}
               {/* 键盘高度的底部垫片：让滚动区能把名称框滚到键盘上方 */}
               {sheetKbHeight > 0 && <View style={{ height: sheetKbHeight }} />}
             </ScrollView>
@@ -1348,6 +1450,27 @@ function makeStyles(
     groupsCardWrap: { marginTop: 24 },
     // overflow hidden：行 / 小节头的 hairline 与按压高光不越出 26 圆角
     groupsCard: { overflow: 'hidden' },
+    archivedHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: layout.card,
+      paddingVertical: spacing.md,
+    },
+    archivedActionRow: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      paddingHorizontal: layout.card,
+      paddingBottom: spacing.sm,
+    },
+    archivedUnarchiveBtn: {
+      minHeight: 36,
+      paddingHorizontal: spacing.md,
+      borderRadius: 18,
+      borderWidth: StyleSheet.hairlineWidth,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     // 组与组之间的分组线：左右各缩进卡内衬 16（行内分割线则是 70 左缩进，见下）
     groupDivider: {
       height: StyleSheet.hairlineWidth,
