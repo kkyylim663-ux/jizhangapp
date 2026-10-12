@@ -207,16 +207,12 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Android 返回键分层退出：账户弹层开着 → 先关弹层；自绘键盘开着 → 先收键盘；
-  // 都没开才交还给导航器退出页面——避免弹层/键盘开着时一按返回整页退出、表单半填全丢
+  // Android 返回键：先关真正的弹层（账户弹层、日期选择）；自绘键盘不被返回键收起（键盘上有保存键），
+  // 其余情况不拦截，导航器直接退出本页
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (assetSheetOpen) {
         closeAssetSheet();
-        return true;
-      }
-      if (keypadOpen) {
-        setKeypadOpen(false);
         return true;
       }
       if (datePickerOpen) {
@@ -226,7 +222,7 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
       return false;
     });
     return () => sub.remove();
-  }, [assetSheetOpen, keypadOpen, datePickerOpen]);
+  }, [assetSheetOpen, datePickerOpen]);
 
   // 计算器面板收起时（无论路径：按"完成"、点系统键盘、点其他输入框）把面板当前值求值落回
   // amountValue——之前只有按"完成"才落回，切输入框触发 keyboardDidShow 直接关面板，
