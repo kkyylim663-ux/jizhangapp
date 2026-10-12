@@ -5,7 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 
 import { useFocusEffect } from '@react-navigation/native';
-import Reanimated, { useSharedValue, useAnimatedStyle, useDerivedValue, withTiming, withSpring, withSequence, cancelAnimation, runOnJS, Easing } from 'react-native-reanimated';
+import Reanimated, { useSharedValue, useAnimatedStyle, useDerivedValue, withTiming, withSpring, withSequence, cancelAnimation, runOnJS, useAnimatedReaction, Easing } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -72,6 +72,10 @@ const PAGER_SETTLE_MS = 300;
 const PAGER_SETTLE_EASE = Easing.bezier(0.22, 1, 0.36, 1);
 /** 与 Gesture.Pan().activeOffsetX 一致：激活时的 4px 要扣掉，否则第一帧会跳 4px（手指从按下起就带着条走，没有死区也没有跳变） */
 const PAGER_ACTIVATE_OFFSET = 4;
+/** 停稳在某一页多久（毫秒）才提交币种并把真列表接回：期间可以继续连续翻页，不被任何东西挡住 */
+const PAGER_COMMIT_DEBOUNCE_MS = 150;
+/** 真列表被「冻结」时的位移（挪到屏幕外；邻页预览顶上） */
+const LIST_OFFSCREEN_X = 100000;
 // 账单卡左右外边距 = 页面边距令牌 layout.page（与预算卡同一条左右边线；QA 发现 12 与预算卡错位）
 const LIST_CARD_MARGIN = pageLayout.page;
 /** 行间分割线左缩进（V2 稿 70 = 行内边距 16 + 图标圆 42 + 行间距 12，正好与文字左缘对齐） */
@@ -691,6 +695,7 @@ function SwipePanel({
   index,
   listIdx,
   swipeActive,
+  frozen,
   shiftX,
   pitch,
   top,
@@ -702,6 +707,8 @@ function SwipePanel({
   index: number;
   listIdx: SharedValue<number>;
   swipeActive: SharedValue<number>;
+  /** 1 = 币种提交交接中：真列表在屏幕外，所有页（含基准页）都显示预览 */
+  frozen: SharedValue<number>;
   shiftX: SharedValue<number>;
   pitch: SharedValue<number>;
   top: number;
@@ -715,7 +722,7 @@ function SwipePanel({
     const base = listIdx.value;
     const p = sheetP ? sheetP.value : 1;
     return {
-      opacity: swipeActive.value === 1 && index !== base ? (sheetP ? 0.6 + 0.4 * p : 1) : 0,
+      opacity: swipeActive.value === 1 && (index !== base || frozen.value === 1) ? (sheetP ? 0.6 + 0.4 * p : 1) : 0,
       transform: [
         { translateX: (index - base) * pitch.value + shiftX.value },
         { translateY: sheetP ? (1 - p) * (sheetLift ?? 0) : 0 },
@@ -1096,21 +1103,37 @@ export default function HomeScreen({ navigation }: any) {
   /** 1 = 正在拖动或翻页动画中（布局同步不许碰 pagerX） */
   const pagerBusy = useSharedValue(0);
   // ── 横滑时账单列表 / 日历 / 预算卡跟着 hero 一起走（轮播感）──
-  // swipeActive：1 = 手势接管期（拖动 → 翻页动画 → 提交后等新列表上屏）；期间真列表按位移横移，
-  //   左右邻页预览（SwipePanel）显示；0 = 平时，真列表原位（位移恒为 0），邻页隐藏。
-  // swipeLock：1 = 动画已落定、正在提交币种并等新列表画上屏，这段时间忽略新的拖动。
-  // listIdxSV：真列表此刻装的是第几个币种（邻页的位置以它为基准）。
+  // 一条连续的页条：hero 金额、预算卡条、列表预览（每币种前 12 行静态渲染，预挂载）、日历（预挂载）
+  // 全是同一条 pagerX 驱动的页。手势任何时候都不会被挡：新的一拖可以在动画途中开始（cancelAnimation，
+  // 从当前位置继续），每次只从「逻辑页」pagerTargetIdx 翻相邻一页。
+  // swipeActive：1 = 手势接管期；期间真列表按位移横移、预览显示；0 = 平时，真列表原位、预览隐藏。
+  //   它由手势 onStart 置 1，由下面的 reaction 在「停稳 + 真列表已装好这一页 + 没有冻结」时置 0（UI 线程，原子）。
+  // listFrozen：1 = 币种提交进行中（setNetWorthCurrency → 真列表换数据 → 等上屏），真列表被挪到屏幕外、
+  //   所有预览（含基准页）显示，用户此刻继续翻页也只看到预览，不会看到换数据的中间态。
+  // listIdxSV：真列表此刻装的是第几个币种；pagerTargetIdx：逻辑页（动画目标页，没有动画时 = 当前页）。
   // listPitch：列表一页的间距 = 窗口宽（hero 的页宽是行宽 = 窗口宽 − 32，位移按比例放大）。
   const swipeActive = useSharedValue(0);
-  const swipeLock = useSharedValue(0);
-  const pagerIgnore = useSharedValue(0);
+  const listFrozen = useSharedValue(0);
   const listIdxSV = useSharedValue(0);
+  const pagerTargetIdx = useSharedValue(0);
   const listPitch = useSharedValue(0);
-  /** 真列表（以及邻页）的横向位移：(pagerX + 基准页×页宽) × 列表页距 / hero 页宽；不横滑时为 0 */
-  const listShiftX = useDerivedValue(() =>
+  /** 邻页预览 / 日历邻页的横向位移基准：(pagerX + 基准页×页宽) × 列表页距 / hero 页宽；不横滑时为 0 */
+  const swipeShiftX = useDerivedValue(() =>
     swipeActive.value === 1 && pagerW.value > 0
       ? ((pagerX.value + listIdxSV.value * pagerW.value) * listPitch.value) / pagerW.value
       : 0
+  );
+  /** 真列表 / 真日历的横向位移：同上；冻结期间挪到屏幕外 */
+  const listShiftX = useDerivedValue(() => (listFrozen.value === 1 ? LIST_OFFSCREEN_X : swipeShiftX.value));
+  useAnimatedReaction(
+    () =>
+      pagerBusy.value === 0 &&
+      listFrozen.value === 0 &&
+      pagerW.value > 0 &&
+      Math.abs(pagerX.value + listIdxSV.value * pagerW.value) < 0.5,
+    (atRest) => {
+      if (atRest) swipeActive.value = 0;
+    }
   );
   /** 预算卡条：页距同列表，位置始终 = pagerX × 列表页距 / hero 页宽（外部换币种时也跟着 hero 一起滑） */
   const budgetStripStyle = useAnimatedStyle(() => ({
@@ -1126,11 +1149,11 @@ export default function HomeScreen({ navigation }: any) {
 
   // 手势回调里要读最新的 totals / activeCurrency：走 ref，手势对象只在「多页 / 减弱动效」变化时重建
   const swipeCommitRef = useRef<string | null>(null);
+  /** 横滑提交的交接是否还在途中（提交 → 新列表上屏 → 解冻）：期间不再发起下一次提交 */
+  const commitInFlightRef = useRef(false);
   const swipeT0Ref = useRef(0);
   const curIdxRef = useRef(0);
   curIdxRef.current = curIdx;
-  /** 邻页预览以哪一页为中心（与真列表装的币种一致；只在交接那一刻 / 非横滑换币种时更新） */
-  const [panelCenter, setPanelCenter] = useState(0);
   /** 日历卡的「选中日」复位键：横滑换币种时换一个值，真日历据此清掉展开的那天（在屏幕外清，看不到） */
   const [calSelKey, setCalSelKey] = useState('');
   /** 头部区（hero + 预算）实测高度：邻页预览 / 日历弹层都贴在它正下方 */
@@ -1140,31 +1163,40 @@ export default function HomeScreen({ navigation }: any) {
   const onBudgetFilledLayout = useCallback((h: number) => {
     setBudgetFilledH((prev) => (Math.abs(prev - h) >= 1 ? h : prev));
   }, []);
-  const endSwipeRef = useRef<() => void>(() => {});
-  endSwipeRef.current = () => {
-    const idx = Math.max(0, curIdxRef.current);
-    // 先告诉 UI 线程真列表现在装的是第 idx 页，再把「接管」关掉：任意顺序都不会出现错位帧
-    listIdxSV.value = idx;
-    swipeActive.value = 0;
-    swipeLock.value = 0;
-    setPanelCenter(idx);
-  };
-  const pagerSettleRef = useRef<(idx: number) => void>(() => {});
+  const pagerRestRef = useRef<(idx: number) => void>(() => {});
   const pagerOpenRef = useRef<() => void>(() => {});
-  pagerSettleRef.current = (idx: number) => {
-    const row = totalsByCurrency[idx];
-    if (!row || row[0] === activeCurrency) {
-      // 没有真正的币种变化：直接把列表交还原位
-      endSwipeRef.current();
-      return;
-    }
-    // 记下「这次是横滑提交」：币种变化的 effect 据此跳过淡出换表，直接换数据并等上屏后无缝交接
-    swipeCommitRef.current = row[0];
-    if (__DEV__) swipeT0Ref.current = Date.now();
-    setNetWorthCurrency(row[0]);
+  const activeCurrencyRef = useRef(activeCurrency);
+  activeCurrencyRef.current = activeCurrency;
+  const totalsRef = useRef(totalsByCurrency);
+  totalsRef.current = totalsByCurrency;
+  const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 翻页动画落定（UI 线程回调进来）：不立刻提交，停稳 PAGER_COMMIT_DEBOUNCE_MS 且没有新手势才提交一次。
+  // 提交 = 冻结真列表（预览顶上）→ setNetWorthCurrency → 新列表画上屏（两帧）→ 解冻交接（见币种变化 effect）。
+  // 期间新手势照常进来；它结束后会再次走到这里重新计时。
+  pagerRestRef.current = (idx: number) => {
+    if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
+    const attempt = () => {
+      commitTimerRef.current = null;
+      // 又在拖 / 逻辑页已经不是 idx：放弃（那次手势结束后会重新计时）
+      if (pagerBusy.value === 1 || pagerTargetIdx.value !== idx) return;
+      // 上一次提交还在交接中：稍后再试
+      if (commitInFlightRef.current) {
+        commitTimerRef.current = setTimeout(attempt, 60);
+        return;
+      }
+      const row = totalsRef.current[idx];
+      if (!row || row[0] === activeCurrencyRef.current) return;
+      commitInFlightRef.current = true;
+      listFrozen.value = 1;
+      // 记下「这次是横滑提交」：币种变化的 effect 据此跳过淡出换表，直接换数据并等上屏后无缝交接
+      swipeCommitRef.current = row[0];
+      if (__DEV__) swipeT0Ref.current = Date.now();
+      setNetWorthCurrency(row[0]);
+    };
+    commitTimerRef.current = setTimeout(attempt, PAGER_COMMIT_DEBOUNCE_MS);
   };
   pagerOpenRef.current = openCurrencyMenu;
-  const pagerSettle = useCallback((idx: number) => pagerSettleRef.current(idx), []);
+  const pagerRest = useCallback((idx: number) => pagerRestRef.current(idx), []);
   const pagerOpen = useCallback(() => pagerOpenRef.current(), []);
 
   const multiPage = totalsByCurrency.length > 1;
@@ -1176,22 +1208,15 @@ export default function HomeScreen({ navigation }: any) {
       // 竖向超过 14 就放弃 → 竖向滚动交给外层列表
       .failOffsetY([-12, 12])
       .onStart(() => {
-        // 上一次翻页正在提交 / 等新列表上屏：这一拖忽略（避免真列表位置错位）
-        if (swipeLock.value === 1) {
-          pagerIgnore.value = 1;
-          return;
-        }
-        pagerIgnore.value = 0;
-        // 在途动画先停，再从停下的位置开始拖
+        // 任何时候都可以开始新的一拖（包括翻页动画途中、提交交接途中）：先停在途动画，从停下的位置继续
         cancelAnimation(pagerX);
         pagerBusy.value = 1;
         swipeActive.value = 1;
         pagerStart.value = pagerX.value;
       })
       .onUpdate((e) => {
-        if (pagerIgnore.value === 1) return;
         const w = pagerW.value;
-        // translationX 从手指按下算起，含激活前的 10px → 扣掉，保证拖动连续
+        // translationX 从手指按下算起，含激活前的 4px → 扣掉，保证拖动连续
         const tx = e.translationX - (e.translationX > 0 ? PAGER_ACTIVATE_OFFSET : -PAGER_ACTIVATE_OFFSET);
         const min = -(pagerN.value - 1) * w;
         let nx = pagerStart.value + tx;
@@ -1201,51 +1226,35 @@ export default function HomeScreen({ navigation }: any) {
         pagerX.value = nx;
       })
       .onEnd((e) => {
-        if (pagerIgnore.value === 1) {
-          pagerIgnore.value = 0;
-          return;
-        }
         const w = pagerW.value;
         if (w <= 0) {
           pagerBusy.value = 0;
-          swipeActive.value = 0;
           return;
         }
         const n = pagerN.value;
         const v = e.velocityX;
         const tx = e.translationX - (e.translationX > 0 ? PAGER_ACTIVATE_OFFSET : -PAGER_ACTIVATE_OFFSET);
-        // 起点页 ±1：位移过 3% 页宽，或沿滑动方向的速度 > 80 → 翻到相邻页；否则回弹。
-        // 无论甩得多快都只翻一页（经典分页轮播），左滑 → 下一个币种，右滑 → 上一个
-        const startIdx = Math.round(-pagerStart.value / w);
+        // 从「逻辑页」（动画目标页；没有动画就是当前页）±1：位移过 3% 页宽，或沿滑动方向的速度 > 80 → 翻到相邻页；
+        // 否则回到逻辑页。无论甩得多快都只翻一页（经典分页轮播），连续快速翻页每次也只前进一页
+        const startIdx = pagerTargetIdx.value;
         const dir = tx !== 0 ? (tx < 0 ? 1 : -1) : v < 0 ? 1 : -1;
         const flick = (dir === 1 && v < -PAGER_FLICK_V) || (dir === -1 && v > PAGER_FLICK_V);
         const flip = Math.abs(tx) > PAGER_DIST_FRAC * w || flick;
         let idx = flip ? startIdx + dir : startIdx;
         if (idx < 0) idx = 0;
         if (idx > n - 1) idx = n - 1;
+        pagerTargetIdx.value = idx;
         const target = -idx * w;
         if (reduceMotion) {
           pagerX.value = target;
           pagerBusy.value = 0;
-          if (idx === startIdx) {
-            swipeActive.value = 0;
-          } else {
-            swipeLock.value = 1;
-            runOnJS(pagerSettle)(idx);
-          }
+          runOnJS(pagerRest)(idx);
           return;
         }
-        // 只有动画自然结束才提交一次；被新手势打断（finished=false）不提交。
-        // 回弹（idx === startIdx）：落定时位移恰为 0，直接把接管关掉，真列表原位不动
+        // 只有动画自然结束才通知 JS 计时提交；被新手势打断（finished=false）不通知
         pagerX.value = withTiming(target, { duration: PAGER_SETTLE_MS, easing: PAGER_SETTLE_EASE }, (finished) => {
           pagerBusy.value = 0;
-          if (!finished) return;
-          if (idx === startIdx) {
-            swipeActive.value = 0;
-          } else {
-            swipeLock.value = 1;
-            runOnJS(pagerSettle)(idx);
-          }
+          if (finished) runOnJS(pagerRest)(idx);
         });
       });
     const tap = Gesture.Tap()
@@ -1255,7 +1264,7 @@ export default function HomeScreen({ navigation }: any) {
         if (success) runOnJS(pagerOpen)();
       });
     return Gesture.Race(pan, tap);
-  }, [multiPage, reduceMotion, pagerSettle, pagerOpen]);
+  }, [multiPage, reduceMotion, pagerRest, pagerOpen]);
 
 
   // 页宽 / 页数变化（首次测量、增减币种）：瞬时对准当前页，不播动画
@@ -1270,6 +1279,7 @@ export default function HomeScreen({ navigation }: any) {
     const idx = Math.max(0, totalsByCurrency.findIndex(([c]) => c === wanted));
     cancelAnimation(pagerX);
     pagerN.value = Math.max(1, totalsByCurrency.length);
+    pagerTargetIdx.value = idx;
     pagerX.value = -idx * amountRowW;
     // 先写 X 再写宽：reaction 读到 w>0 时 X 已经是目标位置
     pagerW.value = amountRowW;
@@ -1278,6 +1288,8 @@ export default function HomeScreen({ navigation }: any) {
 
   // 外部换页（币种面板选币 / 默认币种变化）：短动画滑到目标页；拖动提交后的同位调用是 no-op
   useEffect(() => {
+    // 横滑提交引起的币种变化：页条已经在用户停的位置（甚至已经翻到下一页），不能再把它拉回来
+    if (swipeCommitRef.current) return;
     if (amountRowW <= 0 || totalsByCurrency.length === 0) return;
     const wanted = netWorthCurrency ?? defaultNetWorthCurrency;
     const idx = Math.max(0, totalsByCurrency.findIndex(([c]) => c === wanted));
@@ -1285,6 +1297,7 @@ export default function HomeScreen({ navigation }: any) {
     // 已经在目标页（拖动提交后的同位调用）：不再动画
     if (Math.abs(pagerX.value - target) < 0.5) return;
     cancelAnimation(pagerX);
+    pagerTargetIdx.value = idx;
     pagerX.value = reduceMotion ? target : withTiming(target, { duration: 200, easing: Easing.out(Easing.cubic) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [netWorthCurrency, defaultNetWorthCurrency]);
@@ -1441,7 +1454,6 @@ export default function HomeScreen({ navigation }: any) {
     if (swipeCommitRef.current) return;
     const idx = Math.max(0, curIdx);
     listIdxSV.value = idx;
-    setPanelCenter(idx);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [curIdx, totalsByCurrency.length]);
   // 币种变化（挂载时不播）：旧列表淡出；二次切换会取消上一段（riseGen 让未执行的上升作废）
@@ -1463,7 +1475,10 @@ export default function HomeScreen({ navigation }: any) {
       setCalSelKey(activeCurrency);
       requestAnimationFrame(() =>
         requestAnimationFrame(() => {
-          endSwipeRef.current();
+          // 交接：先告诉 UI 线程真列表装的是哪一页，再解冻 —— 真列表回到它自己那一页的位置（用户若已翻走，它就在屏幕外）
+          listIdxSV.value = Math.max(0, curIdxRef.current);
+          listFrozen.value = 0;
+          commitInFlightRef.current = false;
           if (__DEV__) console.log(`[swipe] commit→handoff ${Date.now() - swipeT0Ref.current}ms`);
         })
       );
@@ -2099,25 +2114,31 @@ export default function HomeScreen({ navigation }: any) {
     ),
     [t, navigation, styles]
   );
-  // 左右邻页的账单预览（列表模式；每页只画前几行，memo 住，头部区更新不会重渲它们）
+  // 各币种的账单预览（列表模式；每页只画前几行，memo 住，头部区更新不会重渲它们）：按币种代码做 key 一直挂着，
+  // 提交（换当前币种）后实例原样保留。首屏只挂当前币种的左右邻居，Home 空闲后补齐其余币种
+  const [previewsAll, setPreviewsAll] = useState(false);
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => setPreviewsAll(true));
+    return () => task.cancel();
+  }, []);
   const neighbourPanels =
     totalsByCurrency.length > 1 && amountRowW > 0 && !calRendered
-      ? [panelCenter - 1, panelCenter + 1].map((i) => {
-          const row = totalsByCurrency[i];
-          if (!row) return null;
+      ? totalsByCurrency.map(([code], i) => {
+          if (!previewsAll && Math.abs(i - Math.max(0, curIdx)) > 1) return null;
           return (
             <SwipePanel
-              key={row[0]}
+              key={code}
               index={i}
               listIdx={listIdxSV}
               swipeActive={swipeActive}
-              shiftX={listShiftX}
+              frozen={listFrozen}
+              shiftX={swipeShiftX}
               pitch={listPitch}
               top={heroH}
               width={winW}
             >
               <NeighbourList
-                groups={dayGroupsMap.get(row[0]) ?? NO_GROUPS}
+                groups={dayGroupsMap.get(code) ?? NO_GROUPS}
                 buildRow={buildTxRow}
                 renderHeader={renderDayHeader}
                 renderEmpty={renderEmptyState}
@@ -2140,7 +2161,8 @@ export default function HomeScreen({ navigation }: any) {
               index={i}
               listIdx={listIdxSV}
               swipeActive={swipeActive}
-              shiftX={listShiftX}
+              frozen={listFrozen}
+              shiftX={swipeShiftX}
               pitch={listPitch}
               top={heroH}
               width={winW}
