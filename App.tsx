@@ -221,9 +221,9 @@ function NavBarScrim() {
   );
 }
 
-// 中央「记一笔」圆钮（UI V2 §3.4，2026-10-10）：
-// 54pt 圆 + accent 渐变（135°）+ 顶部内高光 + 柔和粉紫投影，**收进悬浮胶囊内部**（不再凸出栏顶）。
-// 触摸区：整圆都在胶囊里，Android 判得中。
+// 中央「记一笔」圆钮（UI V2 §3.4，2026-10-10；V2.4 改几何）：
+// 58pt 圆 + accent 渐变 + 顶部内高光 + 柔和粉紫投影，**凸出栏顶 13**（栏 48 高，圆钮底距栏底 3）。
+// 触摸区：整圆都在外壳内，Android 判得中。
 // 铁律：不加任何按压视觉反馈（无缩放 / 无位移 / 无水波），只保留点击震动。
 function CenterTabButton({ onPress }: { onPress?: () => void }) {
   const { semantic } = useTheme();
@@ -258,9 +258,9 @@ function CenterTabButton({ onPress }: { onPress?: () => void }) {
   );
 }
 
-// 浮空 Tab 栏外壳（UI V2 §3.4）：几何定位（absolute / 左右 16 / 距底 18 / 全圆角胶囊）与
+// 浮空 Tab 栏外壳（UI V2 §3.4）：几何定位（absolute / 左右 16 / 贴安全区 / 高 48 / 全圆角胶囊）与
 // 收起展开的 transform 在这里；材质（栏身色 / 阴影）交给内层栏自己的 tabBarStyle。
-// 中央「+」54 圆收进胶囊内部（不再凸出栏顶）—— 外壳高度 = 栏身高度。
+// 中央「+」58 圆凸出栏顶 13（V2.4）—— 外壳高度 = 栏身 + 凸起。
 // 注意：v7 会以普通函数方式调用 tabBar（tabBar(props) 而非 <tabBar/>），
 // 所以这层不能放 hooks——hooks 全部在 SlidingTabBarInner 组件里。
 function SlidingTabBar(props: any) {
@@ -293,7 +293,7 @@ function SlidingTabBarInner(props: any) {
       style={[
         styles.tabShell,
         {
-          // 栏底距安全区上沿留一道缝隙（浮空观感）；外壳向上多出「圆钮凸起 + 触摸余量」
+          // 栏底贴着安全区上沿（GAP 0）；外壳向上多出圆钮凸起
           bottom: TAB_BAR_GAP + insets.bottom,
           height: TAB_BAR_SHELL_HEIGHT,
           transform: [{ translateY }],
@@ -428,7 +428,7 @@ function AppContent() {
           screenOptions={({ route }) => ({
             headerShown: false,
             // 选中 = 实心图标 + tabActive（夜白 / 日紫）；未选中 = 线框图标 + tabInactive（UI V2 §1）
-            tabBarActiveTintColor: semantic.accentText,
+            tabBarActiveTintColor: semantic.tabActiveLabel,
             // 未选中标签：夜间 .66 alpha 保证 11pt 文字 ≥4.5:1（日间沿用 textTertiary）
             tabBarInactiveTintColor: isDark ? 'rgba(242,240,250,0.66)' : semantic.textTertiary,
             // 无障碍读屏名（标签改成函数式渲染后，库不再自动拼「x, tab, n of m」，显式给名字）
@@ -465,6 +465,9 @@ function AppContent() {
               // 阴影统一交给外层 GlassView 的令牌投影
               elevation: 0,
             },
+            // 图标托默认 31×28（TabBarIcon 的 HIG 尺寸），比 20 号图标多出的 4pt 空档会算进上留白；
+            // 收到 20（=图标本身），图标与标签的墨迹才真正上下等距。
+            tabBarIconStyle: { height: 20 },
             // 自定义 tab 按钮：去掉 Android 默认的灰色水波纹（和紫色水滴叠在一起很脏）。
             // 铁律：底部 Tab 按钮不加任何按压视觉反馈、不发生布局位移（保留震动）
             tabBarButton: (props: any) => (
@@ -472,8 +475,11 @@ function AppContent() {
                 {...props}
                 pressColor="transparent"
                 android_ripple={undefined}
+                // V2.3：库默认顶对齐（styles.tabVerticalUiKit = justifyContent:'flex-start' + padding:5，
+                // 按 Apple HIG 栏高≈内容高设计的），68 高胶囊里多出的高度全堆到标签下方 ——
+                // 图标整体偏上、下方留白翻倍。按钮自身撑满栏高，在这里居中即可上下等距。
                 // 水平内边距收到 4：给 11pt 英文标签（Settings 等）多留一点排版余量
-                style={[props.style, { paddingHorizontal: 4 }]}
+                style={[props.style, { paddingHorizontal: 4, justifyContent: 'center' }]}
               >
                 {/* 选中圆盘：绝对定位画在图标 + 标签之下，不占排版、不随按压变化 */}
                 {props.accessibilityState?.selected ? (
@@ -607,7 +613,7 @@ export default function App() {
 const styles = StyleSheet.create({
   // 浮空 Tab 栏外壳：只负责几何定位 + 承载收起/展开的 transform。
   // 高度 / 距底 / 圆钮槽位在外壳内联给（都要读 insets 与令牌常量）。
-  // 中央「+」整个落在胶囊内部（外壳高度 = 栏身高度），触摸区不再需要额外余量；
+  // 中央「+」凸出栏顶 13（V2.4），整圆都在外壳内；
   // overflow 必须 visible（+ 的投影画到外壳边缘之外）。
   // 左右 16：UI V2 稿的悬浮胶囊缩进（与页面内容边距一致）
   tabShell: {
@@ -635,14 +641,14 @@ const styles = StyleSheet.create({
     height: TAB_CENTER_BUTTON_SIZE,
     alignItems: 'center',
   },
-  // 选中圆盘：绝对定位，居中于栏身（高 68）内
+  // 选中圆盘：绝对定位，居中于栏身（高 48）内（内容 33 + 上下各留 3.5）
   tabDisc: {
     position: 'absolute',
-    top: 9,
+    top: 4,
     left: 8,
     right: 8,
-    height: 50,
-    borderRadius: 25,
+    height: 40,
+    borderRadius: 20,
   },
   // 圆钮顶部柔和高光（上半圆）
   centerButtonGloss: {
