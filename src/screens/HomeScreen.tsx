@@ -5,7 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 
 import { useFocusEffect } from '@react-navigation/native';
-import Reanimated, { useSharedValue, useAnimatedStyle, useDerivedValue, withTiming, withSpring, withSequence, cancelAnimation, runOnJS, useAnimatedReaction, Easing } from 'react-native-reanimated';
+import Reanimated, { useSharedValue, useAnimatedStyle, useDerivedValue, withTiming, withSpring, withSequence, cancelAnimation, runOnJS, runOnUI, useAnimatedReaction, Easing } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -348,11 +348,11 @@ const LIST_RISE_MS = 420;
 const LIST_RISE_LIFT = 28;
 const LIST_RISE_EASE = Easing.bezier(0.22, 1, 0.36, 1);
 // 日历抽屉打开时列表下沉 / 变淡的幅度（C3 使用）
+// 离场的那一层（日历或列表）下沉 36 并完全淡出（opacity 精确到 0）
 const CAL_LIST_LIFT = 36;
-const CAL_LIST_OPACITY_MIN = 0.15;
 // 日历底部弹层：进入 420ms 缓出（快起慢落）；退出 280ms 加速离场；遮罩 = 0.25 × 进度（× 遮罩色自带透明度）
 const CAL_ENTER_MS = 420;
-const CAL_EXIT_MS = 280;
+const CAL_EXIT_MS = 260;
 const CAL_ENTER_EASE = Easing.bezier(0.22, 1, 0.36, 1);
 const CAL_EXIT_EASE = Easing.bezier(0.5, 0, 0.75, 0);
 const CAL_LIFT_MAX = 480;
@@ -360,16 +360,14 @@ const CAL_DIM_MAX = 0.25;
 
 /** 列表格子统一的过渡包装：淡出 × 上升 × 日历下沉。所有格子共用同一份计算，没有逐行错峰。
  *  纯 UI 线程 useAnimatedStyle，不用 entering / exiting 属性（Fabric 下会 addViewAt 崩） */
-function ListFx({ outP, rise, calP, calHidden, shiftX, children }: { outP: SharedValue<number>; rise: SharedValue<number>; calP: SharedValue<number>; calHidden: SharedValue<number>; shiftX: SharedValue<number>; children: React.ReactNode }) {
+function ListFx({ outP, rise, listY, listO, shiftX, children }: { outP: SharedValue<number>; rise: SharedValue<number>; listY: SharedValue<number>; listO: SharedValue<number>; shiftX: SharedValue<number>; children: React.ReactNode }) {
   const style = useAnimatedStyle(() => {
     const r = rise.value;
-    const c = calP.value;
-    // calHidden = 日历弹层已落定、列表整体藏起（仍挂着，不卸载）；退出时 c 降到 0.75→0.6 之间才渐渐现出
-    const m = calHidden.value === 1 ? Math.min(1, Math.max(0, (0.75 - c) / 0.15)) : 1;
     return {
-      opacity: m * outP.value * r * (1 - (1 - CAL_LIST_OPACITY_MIN) * c),
+      // listO / listY = 列表这一层（整体）的进出场：进场从下方升上来 + 0.6→1，离场下沉 36 + 淡到 0
+      opacity: listO.value * outP.value * r,
       // shiftX = 币种横滑时账单列表跟着 hero 横移的距离（不横滑时恒为 0）
-      transform: [{ translateX: shiftX.value }, { translateY: (1 - r) * LIST_RISE_LIFT + CAL_LIST_LIFT * c }],
+      transform: [{ translateX: shiftX.value }, { translateY: (1 - r) * LIST_RISE_LIFT + listY.value }],
     };
   });
   return <Reanimated.View style={style}>{children}</Reanimated.View>;
@@ -563,7 +561,9 @@ function GlassRoundButton({
  *  JS 再忙也不会「点了要停一下才动」；按压缩放也在 UI 线程（共享值 + 弹簧）。
  *  读屏的「激活」动作走 onActivateJS（JS 线程，只在无障碍场景用）。 */
 function GlassRoundTapButton({
-  icon,
+  iconOff,
+  iconOn,
+  onProgress,
   accessibilityLabel,
   accessibilityState,
   onTapUI,
@@ -571,7 +571,10 @@ function GlassRoundTapButton({
   pressSpring,
   testID,
 }: {
-  icon: IconName;
+  /** 关闭态（列表模式）图标 / 开启态（日历模式）图标：UI 线程按 onProgress（0 → 1）交叉淡入淡出，不靠 state */
+  iconOff: IconName;
+  iconOn: IconName;
+  onProgress: SharedValue<number>;
   accessibilityLabel: string;
   accessibilityState?: React.ComponentProps<typeof PressableScale>['accessibilityState'];
   onTapUI: () => void;
@@ -596,6 +599,8 @@ function GlassRoundTapButton({
     [onTapUI, pressSpring, scale]
   );
   const scaleStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+  const offStyle = useAnimatedStyle(() => ({ opacity: 1 - onProgress.value }));
+  const onStyle = useAnimatedStyle(() => ({ opacity: onProgress.value }));
   return (
     <GestureDetector gesture={gesture}>
       <Reanimated.View
@@ -609,7 +614,12 @@ function GlassRoundTapButton({
         testID={testID}
       >
         <GlassView radius="full" style={glassRoundStyles.glass}>
-          <Ionicons name={icon} size={20} color={semantic.textPrimary} />
+          <Reanimated.View style={[glassRoundStyles.iconLayer, offStyle]} pointerEvents="none">
+            <Ionicons name={iconOff} size={20} color={semantic.textPrimary} />
+          </Reanimated.View>
+          <Reanimated.View style={[glassRoundStyles.iconLayer, onStyle]} pointerEvents="none">
+            <Ionicons name={iconOn} size={20} color={semantic.textPrimary} />
+          </Reanimated.View>
         </GlassView>
       </Reanimated.View>
     </GestureDetector>
@@ -620,6 +630,8 @@ function GlassRoundTapButton({
 const glassRoundStyles = StyleSheet.create({
   touch: { width: GLASS_ROUND, height: GLASS_ROUND, borderRadius: GLASS_ROUND / 2 },
   glass: { width: GLASS_ROUND, height: GLASS_ROUND, alignItems: 'center', justifyContent: 'center' },
+  // 双图标交叉淡入淡出：两层叠在同一格里
+  iconLayer: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
 });
 
 // ── accent 渐变主按钮（UI V2：与「记一笔」完成键 / 中央「+」同一条渐变）──
@@ -700,8 +712,8 @@ function SwipePanel({
   pitch,
   top,
   width,
-  sheetP,
-  sheetLift,
+  sheetY,
+  sheetO,
   children,
 }: {
   index: number;
@@ -713,19 +725,18 @@ function SwipePanel({
   pitch: SharedValue<number>;
   top: number;
   width: number;
-  /** 日历邻页：跟真日历弹层同一个进度（sheetP）与下沉距离，横滑时与真日历的竖向位置一致 */
-  sheetP?: SharedValue<number>;
-  sheetLift?: number;
+  /** 日历邻页：跟真日历弹层同一个竖向位移 / 不透明度（横滑时与真日历逐帧一致） */
+  sheetY?: SharedValue<number>;
+  sheetO?: SharedValue<number>;
   children: React.ReactNode;
 }) {
   const style = useAnimatedStyle(() => {
     const base = listIdx.value;
-    const p = sheetP ? sheetP.value : 1;
     return {
-      opacity: swipeActive.value === 1 && (index !== base || frozen.value === 1) ? (sheetP ? 0.6 + 0.4 * p : 1) : 0,
+      opacity: swipeActive.value === 1 && (index !== base || frozen.value === 1) ? (sheetO ? sheetO.value : 1) : 0,
       transform: [
         { translateX: (index - base) * pitch.value + shiftX.value },
-        { translateY: sheetP ? (1 - p) * (sheetLift ?? 0) : 0 },
+        { translateY: sheetY ? sheetY.value : 0 },
       ],
     };
   });
@@ -1415,8 +1426,17 @@ export default function HomeScreen({ navigation }: any) {
   const [shownGroups, setShownGroups] = useState(dayGroups);
   const listOutP = useSharedValue(1); // 旧列表淡出 1→0；新列表上升前保持 0（布局在透明状态下完成）
   const listInT = useSharedValue(1); // 新列表上升 0→1（1 = 静止）
-  const calP = useSharedValue(0); // 日历抽屉进度（0 = 列表，1 = 日历）
-  const calHidden = useSharedValue(0); // 1 = 日历已落定，列表整体藏起（仍挂着）
+  // 日历 ⇄ 列表 = 两张对称的「弹层」：各自有竖向位移（Y）与不透明度（O）两个共享值，
+  // 进场（谁进来谁用）：从下方 min(480, 屏高×0.6) 升到 0、不透明度 0.6→1（420ms 缓出）；
+  // 离场（谁离开谁用）：下沉 36、不透明度精确淡到 0（260ms 加速）。每个值都从「当前值」出发，连点不会跳。
+  // calP 只给遮罩用（0.25 × 日历进度）；viewP（0 = 列表 / 1 = 日历）给开关图标做 UI 线程交叉淡入淡出。
+  const calP = useSharedValue(0);
+  const calY = useSharedValue(CAL_LIST_LIFT);
+  const calO = useSharedValue(0);
+  const listY = useSharedValue(0);
+  const listO = useSharedValue(1);
+  const viewP = useSharedValue(0);
+  const calLiftSV = useSharedValue(CAL_LIFT_MAX);
   const calTarget = useSharedValue(0); // 开关的目标状态（1 = 日历）：UI 线程点按据此决定开 / 关
   const calReady = useSharedValue(0); // 1 = 日历卡已挂载好，可以直接在 UI 线程起动画
   const listTransitionRef = useRef(false);
@@ -1507,12 +1527,12 @@ export default function HomeScreen({ navigation }: any) {
     () =>
       function TxSeparatorFadedItem() {
         return (
-          <ListFx outP={listOutP} rise={listInT} calP={calP} calHidden={calHidden} shiftX={listShiftX}>
+          <ListFx outP={listOutP} rise={listInT} listY={listY} listO={listO} shiftX={listShiftX}>
             <TxSeparator />
           </ListFx>
         );
       },
-    [listOutP, listInT, calP, calHidden, listShiftX]
+    [listOutP, listInT, listY, listO, listShiftX]
   );
 
   // 视图切换时把列表滚回顶部用（只读调用 scrollToOffset，不影响既有滚动行为）
@@ -1591,12 +1611,12 @@ export default function HomeScreen({ navigation }: any) {
     );
   }, [t, getCategoryById, getAssetById, navigation]);
   const renderTxRow = useCallback(({ item, index, section }: { item: Transaction; index: number; section: TxDaySection }) => (
-    <ListFx outP={listOutP} rise={listInT} calP={calP} calHidden={calHidden} shiftX={listShiftX}>
+    <ListFx outP={listOutP} rise={listInT} listY={listY} listO={listO} shiftX={listShiftX}>
       {buildTxRow(item, index, section, item.id === flashTxId)}
     </ListFx>
     // 依赖：渲染期读到的都列进来；stable 的 renderItem 让 VirtualizedList 的 CellRenderer
     //（PureComponent，比较 renderItem 身份 + item 身份）在滚动 / 切 Tab 时跳过重渲染
-  ), [buildTxRow, flashTxId, listOutP, listInT, calP, calHidden, listShiftX]);
+  ), [buildTxRow, flashTxId, listOutP, listInT, listY, listO, listShiftX]);
 
   // 日期头（V2 稿）：左「今天」（15/500）+ 紧跟的「10月10日 周六」（caption 弱化色），
   // 右侧「支出 43.60」（caption 次要色，收入仍用收入绿）—— wrap 行：放不下自动换行，不缩字不省略；
@@ -1651,11 +1671,11 @@ export default function HomeScreen({ navigation }: any) {
   // 列表内的日期头：切币种过渡时跟着列表淡出 / 上滑（吸顶条 / pinnedHeader 仍直接用 renderDayHeader，不动）
   const renderSectionHeaderEntering = useCallback(
     ({ section }: { section: TxDaySection }) => (
-      <ListFx outP={listOutP} rise={listInT} calP={calP} calHidden={calHidden} shiftX={listShiftX}>
+      <ListFx outP={listOutP} rise={listInT} listY={listY} listO={listO} shiftX={listShiftX}>
         {renderDayHeader({ section })}
       </ListFx>
     ),
-    [renderDayHeader, listOutP, listInT, calP, calHidden, listShiftX]
+    [renderDayHeader, listOutP, listInT, listY, listO, listShiftX]
   );
 
   // 行间发丝分割线 = 模块作用域的 TxSeparator（稳定组件标识，见其定义处注释）
@@ -1684,25 +1704,22 @@ export default function HomeScreen({ navigation }: any) {
   // 只在日历模式消费 dayGroups 派生数据，账单列表及其全部逻辑零改动。
   // viewMonth 独立记忆：切回详情再进来月份不重置
   const [viewMode, setViewMode] = useState<'detail' | 'calendar'>('detail');
-  // 日历底部弹层：一个共享进度 calP（0 = 列表，1 = 日历）驱动所有层，快速连点时从当前值续跑（cancelAnimation）。
-  //  打开：日历卡从下方 min(480, 屏高×0.6) 处升到原位（420ms 缓出）；列表同时下沉 36 并淡到 0.15；
-  //        遮罩 = 0.25 × 进度；落定瞬间（UI 线程回调里）把列表整体藏起（仍挂着，不卸载）。
-  //  关闭：日历卡沿加速曲线落回（280ms）；列表在进度降到 0.75→0.6 之间渐渐现出，始终不会整屏空白。
-  //  日历卡常驻挂载（空闲时预热、藏在屏幕下方，pointerEvents none）：开关只动共享值，不挂载 / 卸载 ——
-  //  按下按钮先在 UI 线程起动画，再把「重」的 state 变化（viewMode / 列表区高度夹取等）推迟一帧。
-  //  日历卡是绝对定位（贴在列表起点），不占布局，列表区不会跳动。
+  // 日历底部弹层（见上面 calY / calO / listY / listO 的说明）：
+  //  · 日历卡与列表都常驻挂载、数据原样保留（不清 sections、不挂载 / 卸载），关闭的那一层 opacity 精确为 0；
+  //  · 点按在 UI 线程直接起动画（共享值），触感 fire-and-forget；React state viewMode 只在动画完全结束之后才更新
+  //    （图标 / 无障碍状态 / 日历邻页挂载 / 列表区高度夹取 / 弹层 pointerEvents 都靠它），
+  //    所以切换路径上没有任何重渲染；第二次点按会取消还没执行的收尾，从当前值继续。
+  //  · 日历卡是绝对定位（贴在列表起点），不占布局，列表区不会跳动。
   const [calMounted, setCalMounted] = useState(false);
   const calMountedRef = useRef(false);
   calMountedRef.current = calMounted;
   useEffect(() => {
     calReady.value = calMounted ? 1 : 0;
   }, [calMounted, calReady]);
-  const [calExiting, setCalExiting] = useState(false);
-  const [calSettled, setCalSettled] = useState(false);
   const [calH, setCalH] = useState(0);
   const onCalLayoutH = useCallback((h: number) => setCalH((prev) => (Math.abs(prev - h) >= 1 ? h : prev)), []);
-  const viewModeRef = useRef<'detail' | 'calendar'>('detail');
-  const calRendered = viewMode === 'calendar' || calExiting;
+  const calRendered = viewMode === 'calendar';
+  const calSettled = viewMode === 'calendar';
   const { width: winW, height: screenH } = useWindowDimensions();
   // 列表一页的间距 = 窗口宽（UI 线程读）
   useEffect(() => {
@@ -1720,162 +1737,133 @@ export default function HomeScreen({ navigation }: any) {
     };
   }, []);
   const calLift = Math.min(CAL_LIFT_MAX, screenH * 0.6);
+  useEffect(() => {
+    calLiftSV.value = calLift;
+  }, [calLift, calLiftSV]);
   const calTop = heroH;
   const calEnterStyle = useAnimatedStyle(() => ({
-    // 关闭态完全透明（藏在屏幕下方、不画）；打开过程 0.6 → 1
-    opacity: calP.value > 0.001 ? 0.6 + 0.4 * calP.value : 0,
+    // 关闭态 opacity 精确为 0（藏在屏幕下方、不画）
+    opacity: calO.value,
     // translateX = 横滑换币种时日历跟着 hero 横移（平时为 0）
-    transform: [{ translateX: listShiftX.value }, { translateY: (1 - calP.value) * calLift }],
+    transform: [{ translateX: listShiftX.value }, { translateY: calY.value }],
   }));
   const calDimStyle = useAnimatedStyle(() => ({ opacity: CAL_DIM_MAX * calP.value }));
-  // 列表始终挂着；日历落定后它被藏起（opacity 0），列表区的滚动高度夹成「头部 + 日历」，不会滚进一大片空白
+  // 列表始终挂着（日历模式下它 opacity 0）；日历模式下列表区的滚动高度夹成「头部 + 日历」，不会滚进一大片空白
   const listSections = shownGroups;
   const calContentH = calH > 0 ? heroH + calH + tabClearance + 12 : 0;
   const listContentStyle = useMemo(
     () =>
       calRendered && calContentH > 0
-        ? {
-            paddingBottom: tabClearance,
-            minHeight: calContentH,
-            ...(calSettled ? { maxHeight: calContentH, overflow: 'hidden' as const } : null),
-          }
+        ? { paddingBottom: tabClearance, minHeight: calContentH, maxHeight: calContentH, overflow: 'hidden' as const }
         : { paddingBottom: tabClearance },
-    [calRendered, calSettled, calContentH, tabClearance]
+    [calRendered, calContentH, tabClearance]
   );
-  const onCalEntered = useCallback(() => setCalSettled(true), []);
-  const onCalExited = useCallback(() => setCalExiting(false), []);
-  // 重的 state 变化（viewMode / 列表区高度夹取 / 邻页日历挂载等）：动画已经在 UI 线程跑起来之后才提交
-  const commitCalState = useCallback((nextMode: 'detail' | 'calendar') => {
-    if (viewModeRef.current !== nextMode) return;
-    if (nextMode === 'calendar') {
-      setCalExiting(false);
-      setCalSettled(false);
-      setViewMode('calendar');
-    } else {
-      setCalSettled(false);
-      setCalExiting(true);
-      setViewMode('detail');
-    }
-  }, []);
-  // JS 路径（兜底）：日历卡还没预热好时点了 —— 先挂上（藏着），画出来再起动画
-  const toggleCalendarMode = useCallback(
-    (nextMode: 'detail' | 'calendar') => {
-      viewModeRef.current = nextMode;
-      calTarget.value = nextMode === 'calendar' ? 1 : 0;
-      const reduce = motion.reduceMotion;
-      const run = () => {
-        if (viewModeRef.current !== nextMode) return;
-        cancelAnimation(calP);
-        if (nextMode === 'calendar') {
-          if (reduce) {
-            commitCalState(nextMode);
-            calP.value = 1;
-            calHidden.value = 1;
-            setCalSettled(true);
-            return;
-          }
-          const dur = CAL_ENTER_MS * Math.max(0.2, 1 - calP.value);
-          calP.value = withTiming(1, { duration: dur, easing: CAL_ENTER_EASE }, (finished) => {
-            if (finished) {
-              calHidden.value = 1;
-              runOnJS(onCalEntered)();
-            }
-          });
-        } else {
-          if (reduce) {
-            commitCalState(nextMode);
-            calP.value = 0;
-            calHidden.value = 0;
-            setCalExiting(false);
-            return;
-          }
-          const dur = CAL_EXIT_MS * Math.max(0.2, calP.value);
-          calP.value = withTiming(0, { duration: dur, easing: CAL_EXIT_EASE }, (finished) => {
-            if (finished) {
-              calHidden.value = 0;
-              runOnJS(onCalExited)();
-            }
-          });
-        }
-        requestAnimationFrame(() => commitCalState(nextMode));
-      };
-      if (nextMode === 'calendar' && !calMountedRef.current) {
-        setCalMounted(true);
-        requestAnimationFrame(() => requestAnimationFrame(run));
-        return;
-      }
-      run();
-    },
-    [calP, calHidden, calTarget, motion.reduceMotion, onCalEntered, onCalExited, commitCalState]
-  );
-  // 动画已在 UI 线程起跑之后（下一帧）才在 JS 线程做的事：触感、提交 state、切回列表时滚回顶部
-  const afterCalToggle = useCallback(
-    (open: boolean) => {
-      const nextMode = open ? 'calendar' : 'detail';
-      viewModeRef.current = nextMode;
-      hapticLight();
-      requestAnimationFrame(() => {
-        commitCalState(nextMode);
-        if (motion.reduceMotion) {
-          if (open) setCalSettled(true);
-          else setCalExiting(false);
-        }
-      });
-      // 切回列表时滚回顶部（避免长列表滚动位置残留、切回来看不到列表头）。
-      // 空账本（dayGroups 为空）没有可滚的 item：不滚，否则 scrollToIndex 越界崩溃
-      if (!open && dayGroupsRef.current.length > 0) {
-        requestAnimationFrame(() => {
-          try {
-            listRef.current?.scrollToLocation({ sectionIndex: 0, itemIndex: 0, animated: false });
-          } catch {
-            // 列表已被卸载或数据已清空：忽略，保持当前位置
-          }
-        });
-      }
-    },
-    [commitCalState, motion.reduceMotion]
-  );
+  // JS 兜底：预热没到就点了 —— 先挂上日历卡（藏着），两帧后在 UI 线程起动画
+  const startSheetsRef = useRef<(open: boolean) => void>(() => {});
   const toggleCalendarJS = useCallback(
     (open: boolean) => {
       hapticLight();
-      toggleCalendarMode(open ? 'calendar' : 'detail');
+      if (!calMountedRef.current) setCalMounted(true);
+      requestAnimationFrame(() => requestAnimationFrame(() => startSheetsRef.current(open)));
     },
-    [toggleCalendarMode]
+    []
   );
-  // 点按入口（UI 线程 worklet）：先在 UI 线程起动画（从当前进度续跑，连点安全），再 runOnJS 做后续
+  // 动画结束之后才更新 state（可被第二次点按取消）
+  const finishHandleRef = useRef<{ cancel: () => void } | null>(null);
+  const finishToggle = useCallback(
+    (open: boolean) => {
+      // 动画结束的回调进来时目标已经被再次点按改掉了：这次收尾作废
+      if ((calTarget.value === 1) !== open) return;
+      if (finishHandleRef.current) finishHandleRef.current.cancel();
+      finishHandleRef.current = InteractionManager.runAfterInteractions(() => {
+        finishHandleRef.current = null;
+        if ((calTarget.value === 1) !== open) return;
+        React.startTransition(() => setViewMode(open ? 'calendar' : 'detail'));
+      });
+    },
+    [calTarget]
+  );
+  // 点按后 JS 线程做的事：触感（fire-and-forget）、取消上一次还没执行的收尾
+  const afterCalTap = useCallback(() => {
+    if (finishHandleRef.current) {
+      finishHandleRef.current.cancel();
+      finishHandleRef.current = null;
+    }
+    hapticLight();
+  }, []);
+  // 起动两张弹层的动画（UI 线程 worklet）：从各值当前位置出发
   const reduceMotionUI = motion.reduceMotion;
+  const startSheets = useCallback(
+    (open: boolean) => {
+      'worklet';
+      cancelAnimation(calY);
+      cancelAnimation(calO);
+      cancelAnimation(calP);
+      cancelAnimation(listY);
+      cancelAnimation(listO);
+      cancelAnimation(viewP);
+      const enterIn = { duration: CAL_ENTER_MS, easing: CAL_ENTER_EASE };
+      const exitOut = { duration: CAL_EXIT_MS, easing: CAL_EXIT_EASE };
+      const lift = calLiftSV.value;
+      if (reduceMotionUI) {
+        calY.value = open ? 0 : CAL_LIST_LIFT;
+        calO.value = open ? 1 : 0;
+        calP.value = open ? 1 : 0;
+        listY.value = open ? CAL_LIST_LIFT : 0;
+        listO.value = open ? 0 : 1;
+        viewP.value = open ? 1 : 0;
+        runOnJS(finishToggle)(open);
+        return;
+      }
+      viewP.value = withTiming(open ? 1 : 0, { duration: 180 });
+      if (open) {
+        // 日历进场：本来是藏着的才从下方起跳；还在离场途中就从当前位置接着进
+        if (calO.value < 0.01) {
+          calY.value = lift;
+          calO.value = 0.6;
+        }
+        calY.value = withTiming(0, enterIn);
+        calO.value = withTiming(1, enterIn);
+        calP.value = withTiming(1, enterIn, (finished) => {
+          if (finished) runOnJS(finishToggle)(true);
+        });
+        // 列表离场：下沉 36 并淡到 0
+        listY.value = withTiming(CAL_LIST_LIFT, exitOut);
+        listO.value = withTiming(0, exitOut);
+      } else {
+        // 列表进场：与日历进场同一套动作（从下方升上来）
+        if (listO.value < 0.01) {
+          listY.value = lift;
+          listO.value = 0.6;
+        }
+        listY.value = withTiming(0, enterIn);
+        listO.value = withTiming(1, enterIn, (finished) => {
+          if (finished) runOnJS(finishToggle)(false);
+        });
+        // 日历离场
+        calY.value = withTiming(CAL_LIST_LIFT, exitOut);
+        calO.value = withTiming(0, exitOut);
+        calP.value = withTiming(0, exitOut);
+      }
+    },
+    [calY, calO, calP, listY, listO, viewP, calLiftSV, reduceMotionUI, finishToggle]
+  );
+  startSheetsRef.current = (open: boolean) => {
+    runOnUI(startSheets)(open);
+  };
+  // 点按入口（UI 线程 worklet）：先起动画，再 runOnJS 做后续
   const toggleCalUI = useCallback(() => {
     'worklet';
     const open = calTarget.value !== 1;
     calTarget.value = open ? 1 : 0;
     if (calReady.value === 0) {
-      // 日历卡还没预热好：交给 JS 路径（先挂载再起动画）
+      // 日历卡还没预热好（极少见）：先在 JS 线程挂上，画出来再起动画
       runOnJS(toggleCalendarJS)(open);
       return;
     }
-    cancelAnimation(calP);
-    if (reduceMotionUI) {
-      calP.value = open ? 1 : 0;
-      calHidden.value = open ? 1 : 0;
-    } else if (open) {
-      const dur = CAL_ENTER_MS * Math.max(0.2, 1 - calP.value);
-      calP.value = withTiming(1, { duration: dur, easing: CAL_ENTER_EASE }, (finished) => {
-        if (finished) {
-          calHidden.value = 1;
-          runOnJS(onCalEntered)();
-        }
-      });
-    } else {
-      const dur = CAL_EXIT_MS * Math.max(0.2, calP.value);
-      calP.value = withTiming(0, { duration: dur, easing: CAL_EXIT_EASE }, (finished) => {
-        if (finished) {
-          calHidden.value = 0;
-          runOnJS(onCalExited)();
-        }
-      });
-    }
-    runOnJS(afterCalToggle)(open);
-  }, [calTarget, calReady, calP, calHidden, reduceMotionUI, toggleCalendarJS, afterCalToggle, onCalEntered, onCalExited]);
+    startSheets(open);
+    runOnJS(afterCalTap)();
+  }, [calTarget, calReady, startSheets, afterCalTap, toggleCalendarJS]);
   const [viewMonth, setViewMonth] = useState(() => {
     const d = new Date();
     return { year: d.getFullYear(), month: d.getMonth() + 1 };
@@ -2166,8 +2154,8 @@ export default function HomeScreen({ navigation }: any) {
               pitch={listPitch}
               top={heroH}
               width={winW}
-              sheetP={calP}
-              sheetLift={calLift}
+              sheetY={calY}
+              sheetO={calO}
             >
               <CalendarShell
                 year={viewMonth.year}
@@ -2275,7 +2263,7 @@ export default function HomeScreen({ navigation }: any) {
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={
           // 日历模式不显示空状态（列表为空是刻意的）；真没账单时才给「记第一笔」
-          <ListFx outP={listOutP} rise={listInT} calP={calP} calHidden={calHidden} shiftX={listShiftX}>
+          <ListFx outP={listOutP} rise={listInT} listY={listY} listO={listO} shiftX={listShiftX}>
             {renderEmptyState()}
           </ListFx>
         }
@@ -2325,11 +2313,16 @@ export default function HomeScreen({ navigation }: any) {
                 )}
               </View>
               <GlassRoundTapButton
-                icon={viewMode === 'detail' ? 'calendar-outline' : 'list-outline'}
+                iconOff="calendar-outline"
+                iconOn="list-outline"
+                onProgress={viewP}
                 accessibilityLabel={t('home.toggleView')}
                 accessibilityState={{ selected: viewMode === 'calendar' }}
                 onTapUI={toggleCalUI}
-                onActivateJS={() => toggleCalendarJS(viewModeRef.current === 'detail')}
+                onActivateJS={() => {
+                  hapticLight();
+                  runOnUI(toggleCalUI)();
+                }}
                 pressSpring={motion.spring.press}
                 testID="home-toggle-view"
               />
