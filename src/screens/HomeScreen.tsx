@@ -5,7 +5,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 
 import { useFocusEffect } from '@react-navigation/native';
-import Reanimated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
+import Reanimated, { useSharedValue, useAnimatedStyle, withTiming, cancelAnimation, runOnJS, useAnimatedReaction, Easing } from 'react-native-reanimated';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -713,76 +714,119 @@ export default function HomeScreen({ navigation }: any) {
   const hasEverHadDataRef = useRef(false);
   // V3：当前币种在列表中的下标（底部小圆点）
   const curIdx = totalsByCurrency.findIndex(([c]) => c === activeCurrency);
-  // ── 净资产横移 = 跟手分页（V3 重做，替换旧的「松手才 step 一步」PanResponder）──
-  // 金额行是一个横向分页 ScrollView（一币种一页）：
-  //   拖动中内容实时跟随手指；过半时 previewIdx 先切到目标页 → 胶囊文字 / 小圆点已经预设好位置；
-  //   吸附结束（onMomentumScrollEnd；web 无惯性事件则由 onScrollEndDrag 的兜底定时器提交）
-  //   才把 netWorthCurrency 提交成该页币种 —— 下方流水 / 本月支出 / 预算仍只在提交时换内容。
-  // 每页 MoneyText 挂载即定格、只在数据真变时才逐位滚动 → 横移切换不再触发滚动动画
-  // （旧版「松手跳变 + 逐位滚动」就是录屏里数字叠影的原因）。
+  // ── 净资产横移 = UI 线程手势分页（替换旧的横向 ScrollView 分页：安卓惯性被截断、拖动中 setState 打断甩动）──
+  // 页条 = 一个 translateX 的横向 strip，页宽 = 行实测宽 pagerW；拖动实时跟手，越界橡皮筋；
+  // 松手时按甩动速度投影出目标页（甩得快可以跨多页），动画结束才把 netWorthCurrency 提交一次；
+  // 胶囊文字 / 小圆点只在「页下标变化」时才 setState（useAnimatedReaction），不随每帧重渲染。
+  // 每页 MoneyText 挂载即定格、只在数据真变时才逐位滚动。
+  const pagerX = useSharedValue(0);
+  const pagerStart = useSharedValue(0);
+  const pagerW = useSharedValue(0);
+  const pagerN = useSharedValue(1);
+  const pagerStripStyle = useAnimatedStyle(() => ({ transform: [{ translateX: pagerX.value }] }));
+  /** 拖动 / 动画中的「预览页下标」（由 reaction 同步；null = 未就绪，用已提交的 curIdx） */
   const [previewIdx, setPreviewIdx] = useState<number | null>(null);
-  const pagerRef = useRef<ScrollView | null>(null);
-  /** 拖动中最近一次「过半」命中的页下标（提交兜底用；onScroll 里同步） */
-  const lastPagerIdxRef = useRef(0);
-  /** onScrollEndDrag 后有没有等来惯性结束事件（web 端常没有 → 兜底定时器直接提交） */
-  const momentumSeenRef = useRef(false);
-  const pagerFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 胶囊 / 小圆点在拖动中读预览下标（previewIdx 为 null = 未在拖动，用已提交的 curIdx）
+  // 胶囊 / 小圆点读预览下标（过半即切换）
   const shownIdx = previewIdx != null && totalsByCurrency[previewIdx] ? previewIdx : curIdx;
   const shownCurrency = totalsByCurrency[shownIdx]?.[0] ?? activeCurrency;
+  const shownRow = totalsByCurrency[shownIdx];
 
-  const commitPagerIdx = useCallback(
-    (idx: number) => {
-      const row = totalsByCurrency[idx];
-      setPreviewIdx(null);
-      if (row && row[0] !== activeCurrency) setNetWorthCurrency(row[0]);
+  // 手势回调里要读最新的 totals / activeCurrency：走 ref，手势对象只在「多页 / 减弱动效」变化时重建
+  const pagerSettleRef = useRef<(idx: number) => void>(() => {});
+  const pagerOpenRef = useRef<() => void>(() => {});
+  pagerSettleRef.current = (idx: number) => {
+    const row = totalsByCurrency[idx];
+    if (row && row[0] !== activeCurrency) setNetWorthCurrency(row[0]);
+  };
+  pagerOpenRef.current = openCurrencyMenu;
+  const pagerSettle = useCallback((idx: number) => pagerSettleRef.current(idx), []);
+  const pagerOpen = useCallback(() => pagerOpenRef.current(), []);
+
+  const multiPage = totalsByCurrency.length > 1;
+  const reduceMotion = motion.reduceMotion;
+  const pagerGesture = useMemo(() => {
+    const pan = Gesture.Pan()
+      .enabled(multiPage)
+      // 水平位移超过 10 才激活；竖向超过 14 就放弃 → 竖向滚动交给外层列表
+      .activeOffsetX([-10, 10])
+      .failOffsetY([-14, 14])
+      .onStart(() => {
+        cancelAnimation(pagerX);
+        pagerStart.value = pagerX.value;
+      })
+      .onUpdate((e) => {
+        const w = pagerW.value;
+        const min = -(pagerN.value - 1) * w;
+        let nx = pagerStart.value + e.translationX;
+        // 两端橡皮筋：越界部分只跟 35%
+        if (nx > 0) nx = nx * 0.35;
+        else if (nx < min) nx = min + (nx - min) * 0.35;
+        pagerX.value = nx;
+      })
+      .onEnd((e) => {
+        const w = pagerW.value;
+        if (w <= 0) return;
+        // 甩动速度投影 0.22s 后，四舍五入到目标页（夹在首尾之间）
+        const proj = pagerX.value + e.velocityX * 0.22;
+        let idx = Math.round(-proj / w);
+        if (idx < 0) idx = 0;
+        if (idx > pagerN.value - 1) idx = pagerN.value - 1;
+        const target = -idx * w;
+        if (reduceMotion) {
+          pagerX.value = target;
+          runOnJS(pagerSettle)(idx);
+          return;
+        }
+        // 临界阻尼（缓出三次方，无回弹）；只有动画自然结束才提交，被新手势打断则不提交
+        pagerX.value = withTiming(target, { duration: 320, easing: Easing.out(Easing.cubic) }, (finished) => {
+          if (finished) runOnJS(pagerSettle)(idx);
+        });
+      });
+    const tap = Gesture.Tap()
+      .maxDistance(10)
+      .maxDuration(500)
+      .onEnd((_e, success) => {
+        if (success) runOnJS(pagerOpen)();
+      });
+    return Gesture.Race(pan, tap);
+  }, [multiPage, reduceMotion, pagerSettle, pagerOpen]);
+
+  // 拖动中：页下标变化才同步到 JS（过半即切；不是每帧）
+  useAnimatedReaction(
+    () => {
+      const w = pagerW.value;
+      if (w <= 0) return -1;
+      const i = Math.round(-pagerX.value / w);
+      return Math.min(Math.max(i, 0), Math.max(0, pagerN.value - 1));
     },
-    [totalsByCurrency, activeCurrency]
-  );
-
-  const handlePagerScroll = useCallback(
-    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-      if (amountRowW <= 0 || totalsByCurrency.length === 0) return;
-      const idx = Math.min(
-        totalsByCurrency.length - 1,
-        Math.max(0, Math.round(e.nativeEvent.contentOffset.x / amountRowW))
-      );
-      lastPagerIdxRef.current = idx;
-      // 过半才进这一支（setState 值相同 React 会跳过，不会每帧重渲染）
-      setPreviewIdx((prev) => (prev === idx ? prev : idx));
-    },
-    [amountRowW, totalsByCurrency.length]
-  );
-
-  const handlePagerDragEnd = useCallback(() => {
-    // 兜底只给 web（RNW 常不发惯性事件）；原生 onMomentumScrollEnd 必发，
-    // 不跑定时器 → 长甩跨页也不会中途提交错误币种
-    if (Platform.OS !== 'web') return;
-    momentumSeenRef.current = false;
-    if (pagerFallbackRef.current) clearTimeout(pagerFallbackRef.current);
-    pagerFallbackRef.current = setTimeout(() => {
-      if (!momentumSeenRef.current) commitPagerIdx(lastPagerIdxRef.current);
-    }, 240);
-  }, [commitPagerIdx]);
-
-  const handlePagerMomentumEnd = useCallback(() => {
-    momentumSeenRef.current = true;
-    if (pagerFallbackRef.current) {
-      clearTimeout(pagerFallbackRef.current);
-      pagerFallbackRef.current = null;
+    (next, prev) => {
+      if (next >= 0 && next !== prev) runOnJS(setPreviewIdx)(next);
     }
-    commitPagerIdx(lastPagerIdxRef.current);
-  }, [commitPagerIdx]);
+  );
 
-  // 外部换页对齐：币种面板选币 / 默认币种变化 / 币种增减时，pager 悄悄对准当前页（不播动画）。
-  // 提交后的 scrollTo 是同位 no-op，无副作用。
+  // 页宽 / 页数变化（首次测量、增减币种）：瞬时对准当前页，不播动画
+  useEffect(() => {
+    if (amountRowW <= 0) return;
+    const wanted = netWorthCurrency ?? defaultNetWorthCurrency;
+    const idx = Math.max(0, totalsByCurrency.findIndex(([c]) => c === wanted));
+    cancelAnimation(pagerX);
+    pagerN.value = Math.max(1, totalsByCurrency.length);
+    pagerX.value = -idx * amountRowW;
+    // 先写 X 再写宽：reaction 读到 w>0 时 X 已经是目标位置
+    pagerW.value = amountRowW;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [amountRowW, totalsByCurrency.length]);
+
+  // 外部换页（币种面板选币 / 默认币种变化）：短动画滑到目标页；拖动提交后的同位调用是 no-op
   useEffect(() => {
     if (amountRowW <= 0 || totalsByCurrency.length === 0) return;
     const wanted = netWorthCurrency ?? defaultNetWorthCurrency;
     const idx = Math.max(0, totalsByCurrency.findIndex(([c]) => c === wanted));
-    pagerRef.current?.scrollTo({ x: idx * amountRowW, y: 0, animated: false });
+    const target = -idx * amountRowW;
+    cancelAnimation(pagerX);
+    pagerX.value = reduceMotion ? target : withTiming(target, { duration: 200, easing: Easing.out(Easing.cubic) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [netWorthCurrency, amountRowW, totalsByCurrency.length]);
+  }, [netWorthCurrency, defaultNetWorthCurrency]);
   // 币种面板行：默认币种（账本基础货币）排第一，其余保持原顺序；搜索按代码 / 中英文名过滤
   const currencySheetRows = useMemo(() => {
     const q = currencyQuery.trim().toLowerCase();
@@ -1442,68 +1486,60 @@ export default function HomeScreen({ navigation }: any) {
                 }}
               >
                 {amountRowW > 0 && (
-                  <ScrollView
-                    ref={pagerRef}
-                    horizontal
-                    snapToInterval={amountRowW}
-                    // 默认衰减率：甩得越重滑得越远（可跨多页），snapToInterval 兜住吸附；
-                    // fast 会让惯性很快停死（甩多重都只翻一页）
-                    showsHorizontalScrollIndicator={false}
-                    scrollEventThrottle={16}
-                    onScroll={handlePagerScroll}
-                    onScrollEndDrag={handlePagerDragEnd}
-                    onMomentumScrollEnd={handlePagerMomentumEnd}
-                    style={{ width: amountRowW }}
-                    contentContainerStyle={{ alignItems: 'center' }}
-                  >
-                    {totalsByCurrency.map(([code, total], i) => (
-                      <View key={code} style={[styles.heroPagerPage, { width: amountRowW }]}>
-                        <PressableScale
-                          onPress={openCurrencyMenu}
-                          disabled={totalsByCurrency.length <= 1}
-                          activeScale={0.98}
-                          hitSlop={0}
-                          style={styles.heroAmountPress}
-                          accessibilityRole="button"
-                          accessibilityLabel={`${t('home.netWorth')}：${
-                            balanceHidden ? HIDDEN_AMOUNT : fmtMoney(total, { currency: code, showCurrency: true })
-                          }`}
-                          testID={i === curIdx ? 'home-amount' : undefined}
-                        >
-                          {balanceHidden ? (
-                            <AppText
-                              variant="display"
-                              color={onGradientText}
-                              style={[styles.heroHiddenAmount, heroShadow]}
-                              numberOfLines={1}
-                            >
-                              {HIDDEN_AMOUNT}
-                            </AppText>
-                          ) : (
-                            <MoneyText
-                              value={total}
-                              kind="plain"
-                              currency={code}
-                              // V2.2：大数字不再带 RM 前缀（上方胶囊已表示币种）——
-                              // 小数点后两位照常保留，读屏标签仍带币种
-                              variant="display"
-                              hero
-                              heroSize={HERO_AMOUNT_SIZE}
-                              weight="700"
-                              heroDecimalSize={22}
-                              heroDecimalWeight="600"
-                              heroDecimalColor={semantic.textSecondary}
-                              heroLetterRatio={-0.03}
-                              color={onGradientText}
-                              compactFallback={false}
-                              accessibilityLabel={fmtMoney(total, { currency: code, showCurrency: true })}
-                              style={heroShadow}
-                            />
-                          )}
-                        </PressableScale>
-                      </View>
-                    ))}
-                  </ScrollView>
+                  <GestureDetector gesture={pagerGesture}>
+                    <Reanimated.View
+                      style={[styles.heroPagerClip, { width: amountRowW }]}
+                      accessible
+                      accessibilityRole="button"
+                      accessibilityLabel={`${t('home.netWorth')}：${
+                        shownRow
+                          ? balanceHidden
+                            ? HIDDEN_AMOUNT
+                            : fmtMoney(shownRow[1], { currency: shownRow[0], showCurrency: true })
+                          : ''
+                      }`}
+                      testID="home-amount"
+                    >
+                      <Reanimated.View
+                        style={[styles.heroPagerStrip, { width: amountRowW * totalsByCurrency.length }, pagerStripStyle]}
+                      >
+                        {totalsByCurrency.map(([code, total]) => (
+                          <View key={code} style={[styles.heroPagerPage, { width: amountRowW }]}>
+                            {balanceHidden ? (
+                              <AppText
+                                variant="display"
+                                color={onGradientText}
+                                style={[styles.heroHiddenAmount, heroShadow]}
+                                numberOfLines={1}
+                              >
+                                {HIDDEN_AMOUNT}
+                              </AppText>
+                            ) : (
+                              <MoneyText
+                                value={total}
+                                kind="plain"
+                                currency={code}
+                                // V2.2：大数字不再带 RM 前缀（上方胶囊已表示币种）——
+                                // 小数点后两位照常保留，读屏标签仍带币种
+                                variant="display"
+                                hero
+                                heroSize={HERO_AMOUNT_SIZE}
+                                weight="700"
+                                heroDecimalSize={22}
+                                heroDecimalWeight="600"
+                                heroDecimalColor={semantic.textSecondary}
+                                heroLetterRatio={-0.03}
+                                color={onGradientText}
+                                compactFallback={false}
+                                accessibilityLabel={fmtMoney(total, { currency: code, showCurrency: true })}
+                                style={heroShadow}
+                              />
+                            )}
+                          </View>
+                        ))}
+                      </Reanimated.View>
+                    </Reanimated.View>
+                  </GestureDetector>
                 )}
               </View>
             )
@@ -1871,6 +1907,9 @@ function makeStyles(
     },
     // V3 跟手分页的一页：页宽 = 行实测宽（JSX 给），金额在页内水平居中
     heroPagerPage: { alignItems: 'center', justifyContent: 'center' },
+    // 手势分页：clip 盒裁掉相邻页；strip 横排、页宽 = 行宽
+    heroPagerClip: { overflow: 'hidden' },
+    heroPagerStrip: { flexDirection: 'row' },
     heroAmountPress: { flexShrink: 1, minWidth: 0 },
     // 隐藏金额（••••••）：与 hero 整数段同字号同行高，避免显隐切换时行高跳动
     heroHiddenAmount: { fontSize: HERO_AMOUNT_SIZE, lineHeight: HERO_AMOUNT_LINE },
