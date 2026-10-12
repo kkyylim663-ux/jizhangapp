@@ -962,6 +962,32 @@ export default function AddTransactionScreen({ navigation, route }: any) {
     }
   });
 
+  // 弹层（账户 / 类别 / 日期 / 小票 / 新建分组 / 图标）关闭后还原计算器面板：
+  // 弹层里的搜索框会弹系统键盘 → keyboardDidShow 把 amountKeypadOpen 清掉；弹层随即卸载时
+  // Android 不一定再发 keyboardDidHide，面板就丢了、Tab 栏随之失去隐藏理由。所以弹层打开时记下
+  // 打开前的面板状态，最后一个弹层关闭时若打开前是开着的就还原（备注框聚焦的共存场景不动）。
+  const overlayOpen =
+    datePickerOpen ||
+    dateSheetOpen ||
+    assetPickerOpen ||
+    catSheetOpen ||
+    accountPickerOpen ||
+    receiptPreviewOpen ||
+    newGroupFormOpen ||
+    iconPickerOpen;
+  const keypadBeforeOverlayRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (!isFocused) return;
+    if (overlayOpen) {
+      if (keypadBeforeOverlayRef.current === null) keypadBeforeOverlayRef.current = amountKeypadOpen;
+      return;
+    }
+    const prior = keypadBeforeOverlayRef.current;
+    keypadBeforeOverlayRef.current = null;
+    if (prior === true && !noteFocusRef.current) setAmountKeypadOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlayOpen, isFocused]);
+
   // 失焦（切走/卸载）时才把强制隐藏交还回去
   useEffect(() => {
     if (!isFocused) {
