@@ -5,7 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 
 import { useFocusEffect } from '@react-navigation/native';
-import Reanimated, { useSharedValue, useAnimatedStyle, withTiming, withSequence, cancelAnimation, runOnJS, useAnimatedReaction, Easing } from 'react-native-reanimated';
+import Reanimated, { useSharedValue, useAnimatedStyle, useDerivedValue, withTiming, withSequence, cancelAnimation, runOnJS, Easing } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -68,8 +68,15 @@ const PAGER_FLING_V = 500;
 const PAGER_DIR_V = 300;
 /** 拖动位移超过页宽的这个比例也翻一页（慢拖过半） */
 const PAGER_DIST_FRAC = 0.25;
-/** 速度超过 PAGER_FLING_V 之后，每多这么多 px/s 额外翻一页 */
-const PAGER_EXTRA_V_STEP = 700;
+/** 速度超过 PAGER_EXTRA_FROM_V 之后，每多 PAGER_EXTRA_STEP_V px/s 额外翻一页（见上） */
+const PAGER_EXTRA_FROM_V = 900;
+const PAGER_EXTRA_STEP_V = 900;
+/** 速度带来的额外页数上限（2 页）；总页数再封顶 PAGER_MAX_PAGES（3 页），v/w 很大时也一样封顶 */
+const PAGER_EXTRA_CAP = 2;
+const PAGER_MAX_PAGES = 3;
+/** 顶部 HUD（只在开发构建）：显示 n / startIdx / velocityX / pages / targetIdx / 已提交币种 / 当前页，方便真机截图对照调参 */
+const SHOW_PAGER_HUD = __DEV__;
+type PagerHud = { n: number; start: number; v: number; pages: number; target: number };
 /** 翻页动画时长：基准 320ms，每多翻一页 +60ms；ease-out cubic，无回弹 */
 const PAGER_BASE_MS = 320;
 const PAGER_EXTRA_MS = 60;
@@ -375,6 +382,28 @@ function ListFx({ outP, rise, calP, children }: { outP: SharedValue<number>; ris
     };
   });
   return <Reanimated.View style={style}>{children}</Reanimated.View>;
+}
+
+/** 净资产胶囊里的一个币种文字：按「当前页距离」淡入淡出，纯 UI 线程（拖动中不 setState） */
+const PILL_LABEL_LAYER = { position: 'absolute' as const, left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center' as const, justifyContent: 'center' as const };
+function PillStackLabel({ index, pos, text, color, textStyle }: { index: number; pos: SharedValue<number>; text: string; color: string; textStyle: TextStyle }) {
+  const style = useAnimatedStyle(() => ({ opacity: Math.min(1, Math.max(0, 1 - Math.abs(pos.value - index) * 2)) }));
+  return (
+    <Reanimated.View style={[PILL_LABEL_LAYER, style]} pointerEvents="none">
+      <AppText variant="caption" weight="600" color={color} style={textStyle} numberOfLines={1}>
+        {text}
+      </AppText>
+    </Reanimated.View>
+  );
+}
+
+/** 页指示点：宽度与透明度按「当前页距离」插值（当前 14 宽、其余 5 宽），纯 UI 线程 */
+function HeroDotFx({ index, pos, color }: { index: number; pos: SharedValue<number>; color: string }) {
+  const style = useAnimatedStyle(() => {
+    const k = Math.max(0, 1 - Math.abs(pos.value - index));
+    return { width: 5 + 9 * k, opacity: 0.45 + 0.55 * k };
+  });
+  return <Reanimated.View style={[{ height: 5, borderRadius: 3, backgroundColor: color }, style]} />;
 }
 
 // 行间发丝分割线（T09 / H4）：与 ListSection 的分割线同款（左右缩进 = 卡内边距，与行文字对齐）。
@@ -721,15 +750,18 @@ export default function HomeScreen({ navigation }: any) {
 
   // 净资产只算当前账本名下的资产——账本之间互不连通，切到"公司账本"就只看公司账本自己的钱
   // 币种列表按 ABC 字母序排列（2026-09-24 用户定版）
+  // getAssetBalance 每次渲染都是新函数：经 ref 读取，memo 只依赖真正的数据（资产 / 交易 / 账本）
+  const getAssetBalanceRef = useRef(getAssetBalance);
+  getAssetBalanceRef.current = getAssetBalance;
   const totalsByCurrency = useMemo(() => {
     const totals: Record<string, number> = {};
     activeAssets
       .filter((a) => a.ledgerId === activeLedgerId)
       .forEach((a) => {
-        totals[a.currency] = (totals[a.currency] || 0) + getAssetBalance(a.id);
+        totals[a.currency] = (totals[a.currency] || 0) + getAssetBalanceRef.current(a.id);
       });
     return Object.entries(totals).sort(([c1], [c2]) => c1.localeCompare(c2));
-  }, [activeAssets, activeLedgerId, getAssetBalance]);
+  }, [activeAssets, activeLedgerId, transactions]);
 
   // 净资产卡显示的币种：多币种时点行调出货币下拉菜单；默认=资产数组第一个账户的币种（兜底全局货币）
   const defaultNetWorthCurrency = useMemo(() => {
@@ -769,7 +801,7 @@ export default function HomeScreen({ navigation }: any) {
   // ── 净资产横移 = UI 线程手势分页（替换旧的横向 ScrollView 分页：安卓惯性被截断、拖动中 setState 打断甩动）──
   // 页条 = 一个 translateX 的横向 strip，页宽 = 行实测宽 pagerW；拖动实时跟手，越界橡皮筋；
   // 松手时按甩动速度投影出目标页（甩得快可以跨多页），动画结束才把 netWorthCurrency 提交一次；
-  // 胶囊文字 / 小圆点只在「页下标变化」时才 setState（useAnimatedReaction），不随每帧重渲染。
+  // 胶囊文字 / 小圆点不 setState：它们直接从共享值 pagerX 读页位置（pagerPos），拖动中零重渲染。
   // 每页 MoneyText 挂载即定格、只在数据真变时才逐位滚动。
   const pagerX = useSharedValue(0);
   const pagerStart = useSharedValue(0);
@@ -778,12 +810,17 @@ export default function HomeScreen({ navigation }: any) {
   /** 1 = 正在拖动或翻页动画中（布局同步不许碰 pagerX） */
   const pagerBusy = useSharedValue(0);
   const pagerStripStyle = useAnimatedStyle(() => ({ transform: [{ translateX: pagerX.value }] }));
-  /** 拖动 / 动画中的「预览页下标」（由 reaction 同步；null = 未就绪，用已提交的 curIdx） */
-  const [previewIdx, setPreviewIdx] = useState<number | null>(null);
-  // 胶囊 / 小圆点读预览下标（过半即切换）
-  const shownIdx = previewIdx != null && totalsByCurrency[previewIdx] ? previewIdx : curIdx;
-  const shownCurrency = totalsByCurrency[shownIdx]?.[0] ?? activeCurrency;
-  const shownRow = totalsByCurrency[shownIdx];
+  /** 当前页位置（浮点下标，0 = 第一个币种）：胶囊与圆点都从它读，拖动中不 setState */
+  const pagerPos = useDerivedValue(() => (pagerW.value > 0 ? -pagerX.value / pagerW.value : 0));
+  /** 已提交的当前币种（拖动中不变，提交后才变） */
+  const curRow = totalsByCurrency[curIdx];
+  const curCode = curRow?.[0] ?? activeCurrency;
+  const pillLabelOf = (code: string) => `${t('home.netWorth')} · ${code}`;
+  const pillWidestLabel = totalsByCurrency.reduce(
+    (best, [code]) => (pillLabelOf(code).length > best.length ? pillLabelOf(code) : best),
+    pillLabelOf(curCode)
+  );
+  const [pagerHud, setPagerHud] = useState<PagerHud | null>(null);
 
   // 手势回调里要读最新的 totals / activeCurrency：走 ref，手势对象只在「多页 / 减弱动效」变化时重建
   const pagerSettleRef = useRef<(idx: number) => void>(() => {});
@@ -805,7 +842,7 @@ export default function HomeScreen({ navigation }: any) {
       // 竖向超过 14 就放弃 → 竖向滚动交给外层列表
       .failOffsetY([-14, 14])
       .onStart(() => {
-        // 在途动画先停，再从停下的位置开始拖（起点在这里记，不在 onBegin 记）
+        // 在途动画先停，再从停下的位置开始拖
         cancelAnimation(pagerX);
         pagerBusy.value = 1;
         pagerStart.value = pagerX.value;
@@ -831,16 +868,17 @@ export default function HomeScreen({ navigation }: any) {
         const v = e.velocityX;
         const absV = Math.abs(v);
         const tx = e.translationX - (e.translationX > 0 ? PAGER_ACTIVATE_OFFSET : -PAGER_ACTIVATE_OFFSET);
-        // 确定性翻页：从按下时所在页出发，按方向走 pages 页（不再靠速度投影，避免只翻一页）
+        // 终点只在这里算一次：起点页 + 方向 × 页数（页数 = 基础 1 页 + 限额的速度额外页，总数封顶）
         const startIdx = Math.round(-pagerStart.value / w);
         const dir = absV > PAGER_DIR_V ? (v < 0 ? 1 : -1) : tx < 0 ? 1 : -1;
         const basePages = Math.abs(tx) > PAGER_DIST_FRAC * w || absV > PAGER_FLING_V ? 1 : 0;
-        const extra = Math.floor(Math.max(0, absV - PAGER_FLING_V) / PAGER_EXTRA_V_STEP);
-        const pages = Math.min(basePages + extra, Math.max(0, n - 1));
+        const extra = Math.min(PAGER_EXTRA_CAP, Math.floor(Math.max(0, absV - PAGER_EXTRA_FROM_V) / PAGER_EXTRA_STEP_V));
+        const pages = Math.min(basePages + extra, PAGER_MAX_PAGES, Math.max(0, n - 1));
         let idx = startIdx + dir * pages;
         if (idx < 0) idx = 0;
         if (idx > n - 1) idx = n - 1;
         if (PAGER_DEBUG) runOnJS(logPagerFling)(v, tx, pages);
+        if (SHOW_PAGER_HUD) runOnJS(setPagerHud)({ n, start: startIdx, v: Math.round(v), pages, target: idx });
         const target = -idx * w;
         if (reduceMotion) {
           pagerX.value = target;
@@ -849,7 +887,7 @@ export default function HomeScreen({ navigation }: any) {
           return;
         }
         const ms = pages === 0 ? 220 : PAGER_BASE_MS + PAGER_EXTRA_MS * (pages - 1);
-        // 只有动画自然结束才提交；被新手势打断（finished=false）不提交
+        // 只有动画自然结束才提交一次；被新手势打断（finished=false）不提交
         pagerX.value = withTiming(target, { duration: ms, easing: Easing.out(Easing.cubic) }, (finished) => {
           pagerBusy.value = 0;
           if (finished) runOnJS(pagerSettle)(idx);
@@ -864,18 +902,6 @@ export default function HomeScreen({ navigation }: any) {
     return Gesture.Race(pan, tap);
   }, [multiPage, reduceMotion, pagerSettle, pagerOpen]);
 
-  // 拖动中：页下标变化才同步到 JS（过半即切；不是每帧）
-  useAnimatedReaction(
-    () => {
-      const w = pagerW.value;
-      if (w <= 0) return -1;
-      const i = Math.round(-pagerX.value / w);
-      return Math.min(Math.max(i, 0), Math.max(0, pagerN.value - 1));
-    },
-    (next, prev) => {
-      if (next >= 0 && next !== prev) runOnJS(setPreviewIdx)(next);
-    }
-  );
 
   // 页宽 / 页数变化（首次测量、增减币种）：瞬时对准当前页，不播动画
   useEffect(() => {
@@ -901,6 +927,8 @@ export default function HomeScreen({ navigation }: any) {
     const wanted = netWorthCurrency ?? defaultNetWorthCurrency;
     const idx = Math.max(0, totalsByCurrency.findIndex(([c]) => c === wanted));
     const target = -idx * amountRowW;
+    // 已经在目标页（拖动提交后的同位调用）：不再动画
+    if (Math.abs(pagerX.value - target) < 0.5) return;
     cancelAnimation(pagerX);
     pagerX.value = reduceMotion ? target : withTiming(target, { duration: 200, easing: Easing.out(Easing.cubic) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1632,6 +1660,14 @@ export default function HomeScreen({ navigation }: any) {
             </View>
           </View>
 
+          {SHOW_PAGER_HUD && (
+            <Text style={styles.pagerHud} pointerEvents="none">
+              {pagerHud
+                ? `[pager] n=${pagerHud.n} start=${pagerHud.start} v=${pagerHud.v} pages=${pagerHud.pages} target=${pagerHud.target}\n`
+                : '[pager] —\n'}
+              {`committed=${curCode} shown=${curIdx}`}
+            </Text>
+          )}
           {/* V3：居中玻璃胶囊「净资产 · 币种 ⌄」= 原币种入口（单币种时按不动，与旧行为一致） */}
           {displayTotal && (
             <View style={styles.heroNetWorthRow}>
@@ -1646,10 +1682,22 @@ export default function HomeScreen({ navigation }: any) {
                 testID="home-currency-pill"
               >
                 <GlassView radius="full" style={styles.heroCurrencyPill}>
-                  <AppText variant="caption" weight="600" color={onGradientText} style={styles.budgetText} numberOfLines={1}>
-                    {/* 拖动过半时这里已经切到目标币种（previewIdx 预置），不用等吸附提交 */}
-                    {`${t('home.netWorth')} · ${shownCurrency}`}
-                  </AppText>
+                  <View style={styles.pillStack}>
+                    {/* 不可见占位：撑出最宽币种的宽度；真正的文字是下面按页距离淡入淡出的几层 */}
+                    <AppText variant="caption" weight="600" color={onGradientText} style={[styles.budgetText, styles.pillSpacer]} numberOfLines={1}>
+                      {pillWidestLabel}
+                    </AppText>
+                    {totalsByCurrency.map(([code], i) => (
+                      <PillStackLabel
+                        key={code}
+                        index={i}
+                        pos={pagerPos}
+                        text={`${t('home.netWorth')} · ${code}`}
+                        color={onGradientText}
+                        textStyle={styles.budgetText}
+                      />
+                    ))}
+                  </View>
                   <Ionicons name="chevron-down" size={12} color={onGradientText} />
                 </GlassView>
               </PressableScale>
@@ -1700,10 +1748,10 @@ export default function HomeScreen({ navigation }: any) {
                       accessible
                       accessibilityRole="button"
                       accessibilityLabel={`${t('home.netWorth')}：${
-                        shownRow
+                        curRow
                           ? balanceHidden
                             ? HIDDEN_AMOUNT
-                            : fmtMoney(shownRow[1], { currency: shownRow[0], showCurrency: true })
+                            : fmtMoney(curRow[1], { currency: curRow[0], showCurrency: true })
                           : ''
                       }`}
                       testID="home-amount"
@@ -1756,9 +1804,8 @@ export default function HomeScreen({ navigation }: any) {
           {/* V3：币种小圆点（5dp，当前 14dp 长条）；只有多于 1 个币种时显示 */}
           {totalsByCurrency.length > 1 && (
             <View style={styles.heroDots} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
-              {/* 拖动中读 shownIdx（预览）：过半时圆点已经指到目标币种页 */}
               {totalsByCurrency.map(([code], i) => (
-                <View key={code} style={[styles.heroDot, { backgroundColor: onGradientText }, i === shownIdx ? styles.heroDotActive : styles.heroDotIdle]} />
+                <HeroDotFx key={code} index={i} pos={pagerPos} color={onGradientText} />
               ))}
             </View>
           )}
@@ -2225,6 +2272,11 @@ function makeStyles(
     currencyCheck: { marginLeft: spacing.xs },
     heroDots: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', columnGap: 6, marginTop: spacing.md },
     heroDot: { height: 5, width: 5, borderRadius: 3 },
+    // 胶囊：所有币种文字叠在同一格里；占位文字不可见
+    pillStack: { alignItems: 'center', justifyContent: 'center' },
+    pillSpacer: { opacity: 0 },
+    // 开发用顶部 HUD（SHOW_PAGER_HUD，正式包不显示）
+    pagerHud: { position: 'absolute', left: 8, top: 0, zIndex: 20, fontSize: 10, lineHeight: 13, color: '#FF2D55' },
     heroDotActive: { width: 14, opacity: 1 },
     heroDotIdle: { opacity: 0.3 },
     currencyMenuScroll: { flexGrow: 0, flexShrink: 1 },
