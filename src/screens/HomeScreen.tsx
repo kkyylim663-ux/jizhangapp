@@ -6,6 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { useFocusEffect } from '@react-navigation/native';
 import Reanimated, { useSharedValue, useAnimatedStyle, withTiming, cancelAnimation, runOnJS, useAnimatedReaction, Easing } from 'react-native-reanimated';
+import type { SharedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -324,6 +325,38 @@ function ledgerCreatedLabel(createdAt: number, lang: LangMode): string {
 /** 账单行的 key：交易 id（稳定函数，放模块作用域避免每次渲染换身份） */
 function txKeyExtractor(item: Transaction) {
   return item.id;
+}
+
+// 切币种列表过渡参数：旧列表淡出 140ms 后，新列表入场时间轴 = 520ms + 前 6 格（0..5）每格错峰 30ms
+const LIST_IN_MS = 520;
+const LIST_IN_STAGGER_MS = 30;
+const LIST_IN_STAGGER_MAX_INDEX = 5;
+const LIST_IN_TOTAL_MS = LIST_IN_MS + LIST_IN_STAGGER_MS * LIST_IN_STAGGER_MAX_INDEX;
+const LIST_IN_LIFT = 36;
+
+/** 列表格子（日期头 / 行）的过渡包装：淡出 = outP；入场 = 本格的缓出三次方进度（上滑 36，无回弹、无缩放）。
+ *  纯 UI 线程 useAnimatedStyle，不用 entering / exiting 属性（Fabric 下会 addViewAt 崩） */
+function ListEnterItem({ index, outP, inT, children }: { index: number; outP: SharedValue<number>; inT: SharedValue<number>; children: React.ReactNode }) {
+  const style = useAnimatedStyle(() => {
+    const delay = Math.min(index, LIST_IN_STAGGER_MAX_INDEX) * LIST_IN_STAGGER_MS;
+    const local = Math.min(1, Math.max(0, (inT.value * LIST_IN_TOTAL_MS - delay) / LIST_IN_MS));
+    const e = 1 - Math.pow(1 - local, 3);
+    return { opacity: outP.value * e, transform: [{ translateY: (1 - e) * LIST_IN_LIFT }] };
+  });
+  return <Reanimated.View style={style}>{children}</Reanimated.View>;
+}
+
+/** 分割线随列表一起淡入淡出（不上滑） */
+function TxSeparatorEnter({ outP, inT }: { outP: SharedValue<number>; inT: SharedValue<number> }) {
+  const style = useAnimatedStyle(() => {
+    const local = Math.min(1, (inT.value * LIST_IN_TOTAL_MS) / LIST_IN_MS);
+    return { opacity: outP.value * (1 - Math.pow(1 - local, 3)) };
+  });
+  return (
+    <Reanimated.View style={style}>
+      <TxSeparator />
+    </Reanimated.View>
+  );
 }
 
 // 行间发丝分割线（T09 / H4）：与 ListSection 的分割线同款（左右缩进 = 卡内边距，与行文字对齐）。
@@ -916,6 +949,53 @@ export default function HomeScreen({ navigation }: any) {
     // ⚠ t 是全局稳定引用：依赖数组必须带 homeLang，切语言后日期与月份分隔才会重算
   }, [ledgerTransactions, activeCurrency, txCurrencyOf, homeLang, t]);
 
+  // ── 切币种列表过渡：旧列表淡出（140ms）→ 换成新币种数据 → 新列表缓慢上滑入场（520ms，无回弹）──
+  // 只作用于 SectionList 的格子（日期头 / 行 / 分割线）：头部、胶囊、小圆点、预算卡都不动。
+  // shownGroups = 列表真正显示的分组；过渡期间冻结在旧数据上，淡出结束才换成当前 dayGroups。
+  const [shownGroups, setShownGroups] = useState(dayGroups);
+  const listOutP = useSharedValue(1);
+  const listInT = useSharedValue(1);
+  const listTransitionRef = useRef(false);
+  const dayGroupsRef = useRef(dayGroups);
+  dayGroupsRef.current = dayGroups;
+  const prevListCurrencyRef = useRef(activeCurrency);
+  const swapInList = useCallback(() => {
+    listTransitionRef.current = false;
+    setShownGroups(dayGroupsRef.current);
+    listOutP.value = 1;
+    listInT.value = 0;
+    listInT.value = withTiming(1, { duration: LIST_IN_TOTAL_MS, easing: Easing.linear });
+  }, [listOutP, listInT]);
+  // 币种变化（挂载时不播）：旧列表淡出 → 结束后 swapInList。被二次切换打断时 cancelAnimation，不会停在 0
+  useEffect(() => {
+    if (prevListCurrencyRef.current === activeCurrency) return;
+    prevListCurrencyRef.current = activeCurrency;
+    cancelAnimation(listOutP);
+    cancelAnimation(listInT);
+    if (motion.reduceMotion) {
+      // 减弱动效：不播动画，dayGroups effect 直接同步
+      listTransitionRef.current = false;
+      listOutP.value = 1;
+      listInT.value = 1;
+      return;
+    }
+    listTransitionRef.current = true;
+    listOutP.value = withTiming(0, { duration: 140, easing: Easing.out(Easing.quad) }, (finished) => {
+      if (finished) runOnJS(swapInList)();
+    });
+  }, [activeCurrency, listOutP, listInT, swapInList, motion.reduceMotion]);
+  // 非过渡期间数据照常同步（新增 / 编辑账单即时可见）；过渡期间跳过，等淡出结束再换
+  useEffect(() => {
+    if (!listTransitionRef.current) setShownGroups(dayGroups);
+  }, [dayGroups]);
+  const TxSeparatorFaded = useMemo(
+    () =>
+      function TxSeparatorFadedItem() {
+        return <TxSeparatorEnter outP={listOutP} inT={listInT} />;
+      },
+    [listOutP, listInT]
+  );
+
   // 视图切换时把列表滚回顶部用（只读调用 scrollToOffset，不影响既有滚动行为）
   const listRef = useRef<SectionList<Transaction, TxDaySection>>(null);
 
@@ -975,23 +1055,25 @@ export default function HomeScreen({ navigation }: any) {
     // 列表卡底边 = 末组最后一行：26 下圆角 + 4pt 卡底边（稿里卡内 padding 下 4）
     const isCardBottom = !!section.isLast && index === (section.data?.length ?? 0) - 1;
     return (
-      <TxRow
-        title={hasOwnTitle ? ownTitle : catName}
-        categoryName={hasOwnTitle ? catName : ''}
-        categoryIcon={catIcon}
-        categoryColor={catColor}
-        accountName={assetName}
-        amount={item.amount}
-        kind={item.type === 'income' ? 'income' : 'expense'}
-        flash={item.id === flashTxId}
-        isCardBottom={isCardBottom}
-        onPress={openEdit}
-        testID={`tx-row-${item.id}`}
-      />
+      <ListEnterItem index={index} outP={listOutP} inT={listInT}>
+        <TxRow
+          title={hasOwnTitle ? ownTitle : catName}
+          categoryName={hasOwnTitle ? catName : ''}
+          categoryIcon={catIcon}
+          categoryColor={catColor}
+          accountName={assetName}
+          amount={item.amount}
+          kind={item.type === 'income' ? 'income' : 'expense'}
+          flash={item.id === flashTxId}
+          isCardBottom={isCardBottom}
+          onPress={openEdit}
+          testID={`tx-row-${item.id}`}
+        />
+      </ListEnterItem>
     );
     // 依赖：渲染期读到的都列进来；stable 的 renderItem 让 VirtualizedList 的 CellRenderer
     //（PureComponent，比较 renderItem 身份 + item 身份）在滚动 / 切 Tab 时跳过重渲染
-  }, [t, getCategoryById, getAssetById, flashTxId, navigation]);
+  }, [t, getCategoryById, getAssetById, flashTxId, navigation, listOutP, listInT]);
 
   // 日期头（V2 稿）：左「今天」（15/500）+ 紧跟的「10月10日 周六」（caption 弱化色），
   // 右侧「支出 43.60」（caption 次要色，收入仍用收入绿）—— wrap 行：放不下自动换行，不缩字不省略；
@@ -1042,6 +1124,16 @@ export default function HomeScreen({ navigation }: any) {
       </View>
     </View>
   ), [semantic, styles, t]);
+
+  // 列表内的日期头：切币种过渡时跟着列表淡出 / 上滑（吸顶条 / pinnedHeader 仍直接用 renderDayHeader，不动）
+  const renderSectionHeaderEntering = useCallback(
+    ({ section }: { section: TxDaySection }) => (
+      <ListEnterItem index={0} outP={listOutP} inT={listInT}>
+        {renderDayHeader({ section })}
+      </ListEnterItem>
+    ),
+    [renderDayHeader, listOutP, listInT]
+  );
 
   // 行间发丝分割线 = 模块作用域的 TxSeparator（稳定组件标识，见其定义处注释）
 
@@ -1325,11 +1417,11 @@ export default function HomeScreen({ navigation }: any) {
         // 安卓开视图裁剪（省内存 / 提升滚动性能）；Web 上无意义且会和 RNW 的测量打架
         removeClippedSubviews={false}
         // 日历模式下 sections 为空：列表不渲染（与旧的 display:none 等价），只剩头部卡
-        sections={viewMode === 'calendar' ? [] : dayGroups}
+        sections={viewMode === 'calendar' ? [] : shownGroups}
         keyExtractor={txKeyExtractor}
         renderItem={renderTxRow}
-        renderSectionHeader={renderDayHeader}
-        ItemSeparatorComponent={TxSeparator}
+        renderSectionHeader={renderSectionHeaderEntering}
+        ItemSeparatorComponent={TxSeparatorFaded}
         // 吸顶（验收定版）：原生用系统吸顶；Web 关掉系统吸顶、改由下面自绘的「吸顶条」承担
         //   —— react-native-web 给每个日期头都套 position:sticky;top:0，包含块是整个内容容器，
         //      所有日期头会永久钉在顶部互相叠着（自检抓到过双头叠影）
