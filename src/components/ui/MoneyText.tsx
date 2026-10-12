@@ -34,7 +34,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { LayoutChangeEvent, Pressable, StyleProp, StyleSheet, TextStyle, View } from 'react-native';
 import Animated, {
-  LinearTransition,
   runOnJS,
   SharedValue,
   useAnimatedStyle,
@@ -628,8 +627,20 @@ export function MoneyText({
   // 减弱动态效果：文字变化时的 150ms 淡入（不滚动、不位移）
   const crossfade = useSharedValue(1);
   const crossfadeStyle = useAnimatedStyle(() => ({ opacity: crossfade.value }));
-  // 数字位数变化时容器宽度做布局过渡（不跳变）；减弱动态效果时关闭
-  const rowLayout = motion.reduceMotion ? undefined : LinearTransition.duration(motion.timing.numberRollTotal * 0.6);
+  // 数字位数变化时容器宽度用共享值过渡（不用 layout 动画：Android Fabric 上子视图增删会 addViewAt 崩溃）
+  const widthSV = useSharedValue(-1);
+  const naturalWRef = useRef(0);
+  const rowWidthStyle = useAnimatedStyle(() => (widthSV.value < 0 ? {} : { width: widthSV.value }));
+  const onNaturalLayout = (e: LayoutChangeEvent) => {
+    const w = Math.round(e.nativeEvent.layout.width);
+    const prev = naturalWRef.current;
+    if (w <= 0 || w === prev) return;
+    naturalWRef.current = w;
+    if (prev > 0 && !motion.reduceMotion) {
+      widthSV.value = prev;
+      widthSV.value = withTiming(w, { duration: motion.timing.numberRollTotal * 0.6, easing: motion.easing.out });
+    }
+  };
   const prevTextRef = useRef<string | null>(null);
   const mountedAtRef = useRef(Date.now());
 
@@ -795,12 +806,12 @@ export function MoneyText({
 
     const heroContent = (
       <Animated.View
-        style={[styles.row, containerStyle]}
-        layout={rowLayout}
+        style={[containerStyle, rowWidthStyle]}
         onLayout={measureWidth}
         accessible={!longPressable}
         accessibilityLabel={longPressable ? undefined : a11yLabel}
       >
+        <View style={[styles.row, styles.rowNatural]} onLayout={onNaturalLayout}>
         {heroParts.prefix ? (
           <AppText variant={variant} weight="300" color={resolvedColor} style={[heroPrefixStyle, cellTextStyle]} numberOfLines={1}>
             {heroParts.prefix}
@@ -832,6 +843,7 @@ export function MoneyText({
           </AppText>
         ) : null}
         {heroMeasureLayer}
+        </View>
       </Animated.View>
     );
 
@@ -899,12 +911,12 @@ export function MoneyText({
 
   return (
     <Animated.View
-      style={[styles.row, containerStyle]}
-      layout={rowLayout}
+      style={[containerStyle, rowWidthStyle]}
       onLayout={measureWidth}
       accessible
       accessibilityLabel={a11yLabel}
     >
+      <View style={[styles.row, styles.rowNatural]} onLayout={onNaturalLayout}>
       {cells.map((cell) => (
         <RollingCell
           key={cell.key}
@@ -921,6 +933,7 @@ export function MoneyText({
         />
       ))}
       {measureLayer}
+      </View>
     </Animated.View>
   );
 }
@@ -932,6 +945,8 @@ const styles = StyleSheet.create({
   cell: { overflow: 'hidden' },
   // 旧字符层：绝对定位在格子左上，滚出去就被裁掉
   cellStrip: { position: 'absolute', top: 0, left: 0, right: 0 },
+  // 数字行的内层：宽度 = 内容宽（测量用，不被外层动画宽度挤压）
+  rowNatural: { alignSelf: 'flex-start' },
   cellGhost: { opacity: 0 },
   // 隐藏测量层：绝对定位 + 透明，只用来量真实宽度（不参与排版）
   measureBox: { position: 'absolute', top: 0, left: 0, opacity: 0, alignItems: 'flex-start' },

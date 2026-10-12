@@ -5,7 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 
 import { useFocusEffect } from '@react-navigation/native';
-import Reanimated, { FadeIn, FadeInDown, FadeOut, FadeOutUp, useSharedValue, useAnimatedStyle, withTiming, withSpring, withDelay } from 'react-native-reanimated';
+import Reanimated, { FadeIn, FadeOut, FadeOutUp, useSharedValue, useAnimatedStyle, withTiming, withSpring, withDelay } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -42,7 +42,6 @@ import { hapticLight, hapticSuccess } from '../utils/haptics';
 // 构建器放模块作用域——写在 JSX 里会在每次渲染时重建。
 // 不传自定义 easing：FadeInDown 的默认曲线就是 ease-out 族，且原生/web 都支持
 // （自定义贝塞尔在布局动画里原生端会报 invalid、web 端被降级成 linear）。
-const CARD_ENTER = [0, 1, 2].map((i) => FadeInDown.duration(240).delay(i * 60));
 
 /** 账本图标兜底色（旧数据无 color 时显示蓝，与 addLedger / 默认账本一致） */
 const DEFAULT_LEDGER_COLOR = '#4C9AFF';
@@ -703,6 +702,24 @@ export default function HomeScreen({ navigation }: any) {
   const activeCurrency = displayTotal?.[0] ?? currency;
   // V3 磁吸入场：切换币种（数据变化）时账单卡从下方 28 滑入 + 淡入，较数字滚动晚 120ms 开始；
   // 首次挂载不播；减弱动态效果时直接落终态
+  // 头部首次进场（挂载时淡入 + 微上滑）与日历卡进场：共享值 + useEffect，不用 entering 动画
+  const heroEnterP = useSharedValue(0);
+  const heroEnterStyle = useAnimatedStyle(() => ({
+    opacity: heroEnterP.value,
+    transform: [{ translateY: (1 - heroEnterP.value) * 12 }],
+  }));
+  useEffect(() => {
+    heroEnterP.value = withTiming(1, { duration: 240, easing: motion.easing.out });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const calEnterP = useSharedValue(1);
+  const calEnterStyle = useAnimatedStyle(() => ({ opacity: calEnterP.value, transform: [{ translateY: (1 - calEnterP.value) * 12 }] }));
+  useEffect(() => {
+    if (viewMode !== 'calendar') return;
+    calEnterP.value = 0;
+    calEnterP.value = withTiming(1, { duration: 240, easing: motion.easing.out });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode]);
   // 列表 remount 锁存：数据第一次非空后永远是 'ready'（左右滑到空币种不再整表重挂）
   const hasEverHadDataRef = useRef(false);
   const listEnterY = useSharedValue(0);
@@ -1220,7 +1237,7 @@ export default function HomeScreen({ navigation }: any) {
         maxToRenderPerBatch={10}
         windowSize={8}
         // 安卓开视图裁剪（省内存 / 提升滚动性能）；Web 上无意义且会和 RNW 的测量打架
-        removeClippedSubviews={Platform.OS === 'android'}
+        removeClippedSubviews={false}
         // 日历模式下 sections 为空：列表不渲染（与旧的 display:none 等价），只剩头部卡
         sections={viewMode === 'calendar' ? [] : dayGroups}
         keyExtractor={txKeyExtractor}
@@ -1256,8 +1273,7 @@ export default function HomeScreen({ navigation }: any) {
             顶部一行（账本胶囊 + 铃铛/日历 44 圆钮）→ 净资产 + 币种玻璃胶囊 → 大金额 + 眼睛 → 预算玻璃卡。
             实测高度写进 heroHeightRef：吸顶日期头据此判断头部区是否已滚出屏幕 */}
         <Reanimated.View
-          entering={CARD_ENTER[0]}
-          style={[styles.heroBlock, { paddingTop: insets.top + 14 }]}
+          style={[styles.heroBlock, { paddingTop: insets.top + 14 }, heroEnterStyle]}
           onLayout={(e) => {
             heroHeightRef.current = e.nativeEvent.layout.height;
           }}
@@ -1494,7 +1510,7 @@ export default function HomeScreen({ navigation }: any) {
             卡面 = GlassView（UI V2.1 §2：全 App 唯一毛玻璃材质，P_Calendar 稿整张日历就是一块玻璃）
             + 圆角 26 / 内衬 12·10·10（与账单列表卡同一张卡的观感） */}
         {viewMode === 'calendar' && (
-          <Reanimated.View entering={FadeInDown.duration(240)}>
+          <Reanimated.View style={calEnterStyle}>
             <View style={styles.calendarWrap}>
               <GlassView radius={26} style={styles.calendarCard}>
                 <MonthCalendarCard
