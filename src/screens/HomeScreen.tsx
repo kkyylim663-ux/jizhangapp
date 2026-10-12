@@ -1188,12 +1188,12 @@ export default function HomeScreen({ navigation }: any) {
     [onTabScroll]
   );
 
+  if (dayGroups.length > 0) hasEverHadDataRef.current = true;
   return (
     <>
     {/* 顶部安全区不由 SafeAreaView 让位（全出血）：V2 的品牌渐变通顶连屏、状态栏压在渐变上
         （状态栏=透明，见 android styles.xml）；内容让位由头部区自身 paddingTop=insets.top 承担
         （见样式 heroTopRow 的 paddingTop 用 insets.top + 14 —— 与稿里「顶部 14」对齐） */}
-  if (dayGroups.length > 0) hasEverHadDataRef.current = true;
     <SafeAreaView style={[styles.container, { backgroundColor: semantic.homeBg }]} edges={[]}
       onTouchStart={() => { Keyboard.dismiss(); }}
     >
