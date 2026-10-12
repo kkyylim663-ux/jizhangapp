@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, SectionList, Modal, TextInput, Platform, Keyboard } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, SectionList, Modal, TextInput, Platform, Keyboard, useWindowDimensions } from 'react-native';
 import type { NativeScrollEvent, NativeSyntheticEvent, TextStyle } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -355,6 +355,13 @@ const LIST_RISE_EASE = Easing.bezier(0.22, 1, 0.36, 1);
 // 日历抽屉打开时列表下沉 / 变淡的幅度（C3 使用）
 const CAL_LIST_LIFT = 36;
 const CAL_LIST_OPACITY_MIN = 0.15;
+// 日历底部弹层：进入 420ms 缓出（快起慢落）；退出 320ms 加速离场；遮罩峰值 0.55（× 遮罩色自带透明度）
+const CAL_ENTER_MS = 420;
+const CAL_EXIT_MS = 320;
+const CAL_ENTER_EASE = Easing.bezier(0.22, 1, 0.36, 1);
+const CAL_EXIT_EASE = Easing.bezier(0.5, 0, 0.75, 0);
+const CAL_LIFT_MAX = 480;
+const CAL_DIM_MAX = 0.55;
 
 /** 列表格子统一的过渡包装：淡出 × 上升 × 日历下沉。所有格子共用同一份计算，没有逐行错峰。
  *  纯 UI 线程 useAnimatedStyle，不用 entering / exiting 属性（Fabric 下会 addViewAt 崩） */
@@ -1221,61 +1228,60 @@ export default function HomeScreen({ navigation }: any) {
   // 只在日历模式消费 dayGroups 派生数据，账单列表及其全部逻辑零改动。
   // viewMonth 独立记忆：切回详情再进来月份不重置
   const [viewMode, setViewMode] = useState<'detail' | 'calendar'>('detail');
-  // 日历抽屉（底部弹入）：calEnterP 0→1 = 卡片自下而上 48→0 + 淡入（420ms，缓出三次方，无回弹 / 缩放）；
-  // 切回列表：卡片下落淡出 220ms，卡片卸载后列表才淡入（卡片卸载时列表还是透明的，不会跳动）。
-  // calDimP = 底下页面背景的浅遮罩：0→1→0（浅浅变深再淡回，只是过渡提示，最终不残留）。
-  const calEnterP = useSharedValue(0);
-  const calDimP = useSharedValue(0);
-  // 切回列表时卡片还要留在树上播完下落动画：calExiting 在动画结束前保持 true
+  // 日历底部弹层：calP（共享，0 = 列表，1 = 日历）驱动所有层，快速连点时从当前 calP 续跑。
+  //  打开：日历卡从屏幕底部附近（min(480, 屏高×0.6)）升到原位；列表同时下沉 36 并淡到 0.15；
+  //        遮罩 = 0.55·sin(π·p)，落定回 0（不残留）。列表在落定后才清空（落定前冻结不动）。
+  //  关闭：日历卡沿加速曲线落回底部（320ms）；列表同时升回并淡入。
+  //  日历卡是绝对定位（贴在列表起点），挂载 / 卸载它不会让列表跳动。
   const [calExiting, setCalExiting] = useState(false);
+  const [calSettled, setCalSettled] = useState(false);
   const calRendered = viewMode === 'calendar' || calExiting;
-  const calEnterStyle = useAnimatedStyle(() => ({ opacity: calEnterP.value, transform: [{ translateY: (1 - calEnterP.value) * 48 }] }));
-  const calDimStyle = useAnimatedStyle(() => ({ opacity: calDimP.value * 0.6 }));
-  // 卡片下落结束：卸载卡片，列表格子同时淡入（220ms）
-  const finishCalExit = useCallback(() => {
-    setCalExiting(false);
-    if (!listTransitionRef.current) {
-      listOutP.value = withTiming(1, { duration: 220, easing: Easing.out(Easing.quad) });
-    }
-  }, [listOutP]);
-  // 切换日历 / 列表（唯一入口）：先取消上一段动画、定好初始值，再切 viewMode（同一批更新，首帧不闪）
+  const { height: screenH } = useWindowDimensions();
+  const calLift = Math.min(CAL_LIFT_MAX, screenH * 0.6);
+  const calTop = heroHeightRef.current;
+  const calEnterStyle = useAnimatedStyle(() => ({
+    opacity: 0.6 + 0.4 * calP.value,
+    transform: [{ translateY: (1 - calP.value) * calLift }],
+  }));
+  const calDimStyle = useAnimatedStyle(() => ({ opacity: CAL_DIM_MAX * Math.sin(Math.PI * calP.value) }));
+  // 日历模式下列表：落定前保留（冻结），落定后清空
+  const listSections = viewMode === 'calendar' && calSettled ? [] : shownGroups;
+  const onCalEntered = useCallback(() => setCalSettled(true), []);
+  const onCalExited = useCallback(() => setCalExiting(false), []);
   const toggleCalendarMode = useCallback(
     (nextMode: 'detail' | 'calendar') => {
-      cancelAnimation(calEnterP);
-      cancelAnimation(calDimP);
+      cancelAnimation(calP);
       const reduce = motion.reduceMotion;
       if (nextMode === 'calendar') {
         setCalExiting(false);
+        setCalSettled(false);
+        setViewMode('calendar');
         if (reduce) {
-          calEnterP.value = 1;
-          calDimP.value = 0;
-        } else {
-          // 从当前值起跑（快速连点时不跳）
-          calEnterP.value = withTiming(1, { duration: 420, easing: Easing.out(Easing.cubic) });
-          calDimP.value = withSequence(
-            withTiming(1, { duration: 260, easing: Easing.out(Easing.quad) }),
-            withTiming(0, { duration: 420, easing: Easing.out(Easing.quad) })
-          );
+          calP.value = 1;
+          setCalSettled(true);
+          return;
         }
-      } else if (reduce) {
-        calEnterP.value = 0;
-        calDimP.value = 0;
-        setCalExiting(false);
-      } else {
-        setCalExiting(true);
-        calDimP.value = withTiming(0, { duration: 220, easing: Easing.out(Easing.quad) });
-        calEnterP.value = withTiming(0, { duration: 220, easing: Easing.out(Easing.cubic) }, (finished) => {
-          if (finished) runOnJS(finishCalExit)();
+        const dur = CAL_ENTER_MS * Math.max(0.2, 1 - calP.value);
+        calP.value = withTiming(1, { duration: dur, easing: CAL_ENTER_EASE }, (finished) => {
+          if (finished) runOnJS(onCalEntered)();
         });
-        // 列表格子先压到透明（新挂上的行此时不可见），等卡片卸载后再淡入；过渡中的币种淡出不抢
-        if (!listTransitionRef.current) {
-          cancelAnimation(listOutP);
-          listOutP.value = 0;
+      } else {
+        // 列表此刻重新挂上（顺着 calP 升回），卡片保留到退出动画结束
+        setCalSettled(false);
+        setCalExiting(true);
+        setViewMode('detail');
+        if (reduce) {
+          calP.value = 0;
+          setCalExiting(false);
+          return;
         }
+        const dur = CAL_EXIT_MS * Math.max(0.2, calP.value);
+        calP.value = withTiming(0, { duration: dur, easing: CAL_EXIT_EASE }, (finished) => {
+          if (finished) runOnJS(onCalExited)();
+        });
       }
-      setViewMode(nextMode);
     },
-    [calEnterP, calDimP, finishCalExit, listOutP]
+    [calP, motion.reduceMotion, onCalEntered, onCalExited]
   );
   const [viewMonth, setViewMonth] = useState(() => {
     const d = new Date();
@@ -1527,7 +1533,7 @@ export default function HomeScreen({ navigation }: any) {
         // 安卓开视图裁剪（省内存 / 提升滚动性能）；Web 上无意义且会和 RNW 的测量打架
         removeClippedSubviews={false}
         // 日历模式下 sections 为空：列表不渲染（与旧的 display:none 等价），只剩头部卡
-        sections={viewMode === 'calendar' ? [] : shownGroups}
+        sections={listSections}
         keyExtractor={txKeyExtractor}
         renderItem={renderTxRow}
         renderSectionHeader={renderSectionHeaderEntering}
@@ -1556,7 +1562,7 @@ export default function HomeScreen({ navigation }: any) {
           )
         }
         ListHeaderComponent={
-          <>
+          <View style={styles.listHeaderLayer}>
         {/* ── 头部区（UI V2 稿，不套卡）：渐变本身铺在页面最底层（见根节点 HeroGradient），
             顶部一行（账本胶囊 + 铃铛/日历 44 圆钮）→ 净资产 + 币种玻璃胶囊 → 大金额 + 眼睛 → 预算玻璃卡。
             实测高度写进 heroHeightRef：吸顶日期头据此判断头部区是否已滚出屏幕 */}
@@ -1817,7 +1823,7 @@ export default function HomeScreen({ navigation }: any) {
             卡面 = GlassView（UI V2.1 §2：全 App 唯一毛玻璃材质，P_Calendar 稿整张日历就是一块玻璃）
             + 圆角 26 / 内衬 12·10·10（与账单列表卡同一张卡的观感） */}
         {calRendered && (
-          <Reanimated.View style={calEnterStyle}>
+          <Reanimated.View style={[styles.calendarAbs, { top: calTop }, calEnterStyle]}>
             <View style={styles.calendarWrap}>
               <GlassView radius={26} style={styles.calendarCard}>
                 <MonthCalendarCard
@@ -1838,7 +1844,7 @@ export default function HomeScreen({ navigation }: any) {
             </View>
           </Reanimated.View>
         )}
-          </>
+          </View>
         }
       />
       {/* 吸顶日期头（自绘，见 pinnedSection 的注释）：钉在列表视口顶部，与内容里的日期头同款；
@@ -2258,6 +2264,9 @@ function makeStyles(
     },
     // 日历卡外层：页面左右边距（与头部区的间距由 heroBlock 的 paddingBottom 给，见其注释）
     calendarWrap: { paddingHorizontal: layout.page },
+    // 日历底部弹层：绝对定位贴在列表起点（top 在 JSX 里按 hero 高度给）；头部层 zIndex 高于列表格子
+    calendarAbs: { position: 'absolute', left: 0, right: 0 },
+    listHeaderLayer: { zIndex: 2 },
     // 玻璃圆角 26（半径由 GlassView 的 radius 给，这里补稿的内衬 12/10/10）
     calendarCard: { paddingTop: 12, paddingHorizontal: 10, paddingBottom: 10 },
     // ── 以下旧的「账单卡 / 空状态 / 账单行（图标托 + 类别(备注)）」样式已按 T09 删除 ──
