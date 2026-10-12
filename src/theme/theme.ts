@@ -450,7 +450,7 @@ export const darkColors: ThemeColors = {
   textTertiary: 'rgba(242,240,250,0.56)',
   link: '#A595FF',
 
-  income: '#3DDC97',
+  income: '#7CF0B8',
   expense: '#A78BFA',
   expenseOver: '#FB7185',
   track: '#26262E',
@@ -557,6 +557,8 @@ export type SemanticColors = {
   tabBar: string;
   /** Tab 选中色（夜白 / 日紫）；未选中色见 tabInactive */
   tabActive: string;
+  /** Tab 选中「标签文字」色：夜间 accentText(#A595FF) 落在栏身上只有 ~4.3:1，改用更亮的 #D2C8FF（≥4.5:1 on 栏身）；日间同 accent */
+  tabActiveLabel: string;
   /** Tab 未选中色 */
   tabInactive: string;
   /** 分割线、卡片描边 */
@@ -611,8 +613,9 @@ export const lightSemantic: SemanticColors = {
   surfaceSunken: '#F3F2F8',
   keypadPanel: '#FFFFFF',
   // Tab 栏 = 唯一玻璃材质（§2）+ V2.2 高不透明度栏身填充：后面的列表文字不再透出来
-  tabBar: 'rgba(255,255,255,0.90)',
+  tabBar: 'rgba(255,255,255,0.94)',
   tabActive: '#5B3DF0',
+  tabActiveLabel: '#5B3DF0',
   tabInactive: '#6A6680', // = textTertiary（§3：Tab 未选中）
   hairline: 'rgba(20,20,40,0.06)',
   switchTrackOff: '#D6D3E0',
@@ -646,8 +649,10 @@ export const darkSemantic: SemanticColors = {
   surfaceSunken: '#1A1A22',
   keypadPanel: '#121219',
   // Tab 栏 = 唯一玻璃材质（§2）+ V2.2 高不透明度栏身填充：后面的列表文字不再透出来
-  tabBar: 'rgba(14,10,30,0.88)',
+  tabBar: 'rgba(14,10,30,0.92)',
   tabActive: '#FFFFFF',
+  // 选中标签文字：#D2C8FF 在栏身最暗到最亮的实测底色（#3A3550 ~ #5A5470）上均 ≥4.5:1
+  tabActiveLabel: '#D2C8FF',
   // ⚠ 不是 textTertiary（0.56）：Tab 标签是 11pt 小字（§4 要 4.5:1），而浮空 Tab 栏是玻璃 +
   //    模糊，实测栏内底色会被下方内容提亮到 rgb(90-104, 80-93, 96-144) —— 0.56 只有 3.0-3.4:1。
   //    0.85 实测 4.48:1（差 0.02 不达标），取 0.90（选中 / 未选中仍靠「实心图标 vs 线框图标 + 亮度差」区分）
@@ -662,7 +667,8 @@ export const darkSemantic: SemanticColors = {
   accentText: '#A595FF',
   accentSoft: 'rgba(165,149,255,0.14)',
   amountExpense: '#B8A6FF', // V3 新规：全 App 支出金额 = 紫（夜）
-  amountIncome: '#3DDC97',
+  // 收入金额（夜）：#3DDC97 在 #5A5470 上仅 4.05:1；#7CF0B8 在卡 #16141F 13:1、在亮玻璃底 5.1:1（≥4.5）
+  amountIncome: '#7CF0B8',
   amountTransfer: 'rgba(242,240,250,0.76)', // = textSecondary
   danger: '#FB7185',
   warning: '#FBBF24',
