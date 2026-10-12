@@ -208,6 +208,19 @@ function AddTransactionStack() {
   );
 }
 
+/** 系统导航栏区（底部安全区）实底遮罩：Expo Go 下原生导航栏设置不生效，由 App 自己画 */
+function NavBarScrim() {
+  const insets = useSafeAreaInsets();
+  const { semantic } = useTheme();
+  if (insets.bottom <= 0) return null;
+  return (
+    <View
+      pointerEvents="none"
+      style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: insets.bottom, backgroundColor: semantic.navBarBg, zIndex: 35 }}
+    />
+  );
+}
+
 // 中央「记一笔」圆钮（UI V2 §3.4，2026-10-10）：
 // 54pt 圆 + accent 渐变（135°）+ 顶部内高光 + 柔和粉紫投影，**收进悬浮胶囊内部**（不再凸出栏顶）。
 // 触摸区：整圆都在胶囊里，Android 判得中。
@@ -523,6 +536,7 @@ function AppContent() {
       {/* V2.2 系统导航栏：日 #F5F2FB 底 + 深色按钮 / 夜 #06050C 底 + 浅色按钮，
           随主题切换（style 的可选值里 dark = 深色按钮、light = 浅色按钮） */}
       <NavigationBar style={isDark ? 'light' : 'dark'} />
+      <NavBarScrim />
     </>
   );
 }

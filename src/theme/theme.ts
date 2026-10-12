@@ -599,6 +599,8 @@ export type SemanticColors = {
   homeIconTile: string;
   /** 选中行底（10% 紫压在卡色上，不透明）：日 #F0EDFE / 夜 #1F1A35 */
   selectedRow: string;
+  /** 系统导航栏区（底部安全区）的实底：日 #F5F2FB / 夜 #06050C */
+  navBarBg: string;
 };
 
 export const lightSemantic: SemanticColors = {
@@ -632,6 +634,7 @@ export const lightSemantic: SemanticColors = {
   homeHairline: 'rgba(21,19,42,0.07)',
   homeIconTile: '#F0EDFA',
   selectedRow: '#F0EDFE',
+  navBarBg: '#F5F2FB',
 };
 
 export const darkSemantic: SemanticColors = {
@@ -669,6 +672,7 @@ export const darkSemantic: SemanticColors = {
   homeHairline: 'rgba(255,255,255,0.07)',
   homeIconTile: '#221E30',
   selectedRow: '#1F1A35',
+  navBarBg: '#06050C',
 };
 
 /**

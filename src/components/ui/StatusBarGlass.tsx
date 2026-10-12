@@ -19,7 +19,7 @@ import React from 'react';
 import { StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../theme/useTheme';
-import GlassView from './GlassView';
+import { LinearGradient } from 'expo-linear-gradient';
 
 /** 挡板层级：只在页面内（根节点）压住滚动内容，低于弹层（BottomSheet 是 90） */
 const Z_INDEX = 40;
@@ -29,13 +29,18 @@ export interface StatusBarGlassProps {
 }
 
 export function StatusBarGlass({ style }: StatusBarGlassProps) {
-  const { semantic } = useTheme();
+  const { isDark } = useTheme();
   const insets = useSafeAreaInsets();
   if (insets.top <= 0) return null;
   return (
-    <View pointerEvents="none" style={[styles.root, { height: insets.top }, style]}>
-      {/* 材质 = 浮空 Tab 栏同款高不透明磨砂（V2.2c）：fill 覆盖 + 无投影（不浮起，只是挡板） */}
-      <GlassView radius={0} fill={semantic.tabBar} shadow={false} pointerEvents="none" style={StyleSheet.absoluteFill} />
+    <View pointerEvents="none" style={[styles.root, { height: insets.top + 6 }, style]}>
+      {/* 顶部渐变遮罩（V3）：页面底色 55% → 透明，不再是不透明色带（Expo Go 下实底会像「白屏/黑条」） */}
+      <LinearGradient
+        colors={isDark ? ['rgba(10,9,16,0.55)', 'rgba(10,9,16,0)'] : ['rgba(244,243,248,0.55)', 'rgba(244,243,248,0)']}
+        locations={[0, 1]}
+        style={StyleSheet.absoluteFill}
+        pointerEvents="none"
+      />
     </View>
   );
 }
