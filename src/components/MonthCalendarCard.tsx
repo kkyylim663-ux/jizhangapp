@@ -4,7 +4,8 @@
 // - 日期数字 = 26 圆：今天 = 选中色实心圆，选中日 = 同色描边圈（普通日隐形描边）
 // - 有账的日期下方金额药丸 = chip 淡底胶囊 + textPrimary 紧凑金额（−1.5k / +6.8k，11pt）
 // - [支出|收入|总额] SegmentedControl 切换药丸显示的指标
-// - 底部当月合计行：总额 / 收入 / 支出
+// - 顶部：[支出|收入|总额] 分段 + 当月合计行（总额 / 收入 / 支出）
+// - 下方：月份导航 + 星期表头 + 月格；有账的日期按当前模式铺热力底色（支出=紫 / 收入=绿 / 总额=按净额正负）
 // 配色统一走 useTheme().semantic 令牌层、字号统一走 AppText / MoneyText 档位（UI_RULES 第 1/2/7 节）。
 // 本组件只负责渲染；月份状态与数据聚合都在 HomeScreen（dayGroups 单一数据源，
 // 保证日历数字与账单列表逐日一致，天然继承币种过滤与转账排除）。
@@ -63,6 +64,27 @@ interface Props {
   onNextMonth: () => void;
   /** 点明细行 → 交给页面走「进入编辑」的现有入口（与首页列表行同一入口） */
   onPressItem?: (id: string) => void;
+}
+
+/** 热力底色透明度区间：最弱 0.10，最强 0.30。上限按对比度定：0.30 时日期字与金额药丸字在日/夜、紫/绿下都 ≥4.5:1；
+ *  0.40 起夜间绿色的药丸字跌到 ~4.15，不达标，所以不取 0.40 */
+const HEAT_MIN_ALPHA = 0.1;
+const HEAT_MAX_ALPHA = 0.3;
+/** 热力底色圆角（日格内的圆角方块，略小于日期圆标外托） */
+const HEAT_RADIUS = 12;
+
+/** 单日热力：底色色相 + 用于强度的数值（绝对值） */
+type HeatCell = { hue: string; value: number };
+
+/** 按当前模式算单日热力；无数据或数值为 0 → null（不铺底色）。
+ *  总额模式：净额 < 0 → 支出紫，> 0 → 收入绿，取 |净额| 作强度 */
+function heatOf(d: CalendarDayTotals | undefined, mode: SegKey, semantic: SemanticColors): HeatCell | null {
+  if (!d) return null;
+  if (mode === 'expense') return d.expense > 0 ? { hue: semantic.amountExpense, value: d.expense } : null;
+  if (mode === 'income') return d.income > 0 ? { hue: semantic.amountIncome, value: d.income } : null;
+  const net = d.income - d.expense;
+  if (net === 0) return null;
+  return net < 0 ? { hue: semantic.amountExpense, value: -net } : { hue: semantic.amountIncome, value: net };
 }
 
 const MONTH_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -239,6 +261,20 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
     return out;
   }, [year, month]);
 
+  // 热力：当月每个有账日期的底色（强度 = sqrt(当日值 / 当月最大值)）；最大值只看本月格
+  const heat = useMemo(() => {
+    const byKey = new Map<string, HeatCell>();
+    let max = 0;
+    for (const c of cells) {
+      if (!c.dateKey) continue;
+      const h = heatOf(days.get(c.dateKey), segKey, semantic);
+      if (!h) continue;
+      byKey.set(c.dateKey, h);
+      if (h.value > max) max = h.value;
+    }
+    return { byKey, max };
+  }, [cells, days, segKey, semantic]);
+
   const todayKey = useMemo(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -260,6 +296,38 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
 
   return (
     <View>
+      {/* 支出/收入/总额 分段：药丸显示哪个指标。
+          SegmentedControl 轨道是 alignSelf:'flex-start'（设置页三颗开关依赖，公共组件不能动）。
+      ⚠ Yoga 里子元素显式 alignSelf 优先级高于父容器 alignItems——用 alignItems:center 抵消无效（真机已验证仍靠左）。
+      正确做法：居中层做成行容器，主轴 justifyContent:center 控制轨道水平位置 */}
+      <View style={styles.segWrap}>
+        <View style={styles.segCenter}>
+          <SegmentedControl options={segOptions as { label: string; value: string }[]} selected={segKey} onSelect={(v) => setSegKey(v as SegKey)} />
+        </View>
+      </View>
+
+      {/* 当月合计行：支出 · 收入 · 总额（与上面分段控件同顺序；数值与计算逻辑不变 —— 验收退回第 5 条）
+          金额走 MoneyText：完整金额放不下时自动降级紧凑格式，长按看完整金额 */}
+      <View style={styles.totalsRow}>
+        <View style={styles.totalsCol}>
+          <MoneyText value={monthExpense} variant="headline" color={semantic.amountExpense} />
+          <AppText variant="caption2" color={semantic.textSecondary} style={styles.totalsLabel}>
+            {t('report.expense')}
+          </AppText>
+        </View>
+        <View style={styles.totalsCol}>
+          <MoneyText value={monthIncome} variant="headline" color={semantic.amountIncome} />
+          <AppText variant="caption2" color={semantic.textSecondary} style={styles.totalsLabel}>
+            {t('report.income')}
+          </AppText>
+        </View>
+        <View style={styles.totalsCol}>
+          <MoneyText value={netTotal} variant="headline" />
+          <AppText variant="caption2" color={semantic.textSecondary} style={styles.totalsLabel}>
+            {t('home.calNet')}
+          </AppText>
+        </View>
+      </View>
       {/* 月份导航（P_Calendar 稿）：36 圆钮 + chip 淡底 + textPrimary 图标 16；
           触控区仍 ≥44（按 v2 稿的 .gb 规格做 44 外框兜住 36 视觉件，与 ui/Chip 同一手法）。
           图标色走 textPrimary（§3：玻璃上的图标文字都用主文字色） */}
@@ -298,6 +366,12 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
           // selectedDate 也是 null，直接 === 会 null===null 恒成立，把所有
           // 跨月格误标成选中（真机截图 bug：跨月日期全被框住）
           const isSelected = !!cell.dateKey && cell.dateKey === selectedDate;
+          // 热力强度：无数据 / 本月最大值为 0 时不铺底色
+          const heatCell = cell.dateKey ? heat.byKey.get(cell.dateKey) : undefined;
+          const heatTint =
+            heatCell && heat.max > 0
+              ? withAlpha(heatCell.hue, HEAT_MIN_ALPHA + (HEAT_MAX_ALPHA - HEAT_MIN_ALPHA) * Math.sqrt(heatCell.value / heat.max))
+              : null;
           // 药丸内容随分段切换；当日无该类收支则不显示。
           // 金额交给 MoneyText（全 App 唯一金额组件）：紧凑格式（1.5k/1.2M）在
           // 7 列窄格（360dp 屏每格约 51dp）里永不换行、不溢出，也不再手写 9pt 字号。
@@ -322,6 +396,8 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
             <View key={idx} style={styles.cell}>
               <PressableScale
                 style={styles.cellInner}
+                // 热力底色（最底层，画在日期圆标和药丸下面；今天 / 选中环在它之上）
+                // 之后的子节点都画在它上面，所以不需要 zIndex
                 // 有账的日期才可点开明细；无账日期/灰显日期点击无动作
                 onPress={cell.dateKey && dayTotals ? () => setSelectedDate((d) => (d === cell.dateKey ? null : cell.dateKey!)) : undefined}
                 activeScale={cell.dateKey && dayTotals ? 0.9 : 1}
@@ -332,6 +408,7 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
                 // 读屏读出「已选中」（UI_RULES 第 8 节：选中态必须可读）
                 accessibilityState={isSelected ? { selected: true } : undefined}
               >
+                {heatTint ? <View pointerEvents="none" style={[styles.heatFill, { backgroundColor: heatTint }]} /> : null}
                 {/* 日期数字的圆标（P_Calendar 稿）：26 圆、描边 1.5 常驻，三态只「换色」——
                     ⚠ 沿用真机铁律（Fabric Android）：几何从挂载起不变、边框常驻，绝不出现
                     「无填充 View 翻入 border/bg」（重建背景 drawable 丢圆角 → 方形）。
@@ -409,38 +486,6 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
         </View>
       )}
 
-      {/* 支出/收入/总额 分段：药丸显示哪个指标。
-          SegmentedControl 轨道是 alignSelf:'flex-start'（设置页三颗开关依赖，公共组件不能动）。
-      ⚠ Yoga 里子元素显式 alignSelf 优先级高于父容器 alignItems——用 alignItems:center 抵消无效（真机已验证仍靠左）。
-      正确做法：居中层做成行容器，主轴 justifyContent:center 控制轨道水平位置 */}
-      <View style={styles.segWrap}>
-        <View style={styles.segCenter}>
-          <SegmentedControl options={segOptions as { label: string; value: string }[]} selected={segKey} onSelect={(v) => setSegKey(v as SegKey)} />
-        </View>
-      </View>
-
-      {/* 当月合计行：支出 · 收入 · 总额（与上面分段控件同顺序；数值与计算逻辑不变 —— 验收退回第 5 条）
-          金额走 MoneyText：完整金额放不下时自动降级紧凑格式，长按看完整金额 */}
-      <View style={styles.totalsRow}>
-        <View style={styles.totalsCol}>
-          <MoneyText value={monthExpense} variant="headline" color={semantic.amountExpense} />
-          <AppText variant="caption2" color={semantic.textSecondary} style={styles.totalsLabel}>
-            {t('report.expense')}
-          </AppText>
-        </View>
-        <View style={styles.totalsCol}>
-          <MoneyText value={monthIncome} variant="headline" color={semantic.amountIncome} />
-          <AppText variant="caption2" color={semantic.textSecondary} style={styles.totalsLabel}>
-            {t('report.income')}
-          </AppText>
-        </View>
-        <View style={styles.totalsCol}>
-          <MoneyText value={netTotal} variant="headline" />
-          <AppText variant="caption2" color={semantic.textSecondary} style={styles.totalsLabel}>
-            {t('home.calNet')}
-          </AppText>
-        </View>
-      </View>
     </View>
   );
 }
@@ -530,18 +575,21 @@ function makeStyles(semantic: SemanticColors, spacing: Spacing, radius: Radius, 
       backgroundColor: chipFill,
       alignItems: 'center',
     },
+    // 热力底色：铺满日格内层，圆角 HEAT_RADIUS；画在最底层
+    heatFill: { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, borderRadius: HEAT_RADIUS },
     segWrap: { paddingVertical: spacing.sm },
     // 抵消 SegmentedControl 轨道 alignSelf:'flex-start' 的居中层：
     // ⚠ Yoga 里子元素显式 alignSelf 优先级高于父容器 alignItems，alignItems:center 抵消无效
     // （真机已验证仍靠左）。必须做成行容器，用主轴 justifyContent:center 让轨道水平居中
     segCenter: { flexDirection: 'row', justifyContent: 'center' },
+    // 合计行在顶部：分隔线挪到下沿（与下方月历隔开）
     totalsRow: {
       flexDirection: 'row',
       alignItems: 'flex-end',
-      borderTopWidth: 1,
-      borderTopColor: semantic.hairline,
-      paddingTop: spacing.md,
-      paddingBottom: spacing.xs,
+      borderBottomWidth: 1,
+      borderBottomColor: semantic.hairline,
+      paddingTop: spacing.xs,
+      paddingBottom: spacing.md,
     },
     totalsCol: { flex: 1, alignItems: 'center' },
     // 合计标签：caption2（11pt 最小档）+ textSecondary（11pt 不许 textTertiary）
