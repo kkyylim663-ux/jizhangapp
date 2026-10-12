@@ -10,7 +10,7 @@
 // 保证日历数字与账单列表逐日一致，天然继承币种过滤与转账排除）。
 import React, { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import Reanimated, { FadeIn } from 'react-native-reanimated';
+import Reanimated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import PressableScale from './PressableScale';
 import SegmentedControl from './SegmentedControl';
 import AppText from './ui/AppText';
@@ -166,6 +166,20 @@ function makeDetailRowStyles(semantic: SemanticColors, spacing: Spacing, layout:
 
 export default function MonthCalendarCard({ year, month, days, monthExpense, monthIncome, onPrevMonth, onNextMonth, onPressItem }: Props) {
   const { semantic, spacing, radius, isDark, glassPill } = useTheme();
+  // 翻月淡入：不用 Reanimated entering/exiting（Android Fabric 上挂载动画会 addViewAt 崩溃），
+  // 改用 shared value 驱动 opacity；首帧不播，之后每次月份变化重新淡入 150ms
+  const monthOpacity = useSharedValue(1);
+  const monthFirstRun = React.useRef(true);
+  useEffect(() => {
+    if (monthFirstRun.current) {
+      monthFirstRun.current = false;
+      return;
+    }
+    monthOpacity.value = 0;
+    monthOpacity.value = withTiming(1, { duration: 150 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [year, month]);
+  const monthFadeStyle = useAnimatedStyle(() => ({ opacity: monthOpacity.value }));
   const t = useT();
   const { langMode } = useLanguage();
   // 「今天 / 选中」的实心色档（P_Calendar 稿 --sel / --selt）：夜 = 白圆 + 深字 #1A1040，
@@ -275,9 +289,8 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
         ))}
       </View>
 
-      {/* 月格：key 随月份变化 → 重新挂载播 150ms 渐显（翻月反馈）。
-          纯静态 Views 上用 entering，不与任何 animated transform 同节点，无冲突 */}
-      <Reanimated.View key={`${year}-${month}`} entering={FadeIn.duration(150)} style={styles.grid}>
+      {/* 月格：翻月时 opacity 淡入 150ms（shared value，见组件顶部注释） */}
+      <Reanimated.View style={[styles.grid, monthFadeStyle]}>
         {cells.map((cell, idx) => {
           const isToday = cell.dateKey === todayKey;
           const dayTotals = cell.dateKey ? days.get(cell.dateKey) : undefined;
