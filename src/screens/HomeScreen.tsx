@@ -603,6 +603,7 @@ export default function HomeScreen({ navigation }: any) {
     budgets,
     setBudget,
     assets,
+    activeAssets,
     paymentPlans,
     getAssetBalance,
     getAssetById,
@@ -704,19 +705,19 @@ export default function HomeScreen({ navigation }: any) {
   // 币种列表按 ABC 字母序排列（2026-09-24 用户定版）
   const totalsByCurrency = useMemo(() => {
     const totals: Record<string, number> = {};
-    assets
+    activeAssets
       .filter((a) => a.ledgerId === activeLedgerId)
       .forEach((a) => {
         totals[a.currency] = (totals[a.currency] || 0) + getAssetBalance(a.id);
       });
     return Object.entries(totals).sort(([c1], [c2]) => c1.localeCompare(c2));
-  }, [assets, activeLedgerId, getAssetBalance]);
+  }, [activeAssets, activeLedgerId, getAssetBalance]);
 
   // 净资产卡显示的币种：多币种时点行调出货币下拉菜单；默认=资产数组第一个账户的币种（兜底全局货币）
   const defaultNetWorthCurrency = useMemo(() => {
-    const first = assets.find((a) => a.ledgerId === activeLedgerId);
+    const first = activeAssets.find((a) => a.ledgerId === activeLedgerId);
     return first?.currency ?? currency;
-  }, [assets, activeLedgerId, currency]);
+  }, [activeAssets, activeLedgerId, currency]);
   // 用户手选的币种代码（null=未手选过，跟随默认）——列表已按 ABC 排序，不能再用下标，否则默认币种会跟着排序漂移
   const [netWorthCurrency, setNetWorthCurrency] = useState<string | null>(null);
   const [currencyMenuOpen, setCurrencyMenuOpen] = useState(false);
@@ -1229,7 +1230,7 @@ export default function HomeScreen({ navigation }: any) {
     const map: Record<string, [string, number][]> = {};
     ledgers.forEach((l) => {
       const totals: Record<string, number> = {};
-      assets
+      activeAssets
         .filter((a) => a.ledgerId === l.id)
         .forEach((a) => {
           totals[a.currency] = (totals[a.currency] || 0) + getAssetBalance(a.id);
@@ -1237,7 +1238,7 @@ export default function HomeScreen({ navigation }: any) {
       map[l.id] = Object.entries(totals);
     });
     return map;
-  }, [ledgers, assets, getAssetBalance]);
+  }, [ledgers, activeAssets, getAssetBalance]);
 
   // ── 删除账本（二级密码确认）──
   // 待删除账本（点了删除并确认后进入 PIN 验证；PIN 通过才真正删除）
