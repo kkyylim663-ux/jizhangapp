@@ -5,7 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 
 import { useFocusEffect } from '@react-navigation/native';
-import Reanimated, { FadeIn, FadeInDown, FadeOut, FadeOutUp, useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
+import Reanimated, { FadeIn, FadeInDown, FadeOut, FadeOutUp, useSharedValue, useAnimatedStyle, withTiming, withSpring, withDelay } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -701,6 +701,25 @@ export default function HomeScreen({ navigation }: any) {
     : '';
   // 净资产当前选中的币种：本月支出合计、预算都跟随它（每个币种各设各的预算）
   const activeCurrency = displayTotal?.[0] ?? currency;
+  // V3 磁吸入场：切换币种（数据变化）时账单卡从下方 28 滑入 + 淡入，较数字滚动晚 120ms 开始；
+  // 首次挂载不播；减弱动态效果时直接落终态
+  const listEnterY = useSharedValue(0);
+  const listEnterOpacity = useSharedValue(1);
+  const prevEnterCurRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevEnterCurRef.current;
+    prevEnterCurRef.current = activeCurrency;
+    if (prev === null || prev === activeCurrency || motion.reduceMotion) return;
+    listEnterY.value = 28;
+    listEnterOpacity.value = 0;
+    listEnterY.value = withDelay(120, withSpring(0, motion.spring.snap));
+    listEnterOpacity.value = withDelay(120, withTiming(1, { duration: motion.timing.fade, easing: motion.easing.out }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCurrency]);
+  const listEnterStyle = useAnimatedStyle(() => ({
+    opacity: listEnterOpacity.value,
+    transform: [{ translateY: listEnterY.value }],
+  }));
   // V3：当前币种在列表中的下标（底部小圆点）；左右滑 = 相邻币种，走同一个 setNetWorthCurrency
   const curIdx = totalsByCurrency.findIndex(([c]) => c === activeCurrency);
   const stepCurrencyRef = useRef<(delta: number) => void>(() => {});
@@ -1182,6 +1201,7 @@ export default function HomeScreen({ navigation }: any) {
           头部（Hero 区 + 日历卡）走 ListHeaderComponent，账单按天分组渲染（吸顶日期头 + 圆形图标行）；
           滚动事件继续透传给 Tab 栏自动隐藏（T07 联动）。
           底部悬空区由 App.tsx 的 TabShell 统一预留（68+18+安全区），这里只留一点呼吸感 */}
+      <Reanimated.View style={[styles.listEnterWrap, listEnterStyle]}>
       <SectionList<Transaction, TxDaySection>
         ref={listRef}
         // ⚠ 数据「空 → 非空」时强制重挂列表 —— 验收退回「只出前几行」的真根因：
@@ -1494,6 +1514,7 @@ export default function HomeScreen({ navigation }: any) {
           </>
         }
       />
+      </Reanimated.View>
       {/* 吸顶日期头（自绘，见 pinnedSection 的注释）：钉在列表视口顶部，与内容里的日期头同款；
           头部区还占着顶部时不显示 —— 只覆盖列表，不盖弹层（zIndex 低于弹层） */}
       {/* 只在列表视图显示：切到日历视图时列表（含吸顶条）必须完全不显示（验收退回第 2 条） */}
@@ -1840,6 +1861,7 @@ function makeStyles(
     },
     // 日期标签（今天 / 昨天 / 10月7日 周三）：可被挤窄，合计整块不被挤
     dayHeaderDate: { flexShrink: 1 },
+    listEnterWrap: { flex: 1 },
     // V3 字号（设计稿逐值）：行标题 14/600、副标题 12/400、日期头 12、预算文字 12.5
     dayHeaderLabelText: { fontSize: 12, lineHeight: 16 },
     budgetText: { fontSize: 12.5, lineHeight: 17 },

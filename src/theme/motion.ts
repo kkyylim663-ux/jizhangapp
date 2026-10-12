@@ -23,12 +23,16 @@ export const motion = {
     sheet: { dampingRatio: 0.85, duration: 400 },
     /** 按压反馈：按下即响应（不等松手） */
     press: { dampingRatio: 1, duration: 180 },
+    /** 磁吸入场（列表卡滑入）：轻微过冲；Reanimated withSpring 原生参数 */
+    snap: { damping: 14, stiffness: 180, mass: 0.9 },
   },
   timing: {
     /** 仅用于淡入淡出 */
     fade: 150,
     /** 净资产 / 预算数字变化的逐位滚动 */
     numberRoll: 600,
+    /** 数字统一滚动总时长（MoneyText：每位从左到右错开，整体 1.2s；可调） */
+    numberRollTotal: 1200,
   },
   /** 淡入淡出缓动（ease-out） */
   easing: { out: Easing.out(Easing.cubic) },
@@ -46,8 +50,9 @@ export const reducedMotion: MotionTokens = {
     default: { dampingRatio: 1, duration: 150 },
     sheet: { dampingRatio: 1, duration: 150 },
     press: { dampingRatio: 1, duration: 150 },
+    snap: { damping: 40, stiffness: 400, mass: 1 },
   },
-  timing: { fade: 150, numberRoll: 0 },
+  timing: { fade: 150, numberRoll: 0, numberRollTotal: 0 },
   easing: { out: Easing.out(Easing.cubic) },
   pressScale: 1,
   reduceMotion: true,

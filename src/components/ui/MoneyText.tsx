@@ -96,10 +96,10 @@ const LETTER_EM: Record<string, number> = {
   Q: 0.773, R: 0.652, S: 0.65, T: 0.66, U: 0.736, V: 0.728, W: 1.02, X: 0.72,
   Y: 0.713, Z: 0.652,
 };
-/** 每位错开 30ms（计划 5.10：每位错开 20–40ms） */
-const STAGGER_MS = 30;
-/** 最多错开 4 位；再多的位数一起滚，避免长数字滚太久 */
-const STAGGER_MAX_STEPS = 4;
+/** 每位错开 60ms，从左（最高位）到右依次启动（V3 统一滚动标准） */
+const STAGGER_MS = 60;
+/** 滚动格里的数字带：0-9 连排两遍，滚动时可以从任一位越过 9 回到 0 */
+const DIGIT_STRIP = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
 /** 挂载后这段时间内的首次赋值 = 首屏数据到位，不滚动（首次加载不滚动） */
 const FIRST_LOAD_WINDOW_MS = 600;
 
@@ -224,28 +224,57 @@ type MoneyCell = {
   char: string;
   /** 上一轮的字符：非 null 表示这格正在滚动 */
   from: string | null;
-  /** 错开延迟（毫秒） */
+  /** 错开延迟（毫秒，从左到右） */
   delay: number;
+  /** 新出现的位（位数变多）：淡入 + 微上滑 */
+  enter: boolean;
+  /** 消失的位（位数变少）：淡出，char = 旧字符 */
+  exit: boolean;
 };
 
-/** 把金额拆成字符格（从左到右渲染，键按「从右数第几位」编号） */
+/** 把金额拆成字符格（从左到右渲染，键按「从右数第几位」编号）。
+ *  stagger = 允许滚动：数字位全部滚动（含未变的位，滚一整圈）；位数增减 → 新位淡入、旧位淡出；
+ *  分隔符 / 符号直换不滚。 */
 function splitCells(text: string, prevText: string | null, stagger: boolean): MoneyCell[] {
-  let prevMap: Map<string, string> | null = null;
-  if (prevText !== null && prevText !== text) {
-    prevMap = new Map(splitChars(prevText).map((c) => [c.key, c.char]));
+  const plain = (c: { key: string; char: string }, i: number): MoneyCell => ({
+    key: c.key,
+    char: c.char,
+    from: null,
+    delay: i * STAGGER_MS,
+    enter: false,
+    exit: false,
+  });
+  if (prevText === null || prevText === text || !stagger) {
+    return splitChars(text).map((c, i) => plain(c, i));
   }
-  return splitChars(text).map(({ key, char, indexFromRight }) => {
-    const prevChar = prevMap?.get(key);
-    // 只有「数字 → 数字」的变化才滚动；逗号 / 小数点 / 符号 / 币种字母直换
-    const rolls =
-      stagger && prevChar !== undefined && prevChar !== char && /\d/.test(char) && /\d/.test(prevChar);
+  const prevMap = new Map(splitChars(prevText).map((c) => [c.key, c.char]));
+  const nowChars = splitChars(text);
+  const nowKeys = new Set(nowChars.map((c) => c.key));
+  const rows: { idx: number; cell: MoneyCell }[] = nowChars.map(({ key, char, indexFromRight }, i) => {
+    const prevChar = prevMap.get(key);
+    const roll = /\d/.test(char) && prevChar !== undefined && /\d/.test(prevChar);
     return {
-      key,
-      char,
-      from: rolls ? (prevChar as string) : null,
-      delay: Math.min(indexFromRight, STAGGER_MAX_STEPS) * STAGGER_MS,
+      idx: indexFromRight,
+      cell: {
+        key,
+        char,
+        from: roll ? (prevChar as string) : null,
+        delay: i * STAGGER_MS,
+        enter: prevChar === undefined,
+        exit: false,
+      },
     };
   });
+  prevMap.forEach((ch, key) => {
+    if (nowKeys.has(key)) return;
+    rows.push({
+      idx: Number(key.slice(1)),
+      cell: { key, char: ch, from: ch, delay: 0, enter: false, exit: true },
+    });
+  });
+  // 从左到右排列（右对齐的键：indexFromRight 大的在左）
+  rows.sort((x, y) => y.idx - x.idx);
+  return rows.map((r) => r.cell);
 }
 
 function splitChars(text: string): { key: string; char: string; indexFromRight: number }[] {
@@ -262,6 +291,8 @@ function splitChars(text: string): { key: string; char: string; indexFromRight: 
 function RollingCell({
   char,
   from,
+  enter,
+  exit,
   progress,
   startFraction,
   variant,
@@ -270,8 +301,11 @@ function RollingCell({
   color,
 }: {
   char: string;
+  /** 旧字符：非 null 且两边都是数字 → 数字带滚动；exit 时即要淡出的旧字符 */
   from: string | null;
-  /** 整段滚动进度 0 → 1（一个组件共用一个：每位用 startFraction 错开，不用 per-cell 延迟） */
+  enter: boolean;
+  exit: boolean;
+  /** 整段滚动进度 0 → 1（一个组件共用一个：每位用 startFraction 从左到右错开） */
   progress: SharedValue<number>;
   startFraction: number;
   variant: TypographyVariant;
@@ -282,40 +316,56 @@ function RollingCell({
 }) {
   // 格子高度 = 一行文字的自然高（onLayout 实测：系统大字 / 最大缩放上限都自动跟上）
   const [cellHeight, setCellHeight] = useState(0);
-
   const onLayout = (e: LayoutChangeEvent) => {
     const h = Math.round(e.nativeEvent.layout.height);
     if (h > 0 && h !== cellHeight) setCellHeight(h);
   };
 
-  const incomingStyle = useAnimatedStyle(() => {
-    // from === null：这格没变，钉在原地（否则整体的 progress 会把它一起推走）
-    if (from === null || cellHeight === 0) return { transform: [{ translateY: 0 }] };
-    const t = progress.value <= startFraction ? 0 : (progress.value - startFraction) / (1 - startFraction);
-    return { transform: [{ translateY: (1 - t) * cellHeight }] };
-  }, [from, startFraction, cellHeight]);
+  const isStrip = !exit && from !== null && /\d/.test(char) && /\d/.test(from);
+  const fromDigit = isStrip ? Number(from) : 0;
+  // 数字带向上滚的步数：到新数字为止，走过中间所有数字；同一数字则滚整整一圈
+  const steps = isStrip ? (Number(char) - fromDigit + 10) % 10 || 10 : 0;
 
-  const outgoingStyle = useAnimatedStyle(() => {
-    if (cellHeight === 0) return { transform: [{ translateY: 0 }] };
-    const t = progress.value <= startFraction ? 0 : (progress.value - startFraction) / (1 - startFraction);
-    return { transform: [{ translateY: -t * cellHeight }] };
-  }, [startFraction, cellHeight]);
+  const stripStyle = useAnimatedStyle(() => {
+    const t = progress.value <= startFraction ? 0 : Math.min(1, (progress.value - startFraction) / (1 - startFraction));
+    return { transform: [{ translateY: -(fromDigit + steps * t) * cellHeight }] };
+  }, [fromDigit, steps, startFraction, cellHeight]);
+
+  const fadeStyle = useAnimatedStyle(() => {
+    const t = progress.value <= startFraction ? 0 : Math.min(1, (progress.value - startFraction) / (1 - startFraction));
+    if (exit) return { opacity: 1 - t };
+    if (enter) return { opacity: t, transform: [{ translateY: (1 - t) * cellHeight * 0.35 }] };
+    return { opacity: 1 };
+  }, [enter, exit, startFraction, cellHeight]);
+
+  if (isStrip) {
+    return (
+      <View style={styles.cell} onLayout={onLayout}>
+        {/* 隐形占位：撑起格子的宽高（不可见，不参与显示） */}
+        <AppText variant={variant} weight={weight} color="transparent" style={[textStyle, styles.cellGhost]} numberOfLines={1}>
+          {char}
+        </AppText>
+        <Animated.View style={[styles.cellStrip, stripStyle]} pointerEvents="none">
+          {DIGIT_STRIP.map((d, i) => (
+            <View key={i} style={{ height: cellHeight, justifyContent: 'center' }}>
+              <AppText variant={variant} weight={weight} color={color} style={textStyle} numberOfLines={1}>
+                {d}
+              </AppText>
+            </View>
+          ))}
+        </Animated.View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.cell} onLayout={onLayout}>
-      <Animated.View style={incomingStyle}>
-        {/* 每格只有 1 个字符：这里 numberOfLines={1} 不是「截断金额」，只是保证格子恒为一行高 */}
+      {/* 每格只有 1 个字符：这里 numberOfLines={1} 不是「截断金额」，只是保证格子恒为一行高 */}
+      <Animated.View style={fadeStyle}>
         <AppText variant={variant} weight={weight} color={color} style={textStyle} numberOfLines={1}>
           {char}
         </AppText>
       </Animated.View>
-      {from !== null && (
-        <Animated.View style={[styles.cellOutgoing, outgoingStyle]} pointerEvents="none">
-          <AppText variant={variant} weight={weight} color={color} style={textStyle} numberOfLines={1}>
-            {from}
-          </AppText>
-        </Animated.View>
-      )}
     </View>
   );
 }
@@ -578,7 +628,11 @@ export function MoneyText({
   const mountedAtRef = useRef(Date.now());
 
   const settle = () => {
-    setCells((prev) => (prev.some((c) => c.from !== null) ? prev.map((c) => (c.from === null ? c : { ...c, from: null })) : prev));
+    setCells((prev) =>
+      prev.some((c) => c.from !== null || c.enter || c.exit)
+        ? prev.filter((c) => !c.exit).map((c) => ({ ...c, from: null, enter: false }))
+        : prev
+    );
   };
 
   useEffect(() => {
@@ -593,12 +647,12 @@ export function MoneyText({
     const next = splitCells(rollText, prevText, canRoll);
     setCells(next);
 
-    if (next.some((c) => c.from !== null)) {
+    if (next.some((c) => c.from !== null || c.enter || c.exit)) {
       setHasRolled(true);
       progress.value = 0;
       progress.value = withTiming(
         1,
-        { duration: motion.timing.numberRoll + STAGGER_MAX_STEPS * STAGGER_MS, easing: motion.easing.out },
+        { duration: motion.timing.numberRollTotal, easing: motion.easing.out },
         (finished) => {
           'worklet';
           if (finished) runOnJS(settle)();
@@ -747,7 +801,9 @@ export function MoneyText({
             char={cell.char}
             from={cell.from}
             progress={progress}
-            startFraction={cell.delay / (motion.timing.numberRoll + STAGGER_MAX_STEPS * STAGGER_MS)}
+            startFraction={cell.delay / motion.timing.numberRollTotal}
+            enter={cell.enter}
+            exit={cell.exit}
             variant={variant}
             weight={heroIntWeight}
             textStyle={[heroIntStyle, cellTextStyle]}
@@ -842,7 +898,9 @@ export function MoneyText({
           char={cell.char}
           from={cell.from}
           progress={progress}
-          startFraction={cell.delay / (motion.timing.numberRoll + STAGGER_MAX_STEPS * STAGGER_MS)}
+          startFraction={cell.delay / motion.timing.numberRollTotal}
+          enter={cell.enter}
+          exit={cell.exit}
           variant={variant}
           weight={amountWeight}
           textStyle={[sizeStyle, cellTextStyle]}
@@ -860,7 +918,8 @@ const styles = StyleSheet.create({
   // 单格：高度由内容（一行文字）决定，超出的滚动层被裁掉
   cell: { overflow: 'hidden' },
   // 旧字符层：绝对定位在格子左上，滚出去就被裁掉
-  cellOutgoing: { position: 'absolute', top: 0, left: 0 },
+  cellStrip: { position: 'absolute', top: 0, left: 0, right: 0 },
+  cellGhost: { opacity: 0 },
   // 隐藏测量层：绝对定位 + 透明，只用来量真实宽度（不参与排版）
   measureBox: { position: 'absolute', top: 0, left: 0, opacity: 0, alignItems: 'flex-start' },
 });
