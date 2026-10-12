@@ -68,7 +68,7 @@ export function AccountPickerSheet({
   onClose,
   onAddAccount,
 }: Props) {
-  const { assets, getAssetBalance } = useApp();
+  const { activeAssets, getAssetBalance } = useApp();
   const { semantic, typography, spacing, radius, layout } = useTheme();
   const t = useT();
   const styles = useMemo(
@@ -94,17 +94,17 @@ export function AccountPickerSheet({
   // 用户已有账户出现过的币种（去重、ABC 字母序）+ 当前金额币种兜底（还没有账户的全局货币也要能选）
   const ownCurrencies = useMemo(() => {
     const codes: string[] = [];
-    assets.forEach((a) => {
+    activeAssets.forEach((a) => {
       if (a.currency && !codes.includes(a.currency)) codes.push(a.currency);
     });
     if (!codes.includes(currencyCode)) codes.push(currencyCode);
     return codes.sort((c1, c2) => c1.localeCompare(c2));
-  }, [assets, currencyCode]);
+  }, [activeAssets, currencyCode]);
 
-  // 过滤后的账户 → 按币种分组（组内保持 assets 顺序）
+  // 过滤后的账户 → 按币种分组（组内保持 activeAssets 顺序）
   const groups = useMemo(() => {
     const keyword = accountSearch.trim().toLowerCase();
-    const visible = assets.filter((a) => {
+    const visible = activeAssets.filter((a) => {
       const matchSearch = !keyword || `${a.name} ${a.currency} ${a.type}`.toLowerCase().includes(keyword);
       // 币种筛选：点了 MYR / USD 之类后，列表只显示该币种的账户
       const matchCurrency = currencyFilter === 'all' || a.currency === currencyFilter;
@@ -120,7 +120,7 @@ export function AccountPickerSheet({
       byCurrency[a.currency].push(a);
     });
     return Object.entries(byCurrency).sort(([c1], [c2]) => c1.localeCompare(c2));
-  }, [assets, accountSearch, currencyFilter, accountFilter, excludeId]);
+  }, [activeAssets, accountSearch, currencyFilter, accountFilter, excludeId]);
 
   const FILTERS: { key: AccountFilter; label: string }[] = [
     { key: 'all', label: t('common.all') },
