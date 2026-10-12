@@ -26,7 +26,7 @@
 //     抽屉里再套一张四角圆角的卡，看起来会像浮起来的卡片（验收退回第 5 条）。
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleProp, StyleSheet, View, ViewStyle, useWindowDimensions } from 'react-native';
+import { BackHandler, Pressable, StyleProp, StyleSheet, View, ViewStyle, useWindowDimensions } from 'react-native';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -138,6 +138,19 @@ export function BottomSheet({
       playExit();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
+
+  // 安卓硬件返回键：抽屉开着时先收起抽屉（同点遮罩路径，播出场动画），不退出整页。
+  // 用 ref 转发，监听只随 visible 挂拆；多层抽屉时 RN 按后注册先处理，返回 true 即拦截
+  const requestCloseRef = useRef(requestClose);
+  requestCloseRef.current = requestClose;
+  useEffect(() => {
+    if (!visible) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      requestCloseRef.current();
+      return true;
+    });
+    return () => sub.remove();
   }, [visible]);
 
   // 抽屉盖住下半屏：打开期间强制收起底部 Tab 栏（同 DateRangePickerSheet）
