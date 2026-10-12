@@ -943,6 +943,17 @@ export async function fullSync(): Promise<SyncResult> {
     // TASK-026：同步主体整体套时钟偏差自愈（pull+push 幂等，重试安全）——
     // PGRST303/401 类错误自动换票+等待重试，手机快/慢/跨时区与 Supabase 内部秒级偏差均无感通过
     const run = async () => {
+      // 先把防抖期间尚未上云的本地修改推上去（否则下面的拉取会用云端旧版本覆盖掉这些编辑，如刚归档的账户被恢复）。
+      // 切换账号（cloudWinsAll）时本地数据本就被云端替换，绝不能把旧账号的数据推给新账号，只丢弃挂起的推送。
+      const preLastUserId = await AsyncStorage.getItem(LAST_USER_KEY);
+      const preCloudWinsAll = preLastUserId != null && preLastUserId !== userId;
+      const hadPending = pushTimer != null || pushDeferred;
+      if (pushTimer) {
+        clearTimeout(pushTimer);
+        pushTimer = null;
+      }
+      pushDeferred = false;
+      if (hadPending && !preCloudWinsAll) await pushLocalSnapshot(userId);
       // 网络拉取不占锁（可能很慢）；本地「读快照 → 合并 → 写回」在锁内用拉取后的最新本地数据完成，
       // 与 AppContext 的持久化写入串行，避免读写之间的编辑被合并结果覆盖
       const { cloud, cloudRows } = await fetchAll(userId);
@@ -1002,6 +1013,17 @@ export function schedulePush(delayMs = 2000): void {
   }, delayMs);
 }
 
+/** 读取本地快照（先规范化并自愈写回）后推上云。调用方须已持有 syncing 锁 */
+async function pushLocalSnapshot(userId: string): Promise<RowFailure[]> {
+  const { snapshot: fixed, changed } = await runStorageExclusive(async () => {
+    const result = normalizeSnapshot(await readLocalSnapshot());
+    if (result.changed) await writeLocalSnapshot(result.snapshot);
+    return result;
+  });
+  if (changed) notifyDataReplaced();
+  return pushSnapshot(fixed, userId);
+}
+
 /** 立即推送当前本地数据（设置页"立即同步"按钮用：拉+推走 fullSync 更稳妥） */
 export async function pushNow(): Promise<SyncResult> {
   if (syncing) {
@@ -1015,15 +1037,7 @@ export async function pushNow(): Promise<SyncResult> {
   setStatus('syncing');
   try {
     // TASK-026：与时钟偏差自愈同款包装（push 幂等，重试安全）
-    const failedRows = await withClockSkewRetry(async () => {
-      const { snapshot: fixed, changed } = await runStorageExclusive(async () => {
-        const result = normalizeSnapshot(await readLocalSnapshot());
-        if (result.changed) await writeLocalSnapshot(result.snapshot);
-        return result;
-      });
-      if (changed) notifyDataReplaced();
-      return pushSnapshot(fixed, userId);
-    });
+    const failedRows = await withClockSkewRetry(() => pushLocalSnapshot(userId));
     await AsyncStorage.setItem(LAST_USER_KEY, userId);
     setStatus('idle');
     if (failedRows.length) {
