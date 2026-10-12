@@ -637,14 +637,24 @@ export default function AssetScreen() {
     });
   };
   const amountCursorDragRef = useRef(false);
+  // 抽屉内名称框的键盘避让：键盘弹出时垫高滚动区底部（spacer），并把名称框滚到顶部附近
+  const [sheetKbHeight, setSheetKbHeight] = useState(0);
+  const sheetScrollRef = useRef<ScrollView>(null);
+  const nameBlockYRef = useRef(0);
+  const nameFocusedRef = useRef(false);
   useEffect(() => {
-    const show = Keyboard.addListener('keyboardDidShow', () => {
+    const show = Keyboard.addListener('keyboardDidShow', (e) => {
       // 系统键盘（名称输入）弹出 → 自绘键盘收起（两套键盘互斥协调）
       setViewKeypadOpen(false);
+      setSheetKbHeight(e.endCoordinates.height);
+      if (nameFocusedRef.current) {
+        sheetScrollRef.current?.scrollTo({ y: Math.max(0, nameBlockYRef.current - 16), animated: true });
+      }
     });
     const hide = Keyboard.addListener('keyboardDidHide', () => {
       // 系统键盘收起 → 自绘键盘显示回来（含 Android 返回键收起键盘的情况）
       setViewKeypadOpen(true);
+      setSheetKbHeight(0);
     });
     return () => {
       show.remove();
@@ -1072,6 +1082,7 @@ export default function AssetScreen() {
         {sheetAsset && (
           <View style={styles.sheetColumn}>
             <ScrollView
+              ref={sheetScrollRef}
               style={styles.sheetScroll}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
@@ -1101,24 +1112,36 @@ export default function AssetScreen() {
 
               {/* 名称：内联可改（为空时描边转 danger，"保存"变灰）。
                   V2.2c B3：输入框改胶囊，小标签放框上方、左边与框内文字对齐 */}
-              <AppText variant="footnote" color={semantic.textSecondary} style={styles.fieldLabelInline}>
-                {t('addTx.accountName')}
-              </AppText>
-              <TextInput
-                ref={viewNameInputRef}
-                style={[
-                  styles.nameInput,
-                  { backgroundColor: semantic.bg, borderColor: semantic.hairline, color: semantic.textPrimary },
-                  !viewName.trim() && { borderColor: semantic.danger },
-                ]}
-                value={viewName}
-                onChangeText={setViewName}
-                placeholder={t('addTx.accountNamePlaceholder')}
-                placeholderTextColor={semantic.textTertiary}
-                selectionColor={semantic.accent}
-                returnKeyType="done"
-                testID="asset-detail-name"
-              />
+              <View
+                onLayout={(e) => {
+                  nameBlockYRef.current = e.nativeEvent.layout.y;
+                }}
+              >
+                <AppText variant="footnote" color={semantic.textSecondary} style={styles.fieldLabelInline}>
+                  {t('addTx.accountName')}
+                </AppText>
+                <TextInput
+                  ref={viewNameInputRef}
+                  style={[
+                    styles.nameInput,
+                    { backgroundColor: semantic.bg, borderColor: semantic.hairline, color: semantic.textPrimary },
+                    !viewName.trim() && { borderColor: semantic.danger },
+                  ]}
+                  value={viewName}
+                  onChangeText={setViewName}
+                  onFocus={() => {
+                    nameFocusedRef.current = true;
+                  }}
+                  onBlur={() => {
+                    nameFocusedRef.current = false;
+                  }}
+                  placeholder={t('addTx.accountNamePlaceholder')}
+                  placeholderTextColor={semantic.textTertiary}
+                  selectionColor={semantic.accent}
+                  returnKeyType="done"
+                  testID="asset-detail-name"
+                />
+              </View>
 
               {/* V2.2c B2：信用额度 / 当前余额下移到只读信息行之后（可编辑行放最后一段） */}
 
@@ -1264,6 +1287,8 @@ export default function AssetScreen() {
                 style={styles.sheetButton}
                 testID="asset-detail-delete"
               />
+              {/* 键盘高度的底部垫片：让滚动区能把名称框滚到键盘上方 */}
+              {sheetKbHeight > 0 && <View style={{ height: sheetKbHeight }} />}
             </ScrollView>
 
             {/* 计算器键盘：抽屉内全宽呈现；「完成」＝求值并直接保存（与"保存"按钮同一效果） */}

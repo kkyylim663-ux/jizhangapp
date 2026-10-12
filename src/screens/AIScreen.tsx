@@ -72,6 +72,24 @@ export default function AIScreen({ navigation }: any) {
 
   const [modalOpen, setModalOpen] = useState(false);
 
+  // 确认弹层的键盘避让：Modal 是独立窗口，Android edge-to-edge 下不会随 adjustResize 上推，
+  // 所以监听键盘高度，把遮罩底部垫起同样的高度，让输入框始终露在键盘上方
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  useEffect(() => {
+    const showWill = Keyboard.addListener('keyboardWillShow', (e) =>
+      setKeyboardHeight(e.endCoordinates.height)
+    );
+    const showDid = Keyboard.addListener('keyboardDidShow', (e) =>
+      setKeyboardHeight(e.endCoordinates.height)
+    );
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardHeight(0));
+    return () => {
+      showWill.remove();
+      showDid.remove();
+      hide.remove();
+    };
+  }, []);
+
   // ---------------------------------------------------------
   // Editable result
   // ---------------------------------------------------------
@@ -751,14 +769,17 @@ export default function AIScreen({ navigation }: any) {
         }
       >
         <View
-          style={
-            styles.modalOverlay
-          }
+          style={[
+            styles.modalOverlay,
+            { paddingBottom: keyboardHeight },
+          ]}
         >
-          <View
+          <ScrollView
             style={
               styles.modalCard
             }
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
           >
             {/* Header */}
 
@@ -1128,7 +1149,7 @@ export default function AIScreen({ navigation }: any) {
                 </View>
               </>
             )}
-          </View>
+          </ScrollView>
         </View>
       </Modal>
     </SafeAreaView>
