@@ -1064,7 +1064,7 @@ export default function AssetScreen() {
         visible={!!viewingAssetId}
         onClose={tryCloseDetail}
         title={sheetAsset ? `${t('asset.accountDetail')} · ${sheetAsset.currency}` : t('asset.accountDetail')}
-        fill={semantic.tabBar}
+        fill={semantic.homeCard}
         maxHeightRatio={viewKeypadOpen ? 0.92 : 0.9}
         accessibilityLabel={t('asset.accountDetail')}
         testID="asset-detail"
