@@ -14,6 +14,7 @@ import {
   Dimensions,
   Platform,
   Keyboard,
+  BackHandler,
 } from 'react-native';
 import DraggableFlatList, { ScaleDecorator, RenderItemParams } from 'react-native-draggable-flatlist';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -316,7 +317,7 @@ const RECENT_CATEGORY_HISTORY_LIMIT = Infinity;
 const KEYPAD_PANEL_HEIGHT = 328;
 
 export default function AddTransactionScreen({ navigation, route }: any) {
-  const { categories, categoryGroups, addCategory, addCategoryGroup, deleteCategoryGroup, addTransaction, updateTransaction, addTransfer, updateCategory, deleteCategory, deleteTransaction, assets, getAssetBalance, currencySymbol, currency, activeLedgerId, paymentPlans, addPaymentPlan } =
+  const { categories, categoryGroups, addCategory, addCategoryGroup, deleteCategoryGroup, addTransaction, updateTransaction, addTransfer, updateCategory, deleteCategory, deleteTransaction, assets, activeAssets, getAssetBalance, currencySymbol, currency, activeLedgerId, paymentPlans, addPaymentPlan } =
     useApp();
   const insets = useSafeAreaInsets();
   const { colors, isDark, semantic, spacing, layout, radius } = useTheme();
@@ -347,7 +348,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
   const isExchange = uiType === 'exchange';
 
   // 长按在"资产"页勾选过的默认账户，新增记录时自动带出来（编辑已有记录时不覆盖，还是用那笔记录本来的账户）
-  const defaultAsset = assets.find((a) => a.isDefault);
+  const defaultAsset = activeAssets.find((a) => a.isDefault);
 
   // 所有类型都直接进入主表单；转账/兑换的账户改为页面内弹层选择，不再增加独立选择步骤。
   const stepForType = (t: UiType): Step => (t === 'transfer' || t === 'exchange' ? 'transferDetail' : 'detail');
@@ -988,6 +989,23 @@ export default function AddTransactionScreen({ navigation, route }: any) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overlayOpen, isFocused]);
 
+  // 安卓硬件返回键：计算器面板开着 → 先收起面板（已输入的金额先求值落回，不丢）并拦截，
+  // 不退出整页；弹层开着时由弹层自己的 BackHandler 先处理（后注册者先收到事件）。
+  // 只在本页聚焦时拦截，否则切到别的 Tab 后返回键会被这里误吞。
+  // 用 ref 转发最新闭包（金额表达式每按一键都变，监听只挂一次）
+  const backPressRef = useRef<() => boolean>(() => false);
+  backPressRef.current = () => {
+    if (!isFocused || !amountKeypadOpen || overlayOpen) return false;
+    if (calculatorTarget === 'amount') commitAmount();
+    else commitTransferField();
+    setAmountKeypadOpen(false);
+    return true;
+  };
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => backPressRef.current());
+    return () => sub.remove();
+  }, []);
+
   // 失焦（切走/卸载）时才把强制隐藏交还回去
   useEffect(() => {
     if (!isFocused) {
@@ -1430,7 +1448,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
     const liveFeeNum = calculatorTarget === 'fee' && amountKeypadOpen ? parseFloat(feeExpr.displayValue) || 0 : feeNum;
     // 手续费从转出金额里先扣掉，剩下的部分才拿去换算成到账金额（普通转账没有汇率，等于 rate=1）
     const netAmount = Math.max(0, liveAmountNum - liveFeeNum);
-    const converted = showRateField ? (netAmount * liveRateNum).toFixed(2) : netAmount.toFixed(2);
+    const converted = formatMoney(showRateField ? netAmount * liveRateNum : netAmount, { decimals: 2 });
 
     return (
       <EdgeBackSwipe onBack={edgeBackHome}>
@@ -1715,7 +1733,7 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                       calculatorTarget === 'fee' && amountKeypadOpen
                         ? feeExpr.displayValue
                         : feeNum > 0
-                          ? `${fromSymbol}${feeNum.toFixed(2)}`
+                          ? `${fromSymbol}${formatMoney(feeNum, { decimals: 2 })}`
                           : '0.00'
                     }
                     enabled={calculatorTarget === 'fee' && amountKeypadOpen}
@@ -1735,8 +1753,8 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                   <Ionicons name="information-circle-outline" size={16} color={semantic.textSecondary} />
                   <AppText variant="caption" color={semantic.textSecondary} numberOfLines={2} style={styles.exchangeFeeHintText}>
                     {showRateField
-                      ? t('addTx.feeDeductExchange', { fee: `${fromSymbol}${liveFeeNum.toFixed(2)}`, net: `${fromSymbol}${netAmount.toFixed(2)}` })
-                      : t('addTx.feeDeductTransfer', { fee: `${fromSymbol}${liveFeeNum.toFixed(2)}`, net: `${toSymbol}${netAmount.toFixed(2)}` })}
+                      ? t('addTx.feeDeductExchange', { fee: `${fromSymbol}${formatMoney(liveFeeNum, { decimals: 2 })}`, net: `${fromSymbol}${formatMoney(netAmount, { decimals: 2 })}` })
+                      : t('addTx.feeDeductTransfer', { fee: `${fromSymbol}${formatMoney(liveFeeNum, { decimals: 2 })}`, net: `${toSymbol}${formatMoney(netAmount, { decimals: 2 })}` })}
                   </AppText>
                 </View>
               )}
@@ -1939,7 +1957,9 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                       <TouchableOpacity
                         style={styles.catHeaderDeleteBtn}
                         onPress={() => confirmDeleteGroup(group, items.length)}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+                        accessibilityRole="button"
+                        accessibilityLabel={t('common.delete')}
                       >
                         <Ionicons name="trash-outline" size={15} color={colors.expense} />
                       </TouchableOpacity>
@@ -2055,6 +2075,11 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                               inlineColor === color && styles.catMiniColorDotActive,
                             ]}
                             onPress={() => setInlineColor(color)}
+                            // 26 圆点 + 9×2 热区 = 44pt 最小触控区
+                            hitSlop={{ top: 9, bottom: 9, left: 9, right: 9 }}
+                            accessibilityRole="button"
+                            accessibilityLabel={t('ledger.colorLabel')}
+                            accessibilityState={{ selected: inlineColor === color }}
                           />
                         ))}
                       </View>
@@ -2073,7 +2098,12 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                 <>
                   <View style={styles.newCatTitleRow}>
                     <Text style={styles.newCatTitle}>{t('addTx.addGroup')}</Text>
-                    <TouchableOpacity onPress={() => setNewGroupFormOpen(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <TouchableOpacity
+                      onPress={() => setNewGroupFormOpen(false)}
+                      hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={t('common.close')}
+                    >
                       <Ionicons name="close" size={16} color={colors.textSecondary} />
                     </TouchableOpacity>
                   </View>
@@ -2133,14 +2163,16 @@ export default function AddTransactionScreen({ navigation, route }: any) {
           animationType="fade"
           onRequestClose={() => setIconPickerOpen(false)}
         >
-          <TouchableOpacity style={styles.iconPickerOverlay} activeOpacity={1} onPress={() => setIconPickerOpen(false)}>
+          <TouchableOpacity style={[styles.iconPickerOverlay, { backgroundColor: semantic.scrim }]} activeOpacity={1} onPress={() => setIconPickerOpen(false)}>
             <Pressable style={styles.iconPickerSheet} onPress={() => {}}>
               <View style={styles.iconPickerHeader}>
                 <Text style={styles.iconPickerTitle}>{t('addTx.pickIconTitle')}</Text>
                 <TouchableOpacity
                   style={styles.iconPickerClose}
                   onPress={() => setIconPickerOpen(false)}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  hitSlop={{ top: 13, bottom: 13, left: 13, right: 13 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('common.close')}
                 >
                   <Ionicons name="close" size={18} color={colors.textSecondary} />
                 </TouchableOpacity>
@@ -2150,6 +2182,9 @@ export default function AddTransactionScreen({ navigation, route }: any) {
                   {CATEGORY_ICON_OPTIONS.map((icon) => (
                     <TouchableOpacity
                       key={icon}
+                      accessibilityRole="button"
+                      accessibilityLabel={icon}
+                      accessibilityState={{ selected: inlineIcon === icon }}
                       style={[styles.iconPickerCell, inlineIcon === icon && styles.iconPickerCellActive]}
                       onPress={() => {
                         hapticSelection();
