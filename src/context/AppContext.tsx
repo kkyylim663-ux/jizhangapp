@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   Transaction,
@@ -18,6 +18,7 @@ import { DEFAULT_CATEGORIES } from '../utils/defaultCategories';
 import { getCurrencySymbol } from '../utils/currencies';
 import { computePlanOccurrences } from '../utils/paymentPlans';
 import { onLocalDataReplaced, schedulePush } from '../services/syncService';
+import { runStorageExclusive } from '../services/storageQueue';
 
 const STORAGE_KEYS = {
   transactions: '@jizhang/transactions',
@@ -132,6 +133,11 @@ function migrateLedgerIcons(stored: Ledger[]): { result: Ledger[]; changed: bool
   return { result, changed };
 }
 
+// 持久化写入统一排队（与云同步的读-合并-写回串行），防止整数组整体写回时互相覆盖
+function persistItem(key: string, value: string): void {
+  void runStorageExclusive(() => AsyncStorage.setItem(key, value));
+}
+
 function todayStr() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -200,7 +206,20 @@ interface AppContextValue {
     interestRate?: number;
   }) => Promise<void>;
   updateAsset: (id: string, updates: Partial<Omit<Asset, 'id' | 'createdAt' | 'ledgerId'>>) => Promise<void>;
-  deleteAsset: (id: string) => Promise<void>;
+  /**
+   * 删除账户。有任何交易引用它（assetId / fromAssetId / toAssetId）时不删除，改为归档，
+   * 返回 'archived'；没有记录时真删除，返回 'deleted'。调用前可用 assetRecordCount 决定文案。
+   */
+  deleteAsset: (id: string) => Promise<'deleted' | 'archived'>;
+  /** 归档账户：从账户列表/记账选择/净资产隐藏，历史交易保持不变；同时取消默认账户 */
+  archiveAsset: (id: string) => Promise<void>;
+  /** 恢复已归档账户 */
+  unarchiveAsset: (id: string) => Promise<void>;
+  /** 未归档的账户（净资产/各币种合计/账户选择器用它）。assets 仍是全部账户（含归档） */
+  activeAssets: Asset[];
+  /** 引用该账户的交易条数（assetId / fromAssetId / toAssetId 任一命中） */
+  assetRecordCount: (id: string) => number;
+  assetHasRecords: (id: string) => boolean;
   getAssetById: (id: string) => Asset | undefined;
   getAssetBalance: (assetId: string) => number;
   // 把某个资产设为默认（记一笔时自动带出）；传 null 表示"不要任何默认账户"。
@@ -240,6 +259,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [currency, setCurrencyState] = useState<string>('MYR'); // 默认货币：RM（马来西亚林吉特）
   const [periodPreference, setPeriodPreferenceState] = useState<PeriodPreference>(DEFAULT_PERIOD);
   const [assets, setAssets] = useState<Asset[]>([]);
+  const activeAssets = useMemo(() => assets.filter((a) => !a.archivedAt), [assets]);
   const [categoryGroups, setCategoryGroups] = useState<CategoryGroup[]>([]);
   const [dateFormat, setDateFormatState] = useState<DateFormat>(DEFAULT_DATE_FORMAT);
   const [weekStartsOn, setWeekStartsOnState] = useState<WeekStartsOn>(DEFAULT_WEEK_STARTS_ON);
@@ -266,21 +286,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
           weekStartsOnRaw,
           decimalPlacesRaw,
           planRaw,
-        ] = await Promise.all([
-          AsyncStorage.getItem(STORAGE_KEYS.transactions),
-          AsyncStorage.getItem(STORAGE_KEYS.categories),
-          AsyncStorage.getItem(STORAGE_KEYS.categoryGroups),
-          AsyncStorage.getItem(STORAGE_KEYS.budgets),
-          AsyncStorage.getItem(STORAGE_KEYS.ledgers),
-          AsyncStorage.getItem(STORAGE_KEYS.activeLedgerId),
-          AsyncStorage.getItem(STORAGE_KEYS.currency),
-          AsyncStorage.getItem(STORAGE_KEYS.periodPreference),
-          AsyncStorage.getItem(STORAGE_KEYS.assets),
-          AsyncStorage.getItem(STORAGE_KEYS.dateFormat),
-          AsyncStorage.getItem(STORAGE_KEYS.weekStartsOn),
-          AsyncStorage.getItem(STORAGE_KEYS.decimalPlaces),
-          AsyncStorage.getItem(STORAGE_KEYS.paymentPlans),
-        ]);
+        ] = await runStorageExclusive(() =>
+          Promise.all([
+            AsyncStorage.getItem(STORAGE_KEYS.transactions),
+            AsyncStorage.getItem(STORAGE_KEYS.categories),
+            AsyncStorage.getItem(STORAGE_KEYS.categoryGroups),
+            AsyncStorage.getItem(STORAGE_KEYS.budgets),
+            AsyncStorage.getItem(STORAGE_KEYS.ledgers),
+            AsyncStorage.getItem(STORAGE_KEYS.activeLedgerId),
+            AsyncStorage.getItem(STORAGE_KEYS.currency),
+            AsyncStorage.getItem(STORAGE_KEYS.periodPreference),
+            AsyncStorage.getItem(STORAGE_KEYS.assets),
+            AsyncStorage.getItem(STORAGE_KEYS.dateFormat),
+            AsyncStorage.getItem(STORAGE_KEYS.weekStartsOn),
+            AsyncStorage.getItem(STORAGE_KEYS.decimalPlaces),
+            AsyncStorage.getItem(STORAGE_KEYS.paymentPlans),
+          ])
+        );
         if (txRaw) {
           const parsedTx: Transaction[] = JSON.parse(txRaw);
           setTransactions(parsedTx.map((t) => (t.ledgerId ? t : { ...t, ledgerId: DEFAULT_LEDGER.id })));
@@ -294,7 +316,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const { result: migratedCat, changed: mergedNew } = mergeNewDefaultCategories(groupMigrated);
           setCategories(migratedCat);
           if (iconChanged || groupChanged || mergedNew) {
-            AsyncStorage.setItem(STORAGE_KEYS.categories, JSON.stringify(migratedCat));
+            persistItem(STORAGE_KEYS.categories, JSON.stringify(migratedCat));
           }
         }
         if (catGroupRaw) {
@@ -307,7 +329,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const { result: migratedLed, changed: ledChanged } = migrateLedgerIcons(parsedLed);
           setLedgers(migratedLed);
           if (ledChanged) {
-            AsyncStorage.setItem(STORAGE_KEYS.ledgers, JSON.stringify(migratedLed));
+            persistItem(STORAGE_KEYS.ledgers, JSON.stringify(migratedLed));
           }
         }
         if (activeLedRaw) setActiveLedgerIdState(activeLedRaw);
@@ -318,7 +340,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const { result: migratedAsset, changed: assetChanged } = migrateAssetIcons(parsedAsset);
           setAssets(migratedAsset);
           if (assetChanged) {
-            AsyncStorage.setItem(STORAGE_KEYS.assets, JSON.stringify(migratedAsset));
+            persistItem(STORAGE_KEYS.assets, JSON.stringify(migratedAsset));
           }
         }
         if (dateFormatRaw) setDateFormatState(dateFormatRaw as DateFormat);
@@ -366,43 +388,43 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [loadFromStorage]);
 
   useEffect(() => {
-    if (!loading) AsyncStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(transactions));
+    if (!loading) persistItem(STORAGE_KEYS.transactions, JSON.stringify(transactions));
   }, [transactions, loading]);
   useEffect(() => {
-    if (!loading) AsyncStorage.setItem(STORAGE_KEYS.categories, JSON.stringify(categories));
+    if (!loading) persistItem(STORAGE_KEYS.categories, JSON.stringify(categories));
   }, [categories, loading]);
   useEffect(() => {
-    if (!loading) AsyncStorage.setItem(STORAGE_KEYS.categoryGroups, JSON.stringify(categoryGroups));
+    if (!loading) persistItem(STORAGE_KEYS.categoryGroups, JSON.stringify(categoryGroups));
   }, [categoryGroups, loading]);
   useEffect(() => {
-    if (!loading) AsyncStorage.setItem(STORAGE_KEYS.budgets, JSON.stringify(budgets));
+    if (!loading) persistItem(STORAGE_KEYS.budgets, JSON.stringify(budgets));
   }, [budgets, loading]);
   useEffect(() => {
-    if (!loading) AsyncStorage.setItem(STORAGE_KEYS.ledgers, JSON.stringify(ledgers));
+    if (!loading) persistItem(STORAGE_KEYS.ledgers, JSON.stringify(ledgers));
   }, [ledgers, loading]);
   useEffect(() => {
-    if (!loading) AsyncStorage.setItem(STORAGE_KEYS.activeLedgerId, activeLedgerId);
+    if (!loading) persistItem(STORAGE_KEYS.activeLedgerId, activeLedgerId);
   }, [activeLedgerId, loading]);
   useEffect(() => {
-    if (!loading) AsyncStorage.setItem(STORAGE_KEYS.currency, currency);
+    if (!loading) persistItem(STORAGE_KEYS.currency, currency);
   }, [currency, loading]);
   useEffect(() => {
-    if (!loading) AsyncStorage.setItem(STORAGE_KEYS.periodPreference, JSON.stringify(periodPreference));
+    if (!loading) persistItem(STORAGE_KEYS.periodPreference, JSON.stringify(periodPreference));
   }, [periodPreference, loading]);
   useEffect(() => {
-    if (!loading) AsyncStorage.setItem(STORAGE_KEYS.assets, JSON.stringify(assets));
+    if (!loading) persistItem(STORAGE_KEYS.assets, JSON.stringify(assets));
   }, [assets, loading]);
   useEffect(() => {
-    if (!loading) AsyncStorage.setItem(STORAGE_KEYS.dateFormat, dateFormat);
+    if (!loading) persistItem(STORAGE_KEYS.dateFormat, dateFormat);
   }, [dateFormat, loading]);
   useEffect(() => {
-    if (!loading) AsyncStorage.setItem(STORAGE_KEYS.weekStartsOn, String(weekStartsOn));
+    if (!loading) persistItem(STORAGE_KEYS.weekStartsOn, String(weekStartsOn));
   }, [weekStartsOn, loading]);
   useEffect(() => {
-    if (!loading) AsyncStorage.setItem(STORAGE_KEYS.decimalPlaces, String(decimalPlaces));
+    if (!loading) persistItem(STORAGE_KEYS.decimalPlaces, String(decimalPlaces));
   }, [decimalPlaces, loading]);
   useEffect(() => {
-    if (!loading) AsyncStorage.setItem(STORAGE_KEYS.paymentPlans, JSON.stringify(paymentPlans));
+    if (!loading) persistItem(STORAGE_KEYS.paymentPlans, JSON.stringify(paymentPlans));
   }, [paymentPlans, loading]);
 
   const addTransaction: AppContextValue['addTransaction'] = async (t) => {
@@ -526,14 +548,48 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setAssets((prev) => prev.map((a) => (a.id === id ? { ...a, ...updates } : a)));
   };
 
+  // 引用某账户的交易条数：assetId / fromAssetId / toAssetId 任一命中即算一条
+  const assetRecordCount: AppContextValue['assetRecordCount'] = (id) =>
+    transactions.reduce(
+      (n, t) => (t.assetId === id || t.fromAssetId === id || t.toAssetId === id ? n + 1 : n),
+      0
+    );
+  const assetHasRecords: AppContextValue['assetHasRecords'] = (id) => assetRecordCount(id) > 0;
+
+  const archiveAsset: AppContextValue['archiveAsset'] = async (id) => {
+    const archivedAt = new Date().toISOString();
+    // 归档即取消默认：已归档账户不能再被记一笔时自动带出
+    setAssets((prev) => prev.map((a) => (a.id === id ? { ...a, archivedAt, isDefault: false } : a)));
+  };
+
+  const unarchiveAsset: AppContextValue['unarchiveAsset'] = async (id) => {
+    setAssets((prev) =>
+      prev.map((a) => {
+        if (a.id !== id) return a;
+        const restored = { ...a };
+        delete restored.archivedAt;
+        return restored;
+      })
+    );
+  };
+
+  // 有记录的账户不删除（否则历史交易变孤儿、统计与余额对不上），改为归档
   const deleteAsset: AppContextValue['deleteAsset'] = async (id) => {
+    if (assetHasRecords(id)) {
+      await archiveAsset(id);
+      return 'archived';
+    }
     setAssets((prev) => prev.filter((a) => a.id !== id));
+    // 无交易的账户可以真删；但计划付款若仍指向它，到期会生成指向已删账户的孤儿交易，先解除关联
+    setPaymentPlans((prev) => prev.map((p) => (p.assetId === id ? { ...p, assetId: undefined } : p)));
+    return 'deleted';
   };
 
   const getAssetById = (id: string) => assets.find((a) => a.id === id);
 
   const setDefaultAsset: AppContextValue['setDefaultAsset'] = async (id) => {
-    setAssets((prev) => prev.map((a) => ({ ...a, isDefault: id !== null && a.id === id })));
+    // 归档账户不能设为默认
+    setAssets((prev) => prev.map((a) => ({ ...a, isDefault: id !== null && a.id === id && !a.archivedAt })));
   };
 
   const getAssetBalance: AppContextValue['getAssetBalance'] = (assetId) => {
@@ -676,6 +732,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         currencySymbol: getCurrencySymbol(currency),
         periodPreference,
         assets,
+        activeAssets,
         dateFormat,
         weekStartsOn,
         decimalPlaces,
@@ -707,6 +764,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         addAsset,
         updateAsset,
         deleteAsset,
+        archiveAsset,
+        unarchiveAsset,
+        assetRecordCount,
+        assetHasRecords,
         getAssetById,
         getAssetBalance,
         setDefaultAsset,

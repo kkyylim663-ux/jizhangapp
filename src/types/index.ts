@@ -130,4 +130,7 @@ export interface Asset {
   interestRate?: number; // 年利率(%)，逾期未还时用于估算利息
   // 默认账户：记一笔时自动带出这个账户。同一时间最多一个资产是默认（由 setDefaultAsset 保证）
   isDefault?: boolean;
+  // 归档时间（ISO）：有值 = 已归档。归档账户不出现在账户列表/记账选择/净资产里，
+  // 但历史交易仍引用它（取得正确币种与账户名）。老数据没有该字段 = 活跃账户
+  archivedAt?: string;
 }

@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabaseClient';
+import { runStorageExclusive } from './storageQueue';
 import {
   Asset,
   Budget,
@@ -287,6 +288,9 @@ function assetToRow(a: Asset, userId: string): Row {
     interest_rate: a.interestRate ?? null,
     is_default: a.isDefault ?? null,
     created_at: a.createdAt,
+    // 仅归档时写入 archived_at：未执行 schema.sql 新增列的云端，普通账户同步不受影响。
+    // 取消归档由 pushSnapshot 显式补 null（见那里的注释）
+    ...(a.archivedAt ? { archived_at: a.archivedAt } : {}),
   };
 }
 
@@ -305,6 +309,8 @@ function assetFromRow(r: Row): Asset {
     dueDay: r.due_day != null ? Number(r.due_day) : undefined,
     interestRate: r.interest_rate != null ? Number(r.interest_rate) : undefined,
     isDefault: r.is_default != null ? Boolean(r.is_default) : undefined,
+    // 老云端行没有该列（undefined）或为 null = 活跃账户
+    archivedAt: r.archived_at ? String(r.archived_at) : undefined,
     createdAt: Number(r.created_at),
   };
 }
@@ -760,10 +766,20 @@ async function pushSnapshot(s: LocalSnapshot, userId: string): Promise<RowFailur
     const prevRows = mirrorMap[table];
     const prev = new Map(prevRows.map((r) => [r.id as string, r]));
     const idsNow = new Set(rows.map((r) => r.id as string));
-    const upserts = rows.filter((r) => {
-      const old = prev.get(r.id as string);
-      return !old || JSON.stringify(old) !== JSON.stringify(r);
-    });
+    const upserts = rows
+      .filter((r) => {
+        const old = prev.get(r.id as string);
+        return !old || JSON.stringify(old) !== JSON.stringify(r);
+      })
+      .map((r) => {
+        // 取消归档：镜像里有 archived_at 说明云端已有该列，此时必须显式写 null，
+        // 否则 upsert 的列集合里没有它，云端仍保留旧的归档时间
+        const old = prev.get(r.id as string);
+        if (table === 'assets' && old && 'archived_at' in old && !('archived_at' in r)) {
+          return { ...r, archived_at: null };
+        }
+        return r;
+      });
     const deletes = prevRows.filter((r) => !idsNow.has(r.id as string)).map((r) => r.id as string);
     if (upserts.length) await upsertChunked(table, upserts, failedRows);
     if (deletes.length) await deleteByIds(table, deletes, failedRows);
@@ -927,14 +943,19 @@ export async function fullSync(): Promise<SyncResult> {
     // TASK-026：同步主体整体套时钟偏差自愈（pull+push 幂等，重试安全）——
     // PGRST303/401 类错误自动换票+等待重试，手机快/慢/跨时区与 Supabase 内部秒级偏差均无感通过
     const run = async () => {
+      // 网络拉取不占锁（可能很慢）；本地「读快照 → 合并 → 写回」在锁内用拉取后的最新本地数据完成，
+      // 与 AppContext 的持久化写入串行，避免读写之间的编辑被合并结果覆盖
       const { cloud, cloudRows } = await fetchAll(userId);
-      const local = await readLocalSnapshot();
-      const lastUserId = await AsyncStorage.getItem(LAST_USER_KEY);
-      const cloudWinsAll = lastUserId != null && lastUserId !== userId;
-      const merged = mergeSnapshots(local, cloud, cloudRows, cloudWinsAll);
-      // 推送前兜底修复老数据（缺币种/颜色/时间戳等），并写回本地自愈
-      const { snapshot: normalized } = normalizeSnapshot(merged);
-      await writeLocalSnapshot(normalized);
+      const normalized = await runStorageExclusive(async () => {
+        const local = await readLocalSnapshot();
+        const lastUserId = await AsyncStorage.getItem(LAST_USER_KEY);
+        const cloudWinsAll = lastUserId != null && lastUserId !== userId;
+        const merged = mergeSnapshots(local, cloud, cloudRows, cloudWinsAll);
+        // 推送前兜底修复老数据（缺币种/颜色/时间戳等），并写回本地自愈
+        const { snapshot: fixed } = normalizeSnapshot(merged);
+        await writeLocalSnapshot(fixed);
+        return fixed;
+      });
       // 必须无条件通知重载：合并可能只追加了云端行（normalize 无改动），
       // 若跳过通知，React 状态停在旧数据，下次本地写回会把合并结果覆盖掉，
       // 再下一次推送就会把"消失"的行当成删除发上云 —— 云端数据被误删
@@ -955,7 +976,16 @@ export async function fullSync(): Promise<SyncResult> {
     return toSyncResult(e);
   } finally {
     syncing = false;
+    flushDeferredPush();
   }
+}
+
+/** 同步进行中被跳过的推送请求：同步结束后补排一次，避免期间的编辑要等到下一次改动才上云 */
+let pushDeferred = false;
+function flushDeferredPush(): void {
+  if (!pushDeferred) return;
+  pushDeferred = false;
+  schedulePush();
 }
 
 /**
@@ -974,7 +1004,10 @@ export function schedulePush(delayMs = 2000): void {
 
 /** 立即推送当前本地数据（设置页"立即同步"按钮用：拉+推走 fullSync 更稳妥） */
 export async function pushNow(): Promise<SyncResult> {
-  if (syncing) return { ok: false, error: 'sync_in_progress' };
+  if (syncing) {
+    pushDeferred = true; // 同步结束后补推，见 flushDeferredPush
+    return { ok: false, error: 'sync_in_progress' };
+  }
   const userId = await currentUserId();
   if (!userId) return { ok: false, error: 'not_logged_in' };
 
@@ -983,13 +1016,13 @@ export async function pushNow(): Promise<SyncResult> {
   try {
     // TASK-026：与时钟偏差自愈同款包装（push 幂等，重试安全）
     const failedRows = await withClockSkewRetry(async () => {
-      const snap = await readLocalSnapshot();
-      const { snapshot: normalized, changed } = normalizeSnapshot(snap);
-      if (changed) {
-        await writeLocalSnapshot(normalized);
-        notifyDataReplaced();
-      }
-      return pushSnapshot(normalized, userId);
+      const { snapshot: fixed, changed } = await runStorageExclusive(async () => {
+        const result = normalizeSnapshot(await readLocalSnapshot());
+        if (result.changed) await writeLocalSnapshot(result.snapshot);
+        return result;
+      });
+      if (changed) notifyDataReplaced();
+      return pushSnapshot(fixed, userId);
     });
     await AsyncStorage.setItem(LAST_USER_KEY, userId);
     setStatus('idle');
@@ -1003,5 +1036,6 @@ export async function pushNow(): Promise<SyncResult> {
     return toSyncResult(e);
   } finally {
     syncing = false;
+    flushDeferredPush();
   }
 }

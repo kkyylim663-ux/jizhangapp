@@ -549,6 +549,13 @@ export const zh = {
     netChange: '本月净变动',
     setDefault: '设为默认账户（记一笔时自动带出）',
     discardEditTitle: '放弃修改？',
+    archive: '归档账户',
+    unarchive: '恢复账户',
+    archived: '已归档',
+    archiveTitle: '归档账户"%{name}"？',
+    archiveMsg: '该账户有 %{count} 笔记录。归档后它从账户列表和记账选择中隐藏，不计入净资产，历史记录和统计保持不变，可随时恢复。',
+    archiveDone: '已归档',
+    unarchiveDone: '已恢复账户',
   },
   ledger: {
     enterName: '请输入账本名称',

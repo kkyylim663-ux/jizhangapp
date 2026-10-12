@@ -547,6 +547,13 @@ export const en = {
     netChange: 'Net change this month',
     setDefault: 'Set as default account (auto-filled when recording)',
     discardEditTitle: 'Discard changes?',
+    archive: 'Archive account',
+    unarchive: 'Restore account',
+    archived: 'Archived',
+    archiveTitle: 'Archive account "%{name}"?',
+    archiveMsg: 'This account has %{count} records. Once archived it is hidden from the account list and pickers and excluded from net worth. History and statistics stay unchanged, and you can restore it anytime.',
+    archiveDone: 'Account archived',
+    unarchiveDone: 'Account restored',
   },
   ledger: {
     enterName: 'Please enter a ledger name',
