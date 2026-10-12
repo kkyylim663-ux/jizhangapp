@@ -767,7 +767,8 @@ export default function CategoryManagementScreen({ navigation, route }: any) {
       >
         <Pressable style={styles.iconPickerOverlay} onPress={() => setIconPickerOpen(false)}>
           <Pressable style={{ width: '100%' }} onPress={() => {}}>
-            <GlassView intensity={WEB_GLASS_INTENSITY} radius={0} style={styles.iconPickerSheet}>
+            {/* 弹层面板用不透明卡色（Android 无模糊，玻璃 fill 会透出底下内容） */}
+            <GlassView intensity={WEB_GLASS_INTENSITY} radius={0} fill={semantic.homeCard} style={styles.iconPickerSheet}>
               <View style={styles.iconPickerHeader}>
                 <AppText variant="headline">{t('addTx.pickIconTitle')}</AppText>
                 <PressableScale
