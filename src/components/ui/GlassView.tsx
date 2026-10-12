@@ -32,6 +32,9 @@ export interface GlassViewProps {
   intensity?: number;
   /** 投影开关（默认开；列表行等已在大卡内的玻璃件可关掉，阴影只留在大卡上） */
   shadow?: boolean;
+  /** 强模糊（仅浮空 Tab 栏用；其余玻璃件保持默认）：iOS BlurView 强度 70；
+   *  web 用 backdrop-filter blur(28px) saturate(160%)；Android 无原生模糊，靠 fill 的高不透明度 */
+  strongBlur?: boolean;
   pointerEvents?: ViewProps['pointerEvents'];
   style?: ViewStyle | ViewStyle[];
   children?: React.ReactNode;
@@ -42,6 +45,7 @@ export function GlassView({
   fill,
   intensity,
   shadow = true,
+  strongBlur = false,
   pointerEvents,
   style,
   children,
@@ -55,8 +59,10 @@ export function GlassView({
   //    原生端 intensity 100 才是「最厚材质」的正确档位，所以只压 web：
   //    12px 模糊 + 18% 白，夜间玻璃回到「填色令牌说了算」的深色（与稿里的夜间玻璃对得上）。
   const WEB_BLUR_CAP = 60;
-  const requested = intensity ?? glass.blurIntensity;
+  const requested = strongBlur ? STRONG_BLUR_IOS : intensity ?? glass.blurIntensity;
   const resolvedIntensity = Platform.OS === 'web' ? Math.min(requested, WEB_BLUR_CAP) : requested;
+  // web 强模糊走 CSS backdrop-filter（比 BlurView 的白色叠层更接近真模糊），此时不再叠 BlurView
+  const useCssBackdrop = strongBlur && Platform.OS === 'web';
 
   return (
     <View
@@ -70,13 +76,14 @@ export function GlassView({
           borderColor: glass.borderColor,
           boxShadow: shadow ? glass.shadow : undefined,
         },
+        useCssBackdrop ? (WEB_STRONG_BACKDROP as ViewStyle) : null,
         style,
       ]}
     >
       {/* 模糊垫底：只铺在内容下面，不吃触摸。
           tint 固定 'default'（iOS = 系统默认材质；web = 白色叠层，见上面 WEB_BLUR_CAP 的说明）：
           颜色由令牌的 fill 决定，模糊层不再二次染色（'dark' 会把夜间玻璃压暗一档） */}
-      {blurSupported ? (
+      {blurSupported && !useCssBackdrop ? (
         <BlurView
           intensity={resolvedIntensity}
           tint="default"
@@ -96,6 +103,11 @@ export function GlassView({
     </View>
   );
 }
+
+/** 强模糊的 iOS BlurView 强度（默认 24，Tab 栏用 70 让背后文字成为色块而不是可读字） */
+const STRONG_BLUR_IOS = 70;
+/** 强模糊的 web 实现（backdrop-filter；RN web 直接吃 CSS 属性名） */
+const WEB_STRONG_BACKDROP = { backdropFilter: 'blur(28px) saturate(160%)', WebkitBackdropFilter: 'blur(28px) saturate(160%)' } as unknown as ViewStyle;
 
 const styles = StyleSheet.create({
   // overflow hidden：亮边 / 高光 / 模糊都被圆角裁切（半透明卡不加 elevation——会透出阴影）

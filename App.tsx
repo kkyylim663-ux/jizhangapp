@@ -303,10 +303,10 @@ function SlidingTabBarInner(props: any) {
     >
       {/* 内层栏（react-navigation 自带）：几何（高度 / 全圆角）留在 screenOptions 的 tabBarStyle；
           材质（填充 / 描边 / 顶部内高光 / 投影 / 模糊回退）统一走 UI V2.1 §2 的 GlassView。
-          V2.2：栏身填充换成高不透明度磨砂（夜 88% / 日 90%，semantic.tabBar），
-          背后的列表文字不再透出来；模糊层仍是玻璃令牌的强度（不加不减） */}
+          V2.2：栏身填充换成高不透明度磨砂（夜 92% / 日 94%，semantic.tabBar）；
+          D5：strongBlur 强模糊（iOS 强度 70 / web backdrop-filter 28px）；Android 无原生模糊，只靠 fill */}
       <View style={styles.tabBarRow}>
-        <GlassView radius={radius.full} fill={semantic.tabBar} style={[styles.tabBarGlass, { borderWidth: StyleSheet.hairlineWidth, borderColor: semantic.hairline }]}>
+        <GlassView radius={radius.full} fill={semantic.tabBar} strongBlur style={[styles.tabBarGlass, { borderWidth: StyleSheet.hairlineWidth, borderColor: semantic.hairline }]}>
           <BottomTabBar {...props} />
         </GlassView>
       </View>
