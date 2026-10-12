@@ -50,7 +50,7 @@ export interface CalendarDayTotals {
   items?: CalendarDayItem[];
 }
 
-type SegKey = 'expense' | 'income' | 'net';
+export type SegKey = 'expense' | 'income' | 'net';
 
 interface Props {
   year: number;
@@ -64,6 +64,11 @@ interface Props {
   onNextMonth: () => void;
   /** 点明细行 → 交给页面走「进入编辑」的现有入口（与首页列表行同一入口） */
   onPressItem?: (id: string) => void;
+  /** 受控的指标分段（可选）：首页横滑换币种时，邻页预览要和真日历显示同一个指标 */
+  segKey?: SegKey;
+  onSegKeyChange?: (key: SegKey) => void;
+  /** 换了它就清掉「点选的日期」（可选）：首页横滑换币种后复位展开的那一天 */
+  selectionKey?: string;
 }
 
 /** 热力底色透明度区间：最弱 0.10，最强 0.30。上限按对比度定：0.30 时日期字与金额药丸字在日/夜、紫/绿下都 ≥4.5:1；
@@ -186,7 +191,7 @@ function makeDetailRowStyles(semantic: SemanticColors, spacing: Spacing, layout:
 // （1.5k / 1.2M / 3.4B），本文件的 compactAmount / scaledNum / bigEnUnit / totalsText
 // 一并删除 —— formatMoney 头注释里「迁移要单独派任务」指的就是本任务（仅限本文件）。
 
-export default function MonthCalendarCard({ year, month, days, monthExpense, monthIncome, onPrevMonth, onNextMonth, onPressItem }: Props) {
+export default function MonthCalendarCard({ year, month, days, monthExpense, monthIncome, onPrevMonth, onNextMonth, onPressItem, segKey: segKeyProp, onSegKeyChange, selectionKey }: Props) {
   const { semantic, spacing, radius, isDark, glassPill } = useTheme();
   // 翻月淡入：不用 Reanimated entering/exiting（Android Fabric 上挂载动画会 addViewAt 崩溃），
   // 改用 shared value 驱动 opacity；首帧不播，之后每次月份变化重新淡入 150ms
@@ -214,12 +219,17 @@ export default function MonthCalendarCard({ year, month, days, monthExpense, mon
     () => makeStyles(semantic, spacing, radius, chipFill, sel.fill),
     [semantic, spacing, radius, chipFill, sel.fill]
   );
-  const [segKey, setSegKey] = useState<SegKey>('expense');
+  const [segKeyState, setSegKeyState] = useState<SegKey>('expense');
+  const segKey = segKeyProp ?? segKeyState;
+  const setSegKey = (k: SegKey) => {
+    setSegKeyState(k);
+    onSegKeyChange?.(k);
+  };
   // 点选的日期（YYYY-MM-DD）：再点一次同日收起；翻月自动清空（月格 key 重挂不清 state，需显式清）
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   useEffect(() => {
     setSelectedDate(null);
-  }, [year, month]);
+  }, [year, month, selectionKey]);
   const selectedDay = selectedDate ? days.get(selectedDate) : undefined;
   const isEn = langMode === 'en';
   // 明细区标头：与首页列表的日期头同一写法（今天 / 昨天 / 10月8日 周四 · Today / Oct 8, Thu），
