@@ -34,7 +34,6 @@ import { AmountCalculatorKeypad } from '../components/AmountCalculatorKeypad';
 import { CursorAmountText } from '../components/CursorAmountText';
 import { useAmountExpression } from '../hooks/useAmountExpression';
 import { useTabBarForceHide } from '../context/TabBarAutoHideContext';
-import { CURRENCY_FLAG, getCurrencyFlag, getCurrencySymbol } from '../utils/currencies';
 import { getAssetDisplayBalance } from '../utils/creditCard';
 import { getCategoryLabel } from '../i18n/categories';
 import { hapticSuccess, hapticWarning } from '../utils/haptics';
@@ -464,11 +463,14 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
               activeScale={0.98}
               onPress={() => setAssetSheetOpen(true)}
             >
-              {selectedAsset && !!CURRENCY_FLAG[selectedAsset.currency] && (
-                <Text style={{ fontSize: 14 }}>{CURRENCY_FLAG[selectedAsset.currency]}</Text>
+              {/* 币种用代码小芯片（不用国旗 emoji：部分安卓机型只渲染成两个字母） */}
+              {selectedAsset && (
+                <View style={styles.currencyChip}>
+                  <Text style={styles.currencyChipText}>{selectedAsset.currency}</Text>
+                </View>
               )}
               <Text
-                style={{ flex: 1, color: selectedAsset ? colors.textPrimary : colors.textTertiary, fontSize: 14, marginLeft: selectedAsset && CURRENCY_FLAG[selectedAsset.currency] ? 6 : 0 }}
+                style={{ flex: 1, color: selectedAsset ? colors.textPrimary : colors.textTertiary, fontSize: 14, marginLeft: selectedAsset ? 6 : 0 }}
                 numberOfLines={1}
               >
                 {selectedAsset?.name ?? tr('addTx.notSelectedShort')}
@@ -672,7 +674,6 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
                   .map(([code, items]) => {
                     const expanded = !pickerCollapsedGroups.has(code);
                     const groupTotal = items.reduce((sum, a) => sum + getAssetBalance(a.id), 0);
-                    const flag = getCurrencyFlag(code);
                     return (
                       <View key={`grp-${code}`} style={styles.sheetGroupShadow}>
                         {/* 与资产页 currencyGroupCard 同款渐变/描边/圆角 */}
@@ -688,11 +689,9 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
                             onPress={() => togglePickerGroup(code)}
                           >
                             <View style={styles.sheetGroupFlag}>
-                              <Text style={flag ? styles.sheetGroupFlagEmoji : styles.sheetGroupFlagText}>
-                                {flag ?? getCurrencySymbol(code)}
-                              </Text>
+                              <Text style={styles.sheetGroupFlagText}>{code}</Text>
                             </View>
-                            <Text style={styles.sheetGroupCode}>{code}</Text>
+                            <View style={{ flex: 1 }} />
                             <Text style={styles.sheetGroupTotal}>{groupTotal.toFixed(2)}</Text>
                             <Ionicons
                               name={expanded ? 'chevron-up' : 'chevron-down'}
@@ -952,17 +951,27 @@ function makeStyles(colors: ThemeColors, semantic: SemanticColors) {
       paddingHorizontal: 16,
       paddingVertical: 12,
     },
+    // 币种代码芯片（分组头 / 已选账户）：替代国旗 emoji
     sheetGroupFlag: {
-      width: 34,
-      height: 34,
-      borderRadius: 17,
+      minWidth: 48,
+      height: 26,
+      paddingHorizontal: 8,
+      borderRadius: 8,
       backgroundColor: 'rgba(255,255,255,0.14)',
       alignItems: 'center',
       justifyContent: 'center',
     },
-    sheetGroupFlagText: { fontSize: 13, fontWeight: '700', color: colors.netWorthValue },
-    sheetGroupFlagEmoji: { fontSize: 22, marginTop: -2 },
-    sheetGroupCode: { flex: 1, fontSize: 16, fontWeight: '700', color: colors.netWorthLabel, marginLeft: 10 },
+    sheetGroupFlagText: { fontSize: 12, fontWeight: '700', color: colors.netWorthValue, letterSpacing: 0.5 },
+    currencyChip: {
+      minWidth: 40,
+      height: 20,
+      paddingHorizontal: 6,
+      borderRadius: 6,
+      backgroundColor: colors.link + '1F',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    currencyChipText: { fontSize: 11, fontWeight: '700', color: colors.link, letterSpacing: 0.3 },
     sheetGroupTotal: { fontSize: 20, fontWeight: '800', color: colors.netWorthValue, marginLeft: 6, fontVariant: ['tabular-nums'] },
     sheetGroupBody: {
       paddingHorizontal: 10,

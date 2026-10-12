@@ -56,7 +56,7 @@ const HERO_HEIGHT = 360;
 const CATEGORY_TINT_ALPHA = 0.12;
 /** 左滑露出的删除底宽度（iOS 习惯：一个方块宽）—— 纯几何常量 */
 const SWIPE_DELETE_WIDTH = 88;
-/** 已暂停行的整体灰度（变灰但照常可点进编辑） */
+/** 已暂停行图标的淡化透明度（文字不淡化，保证对比度；仍可点进编辑） */
 const PAUSED_OPACITY = 0.55;
 /** 一天的毫秒数（算「还有 N 天」用，纯展示） */
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -307,23 +307,41 @@ function PlanRow({
 
   return (
     <PressableScale
-      style={[styles.planRow, !plan.active && styles.planRowPaused]}
+      style={styles.planRow}
       activeScale={0.98}
       onPress={onPress}
       testID={`finance-plan-row-${plan.id}`}
     >
-      {/* 左：类别圆形图标（UI V2：42 圆，底色由 IconCircle 按主题从类别色推导） */}
-      <IconCircle size={ICON_BOX_SIZE} color={tint} icon={icon} />
+      {/* 左：类别圆形图标（UI V2：42 圆，底色由 IconCircle 按主题从类别色推导）。
+          已暂停只把图标变淡；文字不降透明度（整行 opacity 会把 .76 白字压到 ≈3.7:1，不达 4.5:1） */}
+      <View style={!plan.active ? styles.iconPaused : null}>
+        <IconCircle size={ICON_BOX_SIZE} color={tint} icon={icon} />
+      </View>
 
       {/* 中：标题 + 徽章一行，副标题一行；文字块 flex:1 吃掉剩余宽度，把金额顶到行尾 */}
       <View style={styles.textBlock}>
         <View style={styles.titleRow}>
-          <AppText variant="headline" numberOfLines={2} style={styles.title}>
+          <AppText variant="headline" numberOfLines={2} color={semantic.textPrimary} style={styles.title}>
             {plan.name}
           </AppText>
-          <Badge label={badge.label} tone={badge.tone} dot={badge.dot} />
+          {plan.active ? (
+            <Badge label={badge.label} tone={badge.tone} dot={badge.dot} />
+          ) : (
+            // 已暂停徽章：Badge 的 neutral 字色是 textSecondary（夜间 ≈3.7:1），这里直接用 textPrimary（≥4.5:1）
+            <View style={styles.pausedBadge}>
+              <View style={styles.pausedDot} />
+              <AppText variant="caption2" color={semantic.textPrimary}>
+                {badge.label}
+              </AppText>
+            </View>
+          )}
         </View>
-        <AppText variant="footnote" color={semantic.textSecondary} numberOfLines={1}>
+        {/* 暂停行副标题用 textPrimary：「每月 N 号结算」在夜间 textSecondary 只有 ≈3.7:1 */}
+        <AppText
+          variant="footnote"
+          color={plan.active ? semantic.textSecondary : semantic.textPrimary}
+          numberOfLines={1}
+        >
           {subtitle}
         </AppText>
       </View>
@@ -398,11 +416,23 @@ function makeStyles(
       paddingVertical: spacing.md,
       backgroundColor: semantic.surface,
     },
-    // 已暂停：整体变灰（仍可点进编辑，所以不用 ListRow 的 disabled）
-    planRowPaused: { opacity: PAUSED_OPACITY },
+    // 已暂停：仅图标变淡（仍可点进编辑，所以不用 ListRow 的 disabled）
+    iconPaused: { opacity: PAUSED_OPACITY },
     textBlock: { flex: 1, minWidth: 0 },
     // 标题与徽章并排：标题可换行可被挤窄，徽章不许被压
     titleRow: { flexDirection: 'row', alignItems: 'center', columnGap: spacing.sm },
     title: { flexShrink: 1 },
+    // 已暂停徽章（与 Badge 同规格，字色 textPrimary）
+    pausedBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      columnGap: spacing.xs,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: spacing.xs,
+      borderRadius: radius.xs,
+      alignSelf: 'flex-start',
+      backgroundColor: semantic.hairline,
+    },
+    pausedDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: semantic.textPrimary },
   });
 }
