@@ -62,15 +62,15 @@ const HERO_EYE_GAP = 10;
 /** 账单列表卡圆角（V2 稿 26 —— 比 radius.lg(20) 大的内容卡档，只在首页用） */
 const LIST_CARD_RADIUS = 22;
 // ── 币种分页（手势）：一次滑动只翻相邻的一页，不管甩得多快 ──
-/** 位移超过页宽的这个比例 → 翻一页（8%，灵敏） */
-const PAGER_DIST_FRAC = 0.08;
+/** 位移超过页宽的这个比例 → 翻一页（3%，很灵敏） */
+const PAGER_DIST_FRAC = 0.03;
 /** 沿滑动方向的速度超过它 → 翻一页（px/s） */
-const PAGER_FLICK_V = 200;
+const PAGER_FLICK_V = 80;
 /** 翻页 / 回弹动画：300ms 缓出，无回弹（只有两端有橡皮筋） */
 const PAGER_SETTLE_MS = 300;
 const PAGER_SETTLE_EASE = Easing.bezier(0.22, 1, 0.36, 1);
-/** 与 Gesture.Pan().activeOffsetX 一致：激活时的 10px 要扣掉，否则第一帧会跳 10px */
-const PAGER_ACTIVATE_OFFSET = 10;
+/** 与 Gesture.Pan().activeOffsetX 一致：激活时的 4px 要扣掉，否则第一帧会跳 4px（手指从按下起就带着条走，没有死区也没有跳变） */
+const PAGER_ACTIVATE_OFFSET = 4;
 // 账单卡左右外边距 = 页面边距令牌 layout.page（与预算卡同一条左右边线；QA 发现 12 与预算卡错位）
 const LIST_CARD_MARGIN = pageLayout.page;
 /** 行间分割线左缩进（V2 稿 70 = 行内边距 16 + 图标圆 42 + 行间距 12，正好与文字左缘对齐） */
@@ -783,7 +783,7 @@ export default function HomeScreen({ navigation }: any) {
   const curIdx = totalsByCurrency.findIndex(([c]) => c === activeCurrency);
   // ── 净资产横移 = UI 线程手势分页（替换旧的横向 ScrollView 分页：安卓惯性被截断、拖动中 setState 打断甩动）──
   // 页条 = 一个 translateX 的横向 strip，页宽 = 行实测宽 pagerW；拖动实时跟手，越界橡皮筋；
-  // 松手只翻相邻一页（位移 > 8% 页宽或速度 > 200px/s），动画结束才把 netWorthCurrency 提交一次；
+  // 松手只翻相邻一页（位移 > 3% 页宽或速度 > 80px/s），动画结束才把 netWorthCurrency 提交一次；
   // 胶囊文字 / 小圆点不 setState：它们直接从共享值 pagerX 读页位置（pagerPos），拖动中零重渲染。
   // 每页 MoneyText 挂载即定格、只在数据真变时才逐位滚动。
   const pagerX = useSharedValue(0);
@@ -822,7 +822,7 @@ export default function HomeScreen({ navigation }: any) {
       .enabled(multiPage)
       .activeOffsetX([-PAGER_ACTIVATE_OFFSET, PAGER_ACTIVATE_OFFSET])
       // 竖向超过 14 就放弃 → 竖向滚动交给外层列表
-      .failOffsetY([-14, 14])
+      .failOffsetY([-12, 12])
       .onStart(() => {
         // 在途动画先停，再从停下的位置开始拖
         cancelAnimation(pagerX);
@@ -849,7 +849,7 @@ export default function HomeScreen({ navigation }: any) {
         const n = pagerN.value;
         const v = e.velocityX;
         const tx = e.translationX - (e.translationX > 0 ? PAGER_ACTIVATE_OFFSET : -PAGER_ACTIVATE_OFFSET);
-        // 起点页 ±1：位移过 8% 页宽，或沿滑动方向的速度 > 200 → 翻到相邻页；否则回弹。
+        // 起点页 ±1：位移过 3% 页宽，或沿滑动方向的速度 > 80 → 翻到相邻页；否则回弹。
         // 无论甩得多快都只翻一页（经典分页轮播），左滑 → 下一个币种，右滑 → 上一个
         const startIdx = Math.round(-pagerStart.value / w);
         const dir = tx !== 0 ? (tx < 0 ? 1 : -1) : v < 0 ? 1 : -1;
@@ -1707,6 +1707,8 @@ export default function HomeScreen({ navigation }: any) {
               <View
                 style={styles.heroAmountRow}
                 onLayout={(e) => {
+                  // 拖动 / 翻页动画期间不理会行宽变化（中途改页宽会让金额盒被重新量、挤出省略号）
+                  if (pagerBusy.value) return;
                   const w = e.nativeEvent.layout.width;
                   setAmountRowW((prev) => (Math.abs(prev - w) >= 1 ? w : prev));
                 }}
@@ -1727,16 +1729,21 @@ export default function HomeScreen({ navigation }: any) {
                       testID="home-amount"
                     >
                       <Reanimated.View
-                        style={[styles.heroPagerStrip, { width: amountRowW * totalsByCurrency.length }, pagerStripStyle]}
+                        style={[
+                          styles.heroPagerStrip,
+                          { width: amountRowW * totalsByCurrency.length, minWidth: amountRowW * totalsByCurrency.length },
+                          pagerStripStyle,
+                        ]}
                       >
                         {totalsByCurrency.map(([code, total]) => (
-                          <View key={code} style={[styles.heroPagerPage, { width: amountRowW }]}>
+                          <View key={code} style={[styles.heroPagerPage, { width: amountRowW, minWidth: amountRowW }]}>
                             {balanceHidden ? (
                               <AppText
                                 variant="display"
                                 color={onGradientText}
                                 style={[styles.heroHiddenAmount, heroShadow]}
                                 numberOfLines={1}
+                                ellipsizeMode="clip"
                               >
                                 {HIDDEN_AMOUNT}
                               </AppText>
@@ -2131,10 +2138,11 @@ function makeStyles(
       marginTop: spacing.xs,
     },
     // V3 跟手分页的一页：页宽 = 行实测宽（JSX 给），金额在页内水平居中
-    heroPagerPage: { alignItems: 'center', justifyContent: 'center' },
+    // flexShrink 0 + 固定宽：页永远不会被压窄（金额盒的可用宽 = 页宽，不随横移变化）
+    heroPagerPage: { alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
     // 手势分页：clip 盒裁掉相邻页；strip 横排、页宽 = 行宽
     heroPagerClip: { overflow: 'hidden' },
-    heroPagerStrip: { flexDirection: 'row' },
+    heroPagerStrip: { flexDirection: 'row', flexShrink: 0 },
     heroAmountPress: { flexShrink: 1, minWidth: 0 },
     // 隐藏金额（••••••）：与 hero 整数段同字号同行高，避免显隐切换时行高跳动
     heroHiddenAmount: { fontSize: HERO_AMOUNT_SIZE, lineHeight: HERO_AMOUNT_LINE },
