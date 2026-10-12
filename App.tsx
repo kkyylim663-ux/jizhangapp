@@ -432,7 +432,7 @@ function AppContent() {
             // 选中 = 实心图标 + tabActive（夜白 / 日紫）；未选中 = 线框图标 + tabInactive（UI V2 §1）
             tabBarActiveTintColor: semantic.tabActiveLabel,
             // 未选中标签：夜间 .66 alpha 保证 11pt 文字 ≥4.5:1（日间沿用 textTertiary）
-            tabBarInactiveTintColor: isDark ? 'rgba(242,240,250,0.66)' : semantic.textTertiary,
+            tabBarInactiveTintColor: semantic.tabInactive,
             // 无障碍读屏名（标签改成函数式渲染后，库不再自动拼「x, tab, n of m」，显式给名字）
             tabBarAccessibilityLabel: tabLabels[route.name] ?? route.name,
             // 标签走统一文字组件：令牌字号 caption2 = 11pt（旧的 13pt 让英文「Settings」

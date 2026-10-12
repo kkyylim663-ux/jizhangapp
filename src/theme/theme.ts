@@ -446,8 +446,9 @@ export const darkColors: ThemeColors = {
   // UI V2.1 §3：夜间不再用 #73738A / #82829A 这类暗灰；三级字改白 56%
   // V2.2c：二级字 .70 → .76
   textPrimary: '#F2F0FA',
-  textSecondary: 'rgba(242,240,250,0.76)',
-  textTertiary: 'rgba(242,240,250,0.56)',
+  // 夜间灰字：实测对最亮的渐变色块（#7A2E6A）也 ≥4.5:1（secondary .84 = 5.9，tertiary .72 = 4.8）
+  textSecondary: 'rgba(242,240,250,0.84)',
+  textTertiary: 'rgba(242,240,250,0.72)',
   link: '#A595FF',
 
   income: '#7CF0B8',
