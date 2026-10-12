@@ -37,98 +37,119 @@ const HIDE_DISTANCE = 60; // 同方向滚动 60px 才切换状态
 const TOP_ZONE = 50; // 距顶部 50px 以内强制显示
 const ANIM_MS = 240; // UI 动画 240ms ease-out（<300ms 原则）
 
+type AutoHideState = {
+  translateY: Animated.Value;
+  opacity: Animated.Value;
+  hidden: boolean;
+  lastY: number;
+  anchor: number;
+  lastDirDown: boolean;
+  /** 强制隐藏的持有者集合（必须跨 insets 变化保留，否则会丢掉仍在用的持有者） */
+  owners: Set<unknown>;
+  /** = owners.size > 0；true 期间，滚动/导航跳转都不再决定显隐，只听 setForceHidden */
+  forced: boolean;
+  /** 位置待同步：reset()/解除强制隐藏后，下一个 onScroll 只校准真实位置、不做方向判断 */
+  pendingSync: boolean;
+};
+
 export function useCreateTabBarAutoHide(): TabBarAutoHideValue {
   const insets = useSafeAreaInsets();
+  // 底部安全区只通过 ref 读取：变化时不重建 owners / forced / 动画值（以前放在 useMemo 里，
+  // insets.bottom 一变就整套重建，丢掉仍然活着的 owner，栏可能被错误弹出）
+  const bottomRef = useRef(insets.bottom);
+  bottomRef.current = insets.bottom;
+  const stateRef = useRef<AutoHideState | null>(null);
+  if (stateRef.current === null) {
+    stateRef.current = {
+      translateY: new Animated.Value(0),
+      opacity: new Animated.Value(1),
+      hidden: false,
+      lastY: 0,
+      anchor: 0,
+      lastDirDown: true,
+      owners: new Set<unknown>(),
+      forced: false,
+      pendingSync: false,
+    };
+  }
 
   return useMemo(() => {
-    const translateY = new Animated.Value(0);
-    const opacity = new Animated.Value(1);
-    let hidden = false;
-    let lastY = 0;
-    let anchor = 0;
-    let lastDirDown = true;
-    const owners = new Set<unknown>(); // 强制隐藏的持有者集合
-    let forced = false; // = owners.size > 0；true 期间，滚动/导航跳转都不再决定显隐，只听 setForceHidden
-    // 位置待同步：reset()/解除强制隐藏时，列表可能还停在中途滚动位置（比如 y=800）。
-    // 此时把锚点盲目归零的话，下一次滚动事件会被误判成"向下滚了一大步"，
-    // 刚弹出来的 Tab 栏立刻又被藏回去。置 true 后，下一个 onScroll 只同步真实位置、
-    // 不做方向判断，之后再恢复正常判断。
-    let pendingSync = false;
+    const st = stateRef.current as AutoHideState;
 
     const toggle = (hide: boolean) => {
-      if (hide === hidden) return;
-      hidden = hide;
+      if (hide === st.hidden) return;
+      st.hidden = hide;
       // 收起位移 = 外壳完整高度 + 距底 + 安全区（tabBarHideOffset 从 useTabClearance
       // 的同一组常量推导）——保证整栏连中央凸起的圆钮一起滑出屏幕之外
-      const off = tabBarHideOffset(insets.bottom);
+      const off = tabBarHideOffset(bottomRef.current);
       const anim = { duration: ANIM_MS, easing: Easing.out(Easing.cubic), useNativeDriver: Platform.OS !== 'web' };
       Animated.parallel([
-        Animated.timing(translateY, { toValue: hide ? off : 0, ...anim }),
-        Animated.timing(opacity, { toValue: hide ? 0 : 1, ...anim }),
+        Animated.timing(st.translateY, { toValue: hide ? off : 0, ...anim }),
+        Animated.timing(st.opacity, { toValue: hide ? 0 : 1, ...anim }),
       ]).start();
     };
 
     const onScroll = (e: any) => {
-      if (forced) return; // 键盘等弹层开着的时候，滚动不应该把栏重新弹出来
+      if (st.forced) return; // 键盘等弹层开着的时候，滚动不应该把栏重新弹出来
       const y = e?.nativeEvent?.contentOffset?.y ?? 0;
-      if (pendingSync) {
+      if (st.pendingSync) {
         // 面板刚关闭/刚切回来：先校准到列表真实位置，不做方向判断
-        pendingSync = false;
-        lastY = y;
-        anchor = y;
+        st.pendingSync = false;
+        st.lastY = y;
+        st.anchor = y;
         return;
       }
-      const dy = y - lastY;
-      lastY = y;
+      const dy = y - st.lastY;
+      st.lastY = y;
       if (Math.abs(dy) < 0.5) return;
       const goingDown = dy > 0;
 
       // 顶部区域常显
       if (y <= TOP_ZONE) {
-        anchor = y;
-        lastDirDown = goingDown;
+        st.anchor = y;
+        st.lastDirDown = goingDown;
         toggle(false);
         return;
       }
       // 方向反转：只更新方向标记。锚点保留——这样快滑一大步（一次事件跨过
       // 整个迟滞距离）也能立即触发，而不是只"重新武装"等下一次滚动
-      if (goingDown !== lastDirDown) {
-        lastDirDown = goingDown;
+      if (goingDown !== st.lastDirDown) {
+        st.lastDirDown = goingDown;
       }
-      const travelled = goingDown ? y - anchor : anchor - y;
+      const travelled = goingDown ? y - st.anchor : st.anchor - y;
       if (travelled >= HIDE_DISTANCE) {
-        anchor = y;
+        st.anchor = y;
         toggle(goingDown);
       }
     };
 
     const reset = () => {
-      if (forced) return; // 强制隐藏期间，导航状态变化（切Tab/push/pop）也不该把栏拉出来
+      if (st.forced) return; // 强制隐藏期间，导航状态变化（切Tab/push/pop）也不该把栏拉出来
       // 不再把 lastY/anchor 归零（列表可能停在中途位置）：交给下一个 onScroll 校准
-      pendingSync = true;
+      st.pendingSync = true;
       toggle(false);
     };
 
     const DEFAULT_OWNER = 'default';
     const setForceHidden = (hide: boolean, owner: unknown = DEFAULT_OWNER) => {
       if (hide) {
-        owners.add(owner);
-        forced = true;
+        st.owners.add(owner);
+        st.forced = true;
         toggle(true);
       } else {
         // 没持有过的 owner 释放（如卸载清理）不产生任何效果，也不会把别人的隐藏打断
-        if (!owners.delete(owner)) return;
-        forced = owners.size > 0;
-        if (forced) return; // 还有别的 owner 在用：继续隐藏
+        if (!st.owners.delete(owner)) return;
+        st.forced = st.owners.size > 0;
+        if (st.forced) return; // 还有别的 owner 在用：继续隐藏
         // 交还给滚动逻辑：先按"不隐藏"处理并把栏弹出来；下一个 onScroll 只校准
         // 真实滚动位置，不会把"位置跳变"误判成向下滚动（修复选完日期栏又缩回去的 bug）
-        pendingSync = true;
+        st.pendingSync = true;
         toggle(false);
       }
     };
 
-    return { translateY, opacity, onScroll, reset, setForceHidden };
-  }, [insets.bottom]);
+    return { translateY: st.translateY, opacity: st.opacity, onScroll, reset, setForceHidden };
+  }, []);
 }
 
 export function TabBarAutoHideProvider({
