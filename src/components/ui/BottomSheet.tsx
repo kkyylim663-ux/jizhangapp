@@ -53,6 +53,9 @@ export interface BottomSheetProps {
   dismissible?: boolean;
   /** 内容最大高度（占屏高比，默认 0.85） */
   maxHeightRatio?: number;
+  /** 面板玻璃填充覆盖（默认取 glass.fill）。传 semantic.tabBar = 高不透明磨砂
+   *  （夜 88% / 日 90%）—— 资产详情这类「表单抽屉」要挡住背后滚动的列表 */
+  fill?: string;
   accessibilityLabel?: string;
   style?: StyleProp<ViewStyle>;
   testID?: string;
@@ -78,6 +81,7 @@ export function BottomSheet({
   closeButton,
   dismissible = true,
   maxHeightRatio = 0.85,
+  fill,
   accessibilityLabel,
   style,
   testID,
@@ -252,6 +256,7 @@ export function BottomSheet({
             背景层不吃触摸（pointerEvents none），交互全部交给内容 */}
         <GlassView
           radius={0}
+          fill={fill}
           pointerEvents="none"
           style={[
             StyleSheet.absoluteFill,

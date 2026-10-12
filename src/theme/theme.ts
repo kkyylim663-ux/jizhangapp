@@ -278,7 +278,8 @@ export const lightColors: ThemeColors = {
 
   // UI V2.1 §3：日间不再有白字压在浅色上；三级字/未选中 Tab 都提了对比度
   textPrimary: '#17142A',
-  textSecondary: '#4F4A66',
+  // V2.2c：日间二级字提对比度（#4F4A66 → #433E5A）
+  textSecondary: '#433E5A',
   textTertiary: '#6A6680',
   link: '#5B45E0',
 
@@ -443,8 +444,9 @@ export const darkColors: ThemeColors = {
   todayCardGradientTo: '#17171E',
 
   // UI V2.1 §3：夜间不再用 #73738A / #82829A 这类暗灰；三级字改白 56%
+  // V2.2c：二级字 .70 → .76
   textPrimary: '#F2F0FA',
-  textSecondary: 'rgba(242,240,250,0.70)',
+  textSecondary: 'rgba(242,240,250,0.76)',
   textTertiary: 'rgba(242,240,250,0.56)',
   link: '#A595FF',
 
@@ -559,6 +561,8 @@ export type SemanticColors = {
   tabInactive: string;
   /** 分割线、卡片描边 */
   hairline: string;
+  /** Switch 关闭态轨道（V2.2c：日 #D6D3E0 / 夜白 22%）—— 玻璃 / 渐变上 6% 的发丝线太浅，看不见 */
+  switchTrackOff: string;
   /** 主文字 */
   textPrimary: string;
   /** 次要文字 */
@@ -599,8 +603,9 @@ export const lightSemantic: SemanticColors = {
   tabActive: '#5B3DF0',
   tabInactive: '#6A6680', // = textTertiary（§3：Tab 未选中）
   hairline: 'rgba(20,20,40,0.06)',
+  switchTrackOff: '#D6D3E0',
   textPrimary: '#17142A',
-  textSecondary: '#4F4A66',
+  textSecondary: '#433E5A', // V2.2c：同 colors.textSecondary
   textTertiary: '#6A6680',
   accent: '#6C4DF6',
   onAccent: '#FFFFFF',
@@ -608,7 +613,7 @@ export const lightSemantic: SemanticColors = {
   accentSoft: 'rgba(108,77,246,0.10)',
   amountExpense: '#17142A', // = textPrimary
   amountIncome: '#0A7A50',
-  amountTransfer: '#4F4A66', // = textSecondary
+  amountTransfer: '#433E5A', // = textSecondary
   danger: '#E11D48',
   warning: '#D97706',
   scrim: 'rgba(10,8,20,0.40)',
@@ -630,8 +635,9 @@ export const darkSemantic: SemanticColors = {
   //    0.85 实测 4.48:1（差 0.02 不达标），取 0.90（选中 / 未选中仍靠「实心图标 vs 线框图标 + 亮度差」区分）
   tabInactive: 'rgba(242,240,250,0.90)',
   hairline: 'rgba(255,255,255,0.05)',
+  switchTrackOff: 'rgba(255,255,255,0.22)',
   textPrimary: '#F2F0FA',
-  textSecondary: 'rgba(242,240,250,0.70)',
+  textSecondary: 'rgba(242,240,250,0.76)', // V2.2c：.70 → .76
   textTertiary: 'rgba(242,240,250,0.56)',
   accent: '#6C4DF6',
   onAccent: '#FFFFFF',
@@ -639,7 +645,7 @@ export const darkSemantic: SemanticColors = {
   accentSoft: 'rgba(165,149,255,0.14)',
   amountExpense: '#F2F0FA', // = textPrimary
   amountIncome: '#3DDC97',
-  amountTransfer: 'rgba(242,240,250,0.70)', // = textSecondary
+  amountTransfer: 'rgba(242,240,250,0.76)', // = textSecondary
   danger: '#FB7185',
   warning: '#FBBF24',
   scrim: 'rgba(0,0,0,0.55)',
@@ -980,29 +986,47 @@ export const centerButtonShadow = {
 } as const;
 
 /**
- * 打包字体层（UI V2 第 2 节，2026-10-10）：数字 / 英文从 Inter 换成 **Geist**
- * （Vercel 官方开源 vercel/geist-font，OFL 许可），随 App 打包；中文继续走系统字体。
- * 打包 Light 300 / Regular 400 / Medium 500 / SemiBold 600 四档 ttf（assets/fonts/Geist-*.ttf）。
+ * 打包字体层（UI V2.2c，2026-10-12）：数字 / 英文 = **Inter**，中文 = **Noto Sans SC**，
+ * 两族都随包发（OFL 许可）——不再依赖系统字体，跨机型字形与宽度一致。
+ * - Inter 400/500/600/700：assets/fonts/Inter-*.ttf（官方 4 档，无 300）。
+ * - Noto Sans SC 400/500/700：assets/fonts/NotoSansSC-*.ttf，用 pyftsubset 子集化为
+ *   常用汉字 3755（GB2312 一级字表）+ 标点 + 拉丁，每档 1.4MB（≤1.5MB 预算）。
  * ⚠ 这里的值 = 字体内部 PostScript 名，也是 App.tsx 里 useFonts 的键 —— 改一处必须同步另一处。
- * ⚠ Geist 官方只有 300–900，没有 700 单档：'700' 键（旧令牌兼容）回落到 SemiBold。
+ * ⚠ 静态字体按家族名分字重（Inter-SemiBold / NotoSansSC-Bold…），**不能再给 fontWeight**，
+ *   否则安卓会去合成加粗、iOS 二次加粗（家族名即字重）。
  */
 export const fontFamily = {
-  light: 'Geist-Light',
-  regular: 'Geist-Regular',
-  medium: 'Geist-Medium',
-  semiBold: 'Geist-SemiBold',
-  bold: 'Geist-SemiBold',
+  light: 'Inter-Regular', // Inter 无 300 单档，Light 档回落到 Regular
+  regular: 'Inter-Regular',
+  medium: 'Inter-Medium',
+  semiBold: 'Inter-SemiBold',
+  bold: 'Inter-Bold',
 } as const;
 
 export type FontFamily = typeof fontFamily;
 
-/** fontFamily 令牌取值的联合（'Geist-Light' | 'Geist-Regular' | 'Geist-Medium' | 'Geist-SemiBold'） */
-export type FontFamilyName = FontFamily[keyof FontFamily];
+/**
+ * 中文字体家族（Noto Sans SC 子集）：只有 400 / 500 / 700 三档。
+ * 600（semiBold）落到 Bold —— 中文 700 相对 500 的笔画增量远小于拉丁，观感仍是「半粗」，
+ * 且金额 / 标题要求的最低字重是 600，宁可偏重也不能偏轻。
+ */
+export const fontFamilyCjk = {
+  light: 'NotoSansSC-Regular',
+  regular: 'NotoSansSC-Regular',
+  medium: 'NotoSansSC-Medium',
+  semiBold: 'NotoSansSC-Bold',
+  bold: 'NotoSansSC-Bold',
+} as const;
+
+export type FontFamilyCjk = typeof fontFamilyCjk;
+
+/** fontFamily 令牌取值的联合（Inter-* 与 NotoSansSC-*） */
+export type FontFamilyName = FontFamily[keyof FontFamily] | FontFamilyCjk[keyof FontFamilyCjk];
 
 /** typography 十一档里实际出现过的字重 + UI V2 Hero 金额的 Light 300（RM / 小数） */
 export type FontWeightKey = '300' | '400' | '500' | '600' | '700';
 
-/** 字重 → Geist 家族：300→light / 400→regular / 500→medium / 600→semiBold / 700→semiBold（新字体只认家族名，不认 fontWeight） */
+/** 字重 → Inter 家族（数字 / 拉丁文本） */
 export const fontFamilyByWeight: Record<FontWeightKey, FontFamilyName> = {
   '300': fontFamily.light,
   '400': fontFamily.regular,
@@ -1011,18 +1035,39 @@ export const fontFamilyByWeight: Record<FontWeightKey, FontFamilyName> = {
   '700': fontFamily.bold,
 };
 
+/** 字重 → Noto Sans SC 家族（含中文的文本） */
+export const fontFamilyCjkByWeight: Record<FontWeightKey, FontFamilyName> = {
+  '300': fontFamilyCjk.light,
+  '400': fontFamilyCjk.regular,
+  '500': fontFamilyCjk.medium,
+  '600': fontFamilyCjk.semiBold,
+  '700': fontFamilyCjk.bold,
+};
+
 /**
- * Geist 静态字体只有数字 / 拉丁字母 / 拉丁符号字形，没有中文、日文、emoji。
- * 允许范围：空白 + ASCII 可见字符 + Latin-1 + Latin Extended-A/B + 常用标点 / 货币 / 箭头 / 上下标 / 数学符号。
- * 中文、日文、韩文、西里尔、泰文、emoji（含代理对）全部落在范围外 → 返回 false。
- * ⚠ 纯函数，供 AppText 使用：返回 true 才套 Geist 家族名，false 走系统字体
- *   （否则中文/emoji 会被 Geist 盖掉，渲染成方框）。
+ * 打包拉丁字体（Inter）的字形范围：空白 + ASCII 可见字符 + Latin-1 + Latin Extended-A/B
+ * + 常用标点 / 货币 / 箭头 / 上下标 / 数学符号。
+ * ⚠ 纯函数，供 AppText 使用：返回 true 才套 Inter 家族名。
  */
 const LATIN_SAFE_RE = /^[\s\u0020-\u007E\u00A0-\u024F\u2000-\u206F\u20A0-\u20BF\u2190-\u21FF\u2070-\u209F\u2200-\u22FF]*$/;
 
-/** 这段文本能不能用打包的拉丁字体（Geist）：整段都是数字 / 拉丁字母 / 拉丁符号才 true，含任何非拉丁字符一律 false（空串视为 true） */
+/** 这段文本能不能用打包的拉丁字体（Inter）：整段都是数字 / 拉丁字母 / 拉丁符号才 true（空串视为 true） */
 export function canUseLatinText(text: string): boolean {
   return LATIN_SAFE_RE.test(text);
+}
+
+/**
+ * 打包中文字体（Noto Sans SC）子集**确实有字形**的字符范围：上面的拉丁/标点范围，
+ * 加上 CJK 标点（U+3000–3030）、汉字基本区（U+4E00–9FFF）、全角形式（U+FF00–FFEF）。
+ * 范围必须与 pyftsubset 的字符集一致（_scratch/fonts/build_noto.py）—— 多写一个区段
+ * 就会渲染成方框（豆腐块）。
+ * ⚠ 假名、谚文、CJK 扩展 A/B、emoji、其他文种一律落在范围外 → 返回 false → 回退系统字体。
+ */
+const CJK_SAFE_RE = /^[\s\u0020-\u007E\u00A0-\u024F\u2000-\u206F\u20A0-\u20BF\u2190-\u21FF\u2070-\u209F\u2200-\u22FF\u3000-\u3030\u4E00-\u9FFF\uFF00-\uFFEF]*$/;
+
+/** 这段文本能不能用打包的中文字体（Noto Sans SC 子集）：拉丁 + CJK 标点 + 汉字 + 全角才 true（空串视为 true） */
+export function canUseCjkText(text: string): boolean {
+  return CJK_SAFE_RE.test(text);
 }
 
 /** @deprecated 旧名保留兼容（T01b 时代为 Inter）；新代码用 canUseLatinText */

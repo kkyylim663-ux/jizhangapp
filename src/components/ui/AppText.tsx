@@ -3,9 +3,10 @@
 //
 // 职责
 // - variant 对应 typography 11 档：字号 / 行高 / 字重 / 字距 / 系统缩放上限全部取令牌；
-// - 字体自动分流：整段是数字 / 拉丁（含 RM、逗号、减号这类拉丁符号）→ 走打包的 Geist，
-//   跨机型宽度一致；只要含中文 / 日文 / emoji → 回退系统字体（Geist 没有这些字形，
-//   强套会渲染成方框，见 theme.ts 的 canUseLatinText）；
+// - 字体自动分流（V2.2c）：整段是数字 / 拉丁（含 RM、逗号、减号这类拉丁符号）→ 走打包的
+//   **Inter**；整段是拉丁 + 中文 / 全角标点 → 走打包的 **Noto Sans SC** 子集；
+//   只要含 emoji、假名、谚文或子集外的生僻字 → 回退系统字体（打包字体没有这些字形，
+//   强套会渲染成方框，见 theme.ts 的 canUseLatinText / canUseCjkText）；
 // - Android 统一 includeFontPadding:false（计划 8.2 第 4 条），配合令牌里的明确 lineHeight，
 //   不同品牌安卓机上的垂直位置才一致；
 // - 字距：令牌里的负字距只对数字 / 拉丁有意义，中文 / 混合文本一律按 0 处理（UI_RULES 第 2 节）；
@@ -21,6 +22,7 @@
 import React, { useMemo } from 'react';
 import { StyleProp, Text, TextProps, TextStyle } from 'react-native';
 import {
+  canUseCjkText,
   canUseLatinText,
   FontWeightKey,
   TypographyVariant,
@@ -37,8 +39,9 @@ export interface AppTextProps extends TextProps {
   /** 水平对齐（等价写法，省得到处写 style={{ textAlign }}） */
   align?: TextStyle['textAlign'];
   /**
-   * 字体分流：'auto'（默认）数字 / 拉丁走 Inter，含中文回退系统字体；
-   * 'system' 强制系统字体（段落里混排、需要和系统字形一致时用）。
+   * 字体分流：'auto'（默认）数字 / 拉丁走 Inter、含中文走 Noto Sans SC、
+   * 含 emoji / 假名 / 子集外生僻字回退系统字体；'system' 强制系统字体
+   * （段落里混排、需要和系统字形一致时用）。
    */
   font?: 'auto' | 'system';
   style?: StyleProp<TextStyle>;
@@ -79,21 +82,29 @@ export function AppText({
   children,
   ...rest
 }: AppTextProps) {
-  const { typography, semantic, fontFamilyByWeight } = useTheme();
+  const { typography, semantic, fontFamilyByWeight, fontFamilyCjkByWeight } = useTheme();
   const token = typography[variant];
 
-  // Geist 只覆盖数字 / 拉丁字形：含中文、emoji 的文本必须回退系统字体
+  // 字体分流（V2.2c）：纯拉丁/数字 → Inter；拉丁 + 中文/全角 → Noto Sans SC 子集；
+  // 其余（emoji、假名、谚文、生僻字…）→ 系统字体（打包字体没这些字形，强套会变方框）
   const rawText = useMemo(() => flattenText(children), [children]);
   const useLatinFont = font === 'auto' && rawText !== null && canUseLatinText(rawText);
+  const useCjkFont = font === 'auto' && rawText !== null && !useLatinFont && canUseCjkText(rawText);
   const resolvedWeight = (weight ?? String(token.fontWeight)) as FontWeightKey;
+  const packedFamily = useLatinFont
+    ? fontFamilyByWeight[resolvedWeight]
+    : useCjkFont
+      ? fontFamilyCjkByWeight[resolvedWeight]
+      : undefined;
 
   const textStyle: TextStyle = {
     fontSize: token.fontSize,
     lineHeight: token.lineHeight,
-    // Geist 静态字体按字重分家族（Geist-SemiBold 等），不能再给 fontWeight，
-    // 否则安卓会去合成加粗 / iOS 会二次加粗（T01b 的约定：家族名即字重）
-    fontWeight: useLatinFont ? 'normal' : token.fontWeight,
-    fontFamily: useLatinFont ? fontFamilyByWeight[resolvedWeight] : undefined,
+    // 打包的是静态字重字体（Inter-SemiBold / NotoSansSC-Bold 等），不能再给 fontWeight，
+    // 否则安卓会去合成加粗 / iOS 会二次加粗（约定：家族名即字重）
+    fontWeight: packedFamily ? 'normal' : token.fontWeight,
+    fontFamily: packedFamily,
+    // 负字距只对数字 / 拉丁有意义：中文文本（含中英混排）一律 0
     letterSpacing: useLatinFont ? token.letterSpacing : 0,
     // 等宽数字：金额列 / 日期列 / 统计数字不会左右晃
     fontVariant: ['tabular-nums'],

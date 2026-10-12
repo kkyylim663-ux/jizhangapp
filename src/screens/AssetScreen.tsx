@@ -61,6 +61,7 @@ import {
   IconCircle,
   ListRow,
   MoneyText,
+  StatusBarGlass,
   Switch,
 } from '../components/ui';
 import { withAlpha } from '../components/ui/color';
@@ -89,6 +90,9 @@ const TYPE_OPTIONS: { type: AssetType; label: string; icon: IconName; color: str
 
 // 用户手动拖拽排出来的账户顺序，按币种分组各自记一份序号，存本地，不动 Asset 数据结构
 const ASSET_ORDER_KEY = '@jizhang/assetOrder';
+
+/** V2.2c 层级：账户名 16/500（令牌 body 17/400 → 覆盖字号 + 提字重）；类型行 13 secondary（footnote） */
+const TITLE_FONT_SIZE = 16;
 
 /** 信用卡额度使用率细条高度（计划 S3：2pt）—— 纯几何常量 */
 /** 额度使用率细条高度（UI V2 定稿：3，与统计页占比细条同规格） */
@@ -165,29 +169,34 @@ function GlassPillButton({
 }
 
 /**
- * 币种分组头（V2.2 定稿：放在玻璃卡**外面**、卡片上方的分组标题行，表头 / 内容一眼分清）——
- *   左：币种代码小胶囊（accent 软底 + accent 字，如 MYR）+「净资产」小字（text.secondary）；
- *   右：该币种合计金额（title2 / 600，带币种符号）。
+ * 币种小节头（V2.2c：放进玻璃卡**卡内**，一组一个节标题行）——
+ *   左：币种代码小胶囊（accent 软底 + accent 字，如 MYR）；
+ *   右：该币种合计（15/600，text.secondary，**完整两位小数千分位、不带货币符号** ——
+ *       币种只靠左侧胶囊，否则 CNY / JPY 都是 ¥ 分不清）；
+ *   「净资产」字样与每个组各自的实白卡都已删（V2.2c：所有组共用同一张玻璃卡）。
+ * 只有 1 个账户的组不显示合计（合计 = 那一个账户的余额，重复且占宽）。
  * 为什么不用共享 Chip：稿里币种标记是「实心小胶囊（24 高 / 左右内衬 9 / 12-600）」，
  * 而 Chip 是描边胶囊 + 44 触控外框，当分组头会把这一行撑高一档。
  * 收起 / 展开的功能一点没变：胶囊本身就是原来的开关（点它收起该组）；
  * 收起时胶囊降透明度，读屏照旧报「选中 / 未选中」。
  */
-function CurrencyGroupHeader({
+function CurrencySectionHeader({
   code,
   total,
+  showTotal,
   collapsed,
   onToggle,
   testID,
 }: {
   code: string;
   total: number;
+  /** 组内账户数 > 1 才显示合计（V2.2c） */
+  showTotal: boolean;
   collapsed: boolean;
   onToggle: () => void;
   testID?: string;
 }) {
   const { semantic, spacing, radius, layout } = useTheme();
-  const t = useT();
   return (
     <View
       style={{
@@ -198,48 +207,46 @@ function CurrencyGroupHeader({
         columnGap: spacing.sm,
         rowGap: spacing.xs,
         paddingHorizontal: layout.card,
+        paddingTop: spacing.md,
         paddingBottom: spacing.sm,
       }}
     >
-      <View style={{ flexDirection: 'row', alignItems: 'center', columnGap: spacing.sm, flexShrink: 1 }}>
-        <PressableScale
-          onPress={onToggle}
-          activeScale={0.96}
-          // 胶囊只有 24 高，外扩到 44 触控（UI_RULES：可点元素 ≥44pt）
-          hitSlop={{ top: 10, bottom: 10, left: 0, right: 0 }}
-          accessibilityRole="button"
-          accessibilityLabel={code}
-          accessibilityState={{ selected: !collapsed }}
-          testID={testID}
+      <PressableScale
+        onPress={onToggle}
+        activeScale={0.96}
+        // 胶囊只有 24 高，外扩到 44 触控（UI_RULES：可点元素 ≥44pt）
+        hitSlop={{ top: 10, bottom: 10, left: 0, right: 0 }}
+        accessibilityRole="button"
+        accessibilityLabel={code}
+        accessibilityState={{ selected: !collapsed }}
+        testID={testID}
+      >
+        {/* 胶囊底：不透明软紫 —— 页面底是渐变，直接用 10% 的 accentSoft 会被渐变拉暗
+            （实测 12pt 紫字只有 3.4:1，§4 要 4.5）；不透明底 + accent 7%（≈ accentSoft 浅一档）
+            落在 4.6:1。底色由「surfaceElevated 实底 + 半透明紫叠层」合成，不手写色值 */}
+        <View
+          style={{
+            height: 24,
+            borderRadius: radius.full,
+            paddingHorizontal: 9,
+            justifyContent: 'center',
+            backgroundColor: semantic.surfaceElevated,
+            overflow: 'hidden',
+            opacity: collapsed ? 0.55 : 1,
+          }}
         >
-          {/* 胶囊底：不透明软紫 —— 页面底是渐变，直接用 10% 的 accentSoft 会被渐变拉暗
-              （实测 12pt 紫字只有 3.4:1，§4 要 4.5）；不透明底 + accent 7%（≈ accentSoft 浅一档）
-              落在 4.6:1。底色由「surfaceElevated 实底 + 半透明紫叠层」合成，不手写色值 */}
           <View
-            style={{
-              height: 24,
-              borderRadius: radius.full,
-              paddingHorizontal: 9,
-              justifyContent: 'center',
-              backgroundColor: semantic.surfaceElevated,
-              overflow: 'hidden',
-              opacity: collapsed ? 0.55 : 1,
-            }}
-          >
-            <View
-              pointerEvents="none"
-              style={[StyleSheet.absoluteFill, { backgroundColor: withAlpha(semantic.accentText, 0.07) }]}
-            />
-            <AppText variant="caption" weight="600" color={semantic.accentText}>
-              {code}
-            </AppText>
-          </View>
-        </PressableScale>
-        <AppText variant="footnote" color={semantic.textSecondary} numberOfLines={1}>
-          {t('asset.summaryNet')}
-        </AppText>
-      </View>
-      <MoneyText value={total} variant="title2" weight="600" currency={code} showCurrency />
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, { backgroundColor: withAlpha(semantic.accentText, 0.07) }]}
+          />
+          <AppText variant="caption" weight="600" color={semantic.accentText}>
+            {code}
+          </AppText>
+        </View>
+      </PressableScale>
+      {showTotal && (
+        <MoneyText value={total} variant="subhead" weight="600" color={semantic.textSecondary} />
+      )}
     </View>
   );
 }
@@ -292,9 +299,10 @@ function AssetRow({
   // 单行时三块垂直居中（和 ListRow 观感一致）；两行时文字块与金额一律靠上，
   // 金额因此永远停在第一行最右边，不会被顶到第二行去
   const [titleLines, setTitleLines] = useState(1);
+  // V2.2c 层级：账户名 16/500（body 令牌 17/400，按稿覆盖字号 + 提半档字重）
   const singleLineHeight =
-    typography.headline.lineHeight *
-    Math.min(PixelRatio.getFontScale(), typography.headline.maxFontSizeMultiplier);
+    TITLE_FONT_SIZE *
+    Math.min(PixelRatio.getFontScale(), typography.body.maxFontSizeMultiplier);
   useEffect(() => {
     setTitleLines(1);
   }, [title]);
@@ -331,7 +339,9 @@ function AssetRow({
         </View>
         <View style={{ flexGrow: 1, flexShrink: 1 }}>
           <AppText
-            variant="headline"
+            variant="body"
+            weight="500"
+            style={{ fontSize: TITLE_FONT_SIZE }}
             numberOfLines={2}
             onLayout={(e) =>
               setTitleLines(Math.max(1, Math.round(e.nativeEvent.layout.height / singleLineHeight)))
@@ -389,6 +399,58 @@ function AssetRow({
         {trailing}
       </View>
     </PressableScale>
+  );
+}
+
+/**
+ * 详情抽屉里的只读信息行（V2.2c B3）。
+ * 为什么不用共享 ListRow：ListRow 的标题是 headline 17/600，而抽屉里的信息行按稿是
+ * 「标签 15 常规 text.secondary / 值 15-600 text.primary」—— 字号窄一档、字重按语义分档；
+ * 几何仍与 ListRow 一致（最小行高 rowMinHeight、行间 hairline、值列永不被挤压）。
+ */
+function SheetInfoRow({
+  label,
+  value,
+  caption,
+  separator,
+  testID,
+}: {
+  label: string;
+  value: React.ReactNode;
+  /** 值下方小字（如「（3 笔）」） */
+  caption?: string;
+  /** 行底发丝线 */
+  separator?: boolean;
+  testID?: string;
+}) {
+  const { semantic, spacing } = useTheme();
+  const { rowMinHeight } = useLayout();
+  return (
+    <View
+      style={{
+        minHeight: rowMinHeight,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        columnGap: spacing.md,
+        paddingVertical: spacing.sm,
+        borderBottomWidth: separator ? StyleSheet.hairlineWidth : 0,
+        borderBottomColor: semantic.hairline,
+      }}
+      testID={testID}
+    >
+      <AppText variant="subhead" color={semantic.textSecondary} style={{ flexShrink: 1 }}>
+        {label}
+      </AppText>
+      <View style={{ flexShrink: 0, alignItems: 'flex-end' }}>
+        {value}
+        {!!caption && (
+          <AppText variant="caption" color={semantic.textTertiary} style={{ marginTop: 2 }}>
+            {caption}
+          </AppText>
+        )}
+      </View>
+    </View>
   );
 }
 
@@ -757,6 +819,18 @@ export default function AssetScreen() {
     );
   }, [viewingCreditAsset, transactions, getAssetBalance]);
 
+  // V2.2c B1：还款日 / 账单日一行（账单日只在数据已有 statementDay 时出现，不新增字段；
+  // 两个都没有 → 整行不渲染）
+  const creditDayLine = useMemo(() => {
+    if (!sheetAsset || sheetAsset.type !== 'credit') return '';
+    return [
+      sheetAsset.dueDay ? t('asset.creditDueDay', { day: sheetAsset.dueDay }) : null,
+      sheetAsset.statementDay ? t('asset.creditStatementDay', { day: sheetAsset.statementDay }) : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  }, [sheetAsset, t]);
+
   // 银行卡/现金类：本月流入流出（含转账）金额与笔数
   const viewingFlowStats = useMemo(() => {
     if (!viewingAsset || viewingAsset.type === 'credit') return null;
@@ -834,8 +908,9 @@ export default function AssetScreen() {
         icon={a.icon as IconName}
         title={a.name}
         subtitle={isCredit ? creditSubtitle : accountSubtitle}
-        // 信用卡：主数字是欠款（分组头已标币种）；其余账户就是余额。V2.2：余额 17/500
-        value={<MoneyText value={isCredit ? -owed : balance} variant="body" weight="500" />}
+        // 信用卡：主数字是欠款（分组头已标币种）；其余账户就是余额。
+        // V2.2c：行余额 17/600（text.primary + tabular，AppText 统一给等宽数字）
+        value={<MoneyText value={isCredit ? -owed : balance} variant="body" weight="600" />}
         barFraction={isCredit && limit > 0 ? usedPct / 100 : undefined}
         barTone={barTone}
         onPress={() => setViewingAssetId(a.id)}
@@ -904,80 +979,92 @@ export default function AssetScreen() {
             </Card>
           </View>
         ) : reorderMode ? (
-          // ---------- 编辑排列模式：每个币种分组各自一个可拖拽列表，长按拖动排序 ----------
-          groupedAssets.map((group) => (
-            <View key={group.code} style={[styles.groupBlock, { paddingHorizontal: pagePadding }]}>
-              {/* V2.2：表头（分组标题行）在卡外；卡内只有账户行 */}
-              <CurrencyGroupHeader
-                code={group.code}
-                total={group.items.reduce((sum, a) => sum + getAssetBalance(a.id), 0)}
-                collapsed={false}
-                onToggle={() => undefined}
-              />
-              <Card padded={false} style={{ borderRadius: 26 }}>
-                <DraggableFlatList
-                  data={group.items}
-                  scrollEnabled={false}
-                  keyExtractor={(item) => item.id}
-                  onDragEnd={({ data }) => handleGroupReorder(data)}
-                  renderItem={({ item: a, drag, isActive }: RenderItemParams<AssetItem>) => (
-                    <ScaleDecorator>
-                      <AssetRow
-                        color={a.color}
-                        icon={a.icon as IconName}
-                        title={a.name}
-                        // 排序模式：行尾是拖动把手（计划 S5）
-                        trailing={
-                          <Ionicons name="reorder-three-outline" size={20} color={semantic.textTertiary} />
-                        }
-                        onLongPress={drag}
-                        style={isActive ? styles.draggingRow : undefined}
-                        testID={`asset-drag-${a.id}`}
-                      />
-                    </ScaleDecorator>
-                  )}
-                />
-              </Card>
-            </View>
-          ))
+          // ---------- 编辑排列模式：所有币种组共一张玻璃卡，组内各是一个可拖拽列表 ----------
+          <View style={[styles.groupsCardWrap, { paddingHorizontal: pagePadding }]}>
+            <GlassView radius={26} style={styles.groupsCard}>
+              {groupedAssets.map((group, groupIndex) => (
+                <View key={group.code}>
+                  {groupIndex > 0 && <View style={styles.groupDivider} />}
+                  {/* 排序模式不收起，但合计照旧（组内 > 1 个账户才显示） */}
+                  <CurrencySectionHeader
+                    code={group.code}
+                    total={group.items.reduce((sum, a) => sum + getAssetBalance(a.id), 0)}
+                    showTotal={group.items.length > 1}
+                    collapsed={false}
+                    onToggle={() => undefined}
+                  />
+                  <DraggableFlatList
+                    data={group.items}
+                    scrollEnabled={false}
+                    keyExtractor={(item) => item.id}
+                    onDragEnd={({ data }) => handleGroupReorder(data)}
+                    renderItem={({ item: a, drag, isActive }: RenderItemParams<AssetItem>) => (
+                      <ScaleDecorator>
+                        <AssetRow
+                          color={a.color}
+                          icon={a.icon as IconName}
+                          title={a.name}
+                          // 排序模式：行尾是拖动把手（计划 S5）
+                          trailing={
+                            <Ionicons name="reorder-three-outline" size={20} color={semantic.textTertiary} />
+                          }
+                          onLongPress={drag}
+                          style={isActive ? styles.draggingRow : undefined}
+                          testID={`asset-drag-${a.id}`}
+                        />
+                      </ScaleDecorator>
+                    )}
+                  />
+                </View>
+              ))}
+            </GlassView>
+          </View>
         ) : (
-          // ---------- 浏览模式：按币种分组（默认展开，点币种小胶囊收起该组）----------
-          groupedAssets.map((group) => {
-            const isCollapsed = collapsedCurrencies.includes(group.code);
-            // 同一币种下所有账户的余额合并成组的合计（信用卡按负数计入，即"欠款"）
-            const groupTotal = group.items.reduce((sum, a) => sum + getAssetBalance(a.id), 0);
-            return (
-              <View key={group.code} style={[styles.groupBlock, { paddingHorizontal: pagePadding }]}>
-                {/* V2.2 表头：分组标题行在玻璃卡**外面**、卡片上方（合计不再重复进卡内） */}
-                <CurrencyGroupHeader
-                  code={group.code}
-                  total={groupTotal}
-                  collapsed={isCollapsed}
-                  onToggle={() => toggleCurrencyGroup(group.code)}
-                  testID={`asset-group-${group.code}`}
-                />
-                {/* V2.2 内容：玻璃卡里只有账户行，行与行之间才插 hairline 分隔线 */}
-                {!isCollapsed && (
-                  <Card padded={false} style={{ borderRadius: 26 }}>
-                    {group.items.map((a, index) => (
-                      <View key={a.id}>
-                        {index > 0 && <View style={styles.groupSeparator} />}
-                        {renderAssetRow(a)}
-                      </View>
-                    ))}
-                  </Card>
-                )}
-              </View>
-            );
-          })
+          // ---------- 浏览模式：所有币种组放进**同一张玻璃卡**（V2.2c），
+          // 组之间用卡内小节标题（币种胶囊 + 合计）+ hairline 分隔 ----------
+          <View style={[styles.groupsCardWrap, { paddingHorizontal: pagePadding }]}>
+            <GlassView radius={26} style={styles.groupsCard}>
+              {groupedAssets.map((group, groupIndex) => {
+                const isCollapsed = collapsedCurrencies.includes(group.code);
+                // 同一币种下所有账户的余额合并成组的合计（信用卡按负数计入，即"欠款"）
+                const groupTotal = group.items.reduce((sum, a) => sum + getAssetBalance(a.id), 0);
+                return (
+                  <View key={group.code}>
+                    {groupIndex > 0 && <View style={styles.groupDivider} />}
+                    <CurrencySectionHeader
+                      code={group.code}
+                      total={groupTotal}
+                      showTotal={group.items.length > 1}
+                      collapsed={isCollapsed}
+                      onToggle={() => toggleCurrencyGroup(group.code)}
+                      testID={`asset-group-${group.code}`}
+                    />
+                    {!isCollapsed &&
+                      group.items.map((a, index) => (
+                        <View key={a.id}>
+                          {index > 0 && <View style={styles.groupSeparator} />}
+                          {renderAssetRow(a)}
+                        </View>
+                      ))}
+                  </View>
+                );
+              })}
+            </GlassView>
+          </View>
         )}
       </ScrollView>
 
-      {/* S4 账户详情：底部抽屉（替换原来的居中弹窗）；删除走 danger 按钮，"设为默认"是 Switch 行 */}
+      {/* C1：顶部安全区挡板（玻璃 = 浮空 Tab 栏同款）—— 全出血页面滚起来内容不从状态栏文字下穿过 */}
+      <StatusBarGlass />
+
+      {/* S4 账户详情：底部抽屉（替换原来的居中弹窗）；删除走 danger 按钮，"设为默认"是 Switch 行。
+          V2.2c：面板改高不透明磨砂（复用 tabBar 填充：夜 .88 / 日 .90），背后是全局 scrim 遮罩；
+          标题带上币种（「账户详情 · MYR」）—— 抽屉里的金额因此不再带币种后缀 */}
       <BottomSheet
         visible={!!viewingAssetId}
         onClose={tryCloseDetail}
-        title={t('asset.accountDetail')}
+        title={sheetAsset ? `${t('asset.accountDetail')} · ${sheetAsset.currency}` : t('asset.accountDetail')}
+        fill={semantic.tabBar}
         maxHeightRatio={viewKeypadOpen ? 0.92 : 0.9}
         accessibilityLabel={t('asset.accountDetail')}
         testID="asset-detail"
@@ -990,8 +1077,31 @@ export default function AssetScreen() {
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={[styles.sheetContent, { paddingHorizontal: layout.card }]}
             >
-              {/* 名称：内联可改（为空时描边转 danger，"保存"变灰） */}
-              <AppText variant="footnote" color={semantic.textSecondary} style={styles.fieldLabel}>
+              {/* V2.2c B1：信用卡详情第一屏 = 欠款大字（title2/600，完整两位小数、不带币种）
+                  + 还款日 / 账单日一行（账单日只在数据已有该字段时显示，不新增字段） */}
+              {sheetAsset.type === 'credit' && (
+                <View style={styles.debtBlock}>
+                  <View style={styles.debtRow}>
+                    <AppText variant="footnote" color={semantic.textSecondary} style={styles.debtLabel}>
+                      {t('asset.creditDebt')}
+                    </AppText>
+                    <MoneyText
+                      value={-Math.max(0, -getAssetBalance(sheetAsset.id))}
+                      variant="title2"
+                      weight="600"
+                    />
+                  </View>
+                  {!!creditDayLine && (
+                    <AppText variant="footnote" color={semantic.textSecondary} style={styles.debtMeta}>
+                      {creditDayLine}
+                    </AppText>
+                  )}
+                </View>
+              )}
+
+              {/* 名称：内联可改（为空时描边转 danger，"保存"变灰）。
+                  V2.2c B3：输入框改胶囊，小标签放框上方、左边与框内文字对齐 */}
+              <AppText variant="footnote" color={semantic.textSecondary} style={styles.fieldLabelInline}>
                 {t('addTx.accountName')}
               </AppText>
               <TextInput
@@ -1010,8 +1120,86 @@ export default function AssetScreen() {
                 testID="asset-detail-name"
               />
 
-              {/* 金额格（当前余额 / 信用额度）：点整格调起计算器键盘，长按拖动可把光标放到任意字符处 */}
-              <AppText variant="footnote" color={semantic.textSecondary} style={styles.fieldLabel}>
+              {/* V2.2c B2：信用额度 / 当前余额下移到只读信息行之后（可编辑行放最后一段） */}
+
+              {/* 信用卡：账单周期明细（计算原样，只读信息行 = 标签 15 常规次要色 / 值 15-600 主色） */}
+              {sheetAsset.type === 'credit' ? (
+                !viewingStatement ? (
+                  <AppText variant="footnote" color={semantic.textTertiary} style={styles.sheetNote}>
+                    {t('asset.noStatement')}
+                  </AppText>
+                ) : (
+                  <View style={styles.sheetList}>
+                    <SheetInfoRow
+                      label={t('asset.availableLimit')}
+                      value={<MoneyText value={viewingStatement.available} variant="subhead" weight="600" />}
+                      separator
+                    />
+                    <SheetInfoRow
+                      label={t('asset.currentSpend')}
+                      value={
+                        <MoneyText value={viewingStatement.currentCycleSpend} variant="subhead" weight="600" />
+                      }
+                      separator
+                    />
+                    <SheetInfoRow
+                      label={t('asset.lastStatement')}
+                      value={
+                        <MoneyText
+                          value={viewingStatement.lastStatementAmount}
+                          variant="subhead"
+                          weight="600"
+                        />
+                      }
+                      separator={viewingStatement.isOverdue && viewingStatement.estimatedInterest > 0}
+                    />
+                    {viewingStatement.isOverdue && viewingStatement.estimatedInterest > 0 && (
+                      <SheetInfoRow
+                        label={t('asset.estInterest')}
+                        value={
+                          <MoneyText
+                            value={viewingStatement.estimatedInterest}
+                            variant="subhead"
+                            kind="expense"
+                            weight="600"
+                          />
+                        }
+                      />
+                    )}
+                  </View>
+                )
+              ) : (
+                viewingFlowStats && (
+                  <View style={styles.sheetList}>
+                    <SheetInfoRow
+                      label={t('asset.inflow')}
+                      value={<MoneyText value={viewingFlowStats.inflowAmount} variant="subhead" kind="income" weight="600" />}
+                      caption={t('asset.inflowCount', { count: viewingFlowStats.inflowCount })}
+                      separator
+                    />
+                    <SheetInfoRow
+                      label={t('asset.outflow')}
+                      value={<MoneyText value={viewingFlowStats.outflowAmount} variant="subhead" kind="expense" weight="600" />}
+                      caption={t('asset.inflowCount', { count: viewingFlowStats.outflowCount })}
+                      separator
+                    />
+                    <SheetInfoRow
+                      label={t('asset.netChange')}
+                      value={
+                        <MoneyText
+                          value={viewingFlowStats.inflowAmount - viewingFlowStats.outflowAmount}
+                          variant="subhead"
+                          weight="600"
+                        />
+                      }
+                    />
+                  </View>
+                )
+              )}
+
+              {/* V2.2c B2：可编辑金额行（信用卡 = 信用额度，其余 = 当前余额）——胶囊框 + 框上小标签；
+                  点整格调起计算器键盘，长按拖动可把光标放到任意字符处 */}
+              <AppText variant="footnote" color={semantic.textSecondary} style={styles.fieldLabelInline}>
                 {sheetAsset.type === 'credit' ? t('addTx.creditLimitLabel') : t('asset.currentBalance')}
               </AppText>
               <View {...amountCursorPan.panHandlers}>
@@ -1040,107 +1228,12 @@ export default function AssetScreen() {
                         <Text style={styles.amountText}>{viewDisplayRef.current.slice(viewCursorIdx)}</Text>
                       </Text>
                     ) : (
-                      <MoneyText value={parseFloat(viewBalanceStr) || 0} variant="title3" />
+                      <MoneyText value={parseFloat(viewBalanceStr) || 0} variant="title3" weight="600" />
                     )}
-                    <AppText variant="caption" color={semantic.textSecondary}>
-                      {sheetAsset.currency}
-                    </AppText>
                   </View>
                   <Ionicons name="pencil" size={16} color={semantic.accentText} />
                 </PressableScale>
               </View>
-
-              {/* 信用卡：账单周期明细（计算原样，仅换成列表行呈现） */}
-              {sheetAsset.type === 'credit' ? (
-                !viewingStatement ? (
-                  <AppText variant="footnote" color={semantic.textTertiary} style={styles.sheetNote}>
-                    {t('asset.noStatement')}
-                  </AppText>
-                ) : (
-                  <View style={styles.sheetList}>
-                    <ListRow
-                      title={t('asset.availableLimit')}
-                      value={
-                        <MoneyText
-                          value={viewingStatement.available}
-                          variant="subhead"
-                          currency={sheetAsset.currency}
-                          showCurrency
-                          currencyPosition="suffix"
-                        />
-                      }
-                      separator
-                    />
-                    <ListRow
-                      title={t('asset.currentSpend')}
-                      value={
-                        <MoneyText
-                          value={viewingStatement.currentCycleSpend}
-                          variant="subhead"
-                          currency={sheetAsset.currency}
-                          showCurrency
-                          currencyPosition="suffix"
-                        />
-                      }
-                      separator
-                    />
-                    <ListRow
-                      title={t('asset.lastStatement')}
-                      value={
-                        <MoneyText
-                          value={viewingStatement.lastStatementAmount}
-                          variant="subhead"
-                          currency={sheetAsset.currency}
-                          showCurrency
-                          currencyPosition="suffix"
-                        />
-                      }
-                      separator={viewingStatement.isOverdue && viewingStatement.estimatedInterest > 0}
-                    />
-                    {viewingStatement.isOverdue && viewingStatement.estimatedInterest > 0 && (
-                      <ListRow
-                        title={t('asset.estInterest')}
-                        value={
-                          <MoneyText
-                            value={viewingStatement.estimatedInterest}
-                            variant="subhead"
-                            kind="expense"
-                            currency={sheetAsset.currency}
-                            showCurrency
-                            currencyPosition="suffix"
-                          />
-                        }
-                      />
-                    )}
-                  </View>
-                )
-              ) : (
-                viewingFlowStats && (
-                  <View style={styles.sheetList}>
-                    <ListRow
-                      title={t('asset.inflow')}
-                      value={<MoneyText value={viewingFlowStats.inflowAmount} variant="subhead" kind="income" />}
-                      valueCaption={t('asset.inflowCount', { count: viewingFlowStats.inflowCount })}
-                      separator
-                    />
-                    <ListRow
-                      title={t('asset.outflow')}
-                      value={<MoneyText value={viewingFlowStats.outflowAmount} variant="subhead" kind="expense" />}
-                      valueCaption={t('asset.inflowCount', { count: viewingFlowStats.outflowCount })}
-                      separator
-                    />
-                    <ListRow
-                      title={t('asset.netChange')}
-                      value={
-                        <MoneyText
-                          value={viewingFlowStats.inflowAmount - viewingFlowStats.outflowAmount}
-                          variant="subhead"
-                        />
-                      }
-                    />
-                  </View>
-                )
-              )}
 
               {/* 设为默认账户：Switch 行（随"保存"一并提交） */}
               <View style={styles.sheetList}>
@@ -1158,6 +1251,7 @@ export default function AssetScreen() {
 
               <Button
                 title={t('common.save')}
+                variant="gradient"
                 onPress={() => saveViewChanges()}
                 disabled={!viewName.trim()}
                 style={styles.sheetButton}
@@ -1221,8 +1315,16 @@ function makeStyles(
     headerTitle: { flexGrow: 1, flexShrink: 1, minWidth: 0 },
     // 大标题（渐变上的白字）：稿为 30 / 600（token title1 是 28/700，字号按稿覆盖）
     heroTitle: { fontSize: 30, lineHeight: 36 },
-    // V2.2：组与组之间 24（表头在卡外、卡片上方 —— 见 CurrencyGroupHeader）
-    groupBlock: { marginTop: 24 },
+    // V2.2c：所有币种组共用一张玻璃卡（卡内小节头 + hairline 分组），卡与页头之间 24
+    groupsCardWrap: { marginTop: 24 },
+    // overflow hidden：行 / 小节头的 hairline 与按压高光不越出 26 圆角
+    groupsCard: { overflow: 'hidden' },
+    // 组与组之间的分组线：左右各缩进卡内衬 16（行内分割线则是 70 左缩进，见下）
+    groupDivider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: semantic.hairline,
+      marginHorizontal: layout.card,
+    },
     // 分组卡内的行间分割线：左缩进 = 图标 42 + 间距 12 + 卡内衬 16 = 70（与稿一致，右侧通到卡边）
     groupSeparator: {
       height: StyleSheet.hairlineWidth,
@@ -1234,12 +1336,19 @@ function makeStyles(
     sheetColumn: { flexShrink: 1 },
     sheetScroll: { flexShrink: 1 },
     sheetContent: { paddingBottom: spacing.md },
-    fieldLabel: { marginTop: spacing.md, marginBottom: spacing.xs },
+    // V2.2c B1：欠款大字块（信用卡详情顶部）
+    debtBlock: { paddingTop: spacing.sm, paddingBottom: spacing.xs },
+    debtRow: { flexDirection: 'row', alignItems: 'baseline', columnGap: spacing.sm },
+    debtLabel: { flexShrink: 0 },
+    debtMeta: { marginTop: spacing.xs },
+    // V2.2c B3：小标签在输入框上方，左边与框内文字对齐（内缩 = 输入框 paddingHorizontal）
+    fieldLabelInline: { marginTop: spacing.lg, marginBottom: spacing.xs, marginLeft: spacing.lg },
     nameInput: {
       minHeight: 44,
-      borderRadius: radius.sm,
+      // 胶囊框（V2.2c）：与 radius.full 一致的圆角，不用矩形输入框
+      borderRadius: radius.full,
       borderWidth: StyleSheet.hairlineWidth,
-      paddingHorizontal: spacing.md,
+      paddingHorizontal: spacing.lg,
       paddingVertical: spacing.sm,
       fontSize: typography.body.fontSize,
       lineHeight: typography.body.lineHeight,
@@ -1252,9 +1361,9 @@ function makeStyles(
       columnGap: spacing.sm,
       rowGap: spacing.xs,
       minHeight: 44,
-      borderRadius: radius.sm,
+      borderRadius: radius.full,
       borderWidth: StyleSheet.hairlineWidth,
-      paddingHorizontal: spacing.md,
+      paddingHorizontal: spacing.lg,
       paddingVertical: spacing.sm,
     },
     amountValueRow: {

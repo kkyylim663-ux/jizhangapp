@@ -47,6 +47,7 @@ import {
   HeroGradient,
   IconCircle,
   MoneyText,
+  StatusBarGlass,
 } from '../components/ui';
 import { TransactionType, Transaction } from '../types';
 import { UNCATEGORIZED_ICON, UNCATEGORIZED_NAME, UNCATEGORIZED_COLOR } from '../constants/uncategorized';
@@ -72,10 +73,10 @@ const DONUT_ROTATION_DEG = -15;
  *
  * 为什么在页面里定档、而不是交给 MoneyText 自己的 shrinkLadder：
  * MoneyText 的「放不下就降档」判定用的是**组件当帧自己的盒宽**；圆孔这里是「内容居中、
- * 盒子 = 内容宽」的容器，加上它内置的估算表比 Geist 实测宽约 10%，首档永远会被自己判成放不下
+ * 盒子 = 内容宽」的容器，加上它内置的估算表比 Inter 实测宽约 10%，首档永远会被自己判成放不下
  * ——实测三档阶梯会一路停到第二档（T21 的 22/18 同样停在 18，用户看到的「约 18 号」就是这个）。
  * 圆孔是固定 156pt（环 200 − 2×22），与屏幕宽无关，所以按「字号 → 156pt 能放几个字符」直接定档：
- * 30 号每字约 14.5pt（Geist 数字 + 千分位 + 负字距）→ 10 字以内；26 号约 12.6pt → 12 字以内；再多给 22。
+ * 30 号每字约 14.5pt（Inter 数字 + 千分位 + 负字距）→ 10 字以内；26 号约 12.6pt → 12 字以内；再多给 22。
  */
 const DONUT_CENTER_SIZES = [30, 26, 22] as const;
 
@@ -688,6 +689,8 @@ export default function ReportScreen() {
     <SafeAreaView style={styles.container} edges={[]}>
       {/* UI V2.1 §1：品牌渐变铺满整页（fill），卡片 / 列表直接浮在渐变上 */}
       <HeroGradient fill />
+      {/* C1：顶部安全区挡板 —— 滚动时内容不从状态栏文字下穿过 */}
+      <StatusBarGlass />
       <ScrollView
         onScroll={onTabScroll ?? undefined}
         scrollEventThrottle={16}

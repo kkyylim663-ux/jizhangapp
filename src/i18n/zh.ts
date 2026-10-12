@@ -509,6 +509,9 @@ export const zh = {
     summaryLiabilities: '负债',
     creditAvailableShort: '可用',
     creditDueDay: '还款日 %{day} 号',
+    // V2.2c 账户详情：欠款大字 + 账单日行（账单日只在数据已有该字段时显示）
+    creditDebt: '欠款',
+    creditStatementDay: '账单日 %{day} 号',
     emptyTitle: '还没有账户',
     emptyHint: '添加账户后，余额与账单都会显示在这里',
     accountDetail: '账户详情',

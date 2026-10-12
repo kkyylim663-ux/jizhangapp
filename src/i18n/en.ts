@@ -507,6 +507,9 @@ export const en = {
     summaryLiabilities: 'Liabilities',
     creditAvailableShort: 'Available',
     creditDueDay: 'Due day %{day}',
+    // V2.2c account sheet: outstanding headline + statement-day line
+    creditDebt: 'Outstanding',
+    creditStatementDay: 'Statement day %{day}',
     emptyTitle: 'No accounts yet',
     emptyHint: 'Add an account to see balances and statements here',
     accountDetail: 'Account',

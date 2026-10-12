@@ -56,8 +56,9 @@ export function Switch({
         value={value}
         onValueChange={handleValueChange}
         disabled={disabled}
-        trackColor={{ false: semantic.hairline, true: semantic.accent }}
-        ios_backgroundColor={semantic.hairline}
+        // V2.2c：关闭态轨道用专用灰（日 #D6D3E0 / 夜白 22%）—— hairline 在玻璃上几乎看不见
+        trackColor={{ false: semantic.switchTrackOff, true: semantic.accent }}
+        ios_backgroundColor={semantic.switchTrackOff}
         // ⚠ thumbColor 必须显式给：react-native-web 不传就用内置色（见上 webActiveThumb 注释），
         //   原生侧这也是「关」状态的拇指色
         thumbColor={semantic.onAccent}

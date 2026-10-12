@@ -25,7 +25,7 @@ import { formatDate } from '../utils/formatDate';
 import type { Ledger, Transaction } from '../types';
 import { UNCATEGORIZED_ICON, UNCATEGORIZED_NAME, UNCATEGORIZED_COLOR } from '../constants/uncategorized';
 import PressableScale from '../components/PressableScale';
-import { AppText, BottomSheet, Button, EmptyState, GlassView, HeroGradient, IconButton, IconCircle, ListSection, MoneyText } from '../components/ui';
+import { AppText, BottomSheet, Button, EmptyState, GlassView, HeroGradient, IconButton, IconCircle, ListSection, MoneyText, StatusBarGlass } from '../components/ui';
 import { withAlpha } from '../components/ui/color';
 // HeroMetalSheen / AuroraFlowShader 文件与色 token 原样保留（可恢复）；V2 定稿里没有
 // 紫色金属卡与流光，所以这里不再 import —— 陀螺仪（useHeroSheen）也就不会启动，省电。
@@ -1143,6 +1143,8 @@ export default function HomeScreen({ navigation }: any) {
       {/* 页面最底层 = 品牌渐变（UI V2.1 §1）：铺满整页（fill）、不再淡出成纯色底，
           卡片 / 列表 / 弹层全部浮在渐变上；网格线只在首页保留 */}
       <HeroGradient fill grid />
+      {/* C1：顶部安全区挡板 —— 滚动时内容不从状态栏文字下穿过 */}
+      <StatusBarGlass />
       {/* 首页主体 = 一个 SectionList（T09 / H4 / H6）：
           头部（Hero 区 + 日历卡）走 ListHeaderComponent，账单按天分组渲染（吸顶日期头 + 圆形图标行）；
           滚动事件继续透传给 Tab 栏自动隐藏（T07 联动）。

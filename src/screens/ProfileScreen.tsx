@@ -35,7 +35,7 @@ import { useLanguage, LangMode } from '../i18n/LanguageContext';
 import { useT } from '../i18n/LanguageContext';
 import { hapticSelection } from '../utils/haptics';
 import PressableScale from '../components/PressableScale';
-import { AppText, Badge, Card, GlassView, HeroGradient, IconCircle, Switch } from '../components/ui';
+import { AppText, Badge, Card, GlassView, HeroGradient, IconCircle, StatusBarGlass, Switch } from '../components/ui';
 
 /**
  * 设置各行的图标基色（UI V2 稿取样的行首圆色）。
@@ -151,6 +151,8 @@ export default function ProfileScreen({ navigation }: any) {
     <SafeAreaView style={styles.container} edges={[]}>
       {/* UI V2.1 §1：品牌渐变铺满整页（fill），卡片 / 列表直接浮在渐变上 */}
       <HeroGradient fill />
+      {/* C1：顶部安全区挡板 —— 滚动时内容不从状态栏文字下穿过 */}
+      <StatusBarGlass />
       <ScrollView
         onScroll={onTabScroll ?? undefined}
         scrollEventThrottle={16}

@@ -20,6 +20,8 @@ import {
   fontFamily,
   FontFamily,
   fontFamilyByWeight,
+  fontFamilyCjk,
+  fontFamilyCjkByWeight,
   FontWeightKey,
   FontFamilyName,
   gradients,
@@ -57,10 +59,14 @@ export interface AppTheme {
   elevation: Elevation;
   /** 动效层（弹簧 / 时长 / 缓动 / 按压缩放；含减弱动态效果降级） */
   motion: MotionTokens;
-  /** 打包字体层（计划 8.2 第 1 条，T01b）：4 档 Geist 家族名（只用于数字 / 拉丁文本） */
+  /** 打包字体层（V2.2c）：4 档 Inter 家族名（数字 / 拉丁文本） */
   fontFamily: FontFamily;
-  /** 字重 → Geist 家族映射（键 = typography 各档的 fontWeight 值） */
+  /** 字重 → Inter 家族映射（键 = typography 各档的 fontWeight 值） */
   fontFamilyByWeight: Record<FontWeightKey, FontFamilyName>;
+  /** 打包中文字体层（V2.2c）：3 档 Noto Sans SC 子集家族名（含中文的文本） */
+  fontFamilyCjk: typeof fontFamilyCjk;
+  /** 字重 → Noto Sans SC 家族映射（600 落到 Bold：中文只有 400/500/700） */
+  fontFamilyCjkByWeight: Record<FontWeightKey, FontFamilyName>;
   /** UI V2 品牌渐变（第 1 节）：heroDark / heroLight（主渐变 + 光斑）、accent */
   gradients: {
     heroDark: HeroGradientToken;
@@ -109,6 +115,8 @@ export function useTheme(override?: 'light' | 'dark'): AppTheme {
     motion,
     fontFamily,
     fontFamilyByWeight,
+    fontFamilyCjk,
+    fontFamilyCjkByWeight,
     gradients: {
       heroDark: gradients.heroDark,
       heroLight: gradients.heroLight,

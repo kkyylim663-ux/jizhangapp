@@ -57,5 +57,9 @@ export type { GlassViewProps } from './GlassView';
 export { IconCircle } from './IconCircle';
 export type { IconCircleProps } from './IconCircle';
 
+// V2.2c：Tab 根页顶部安全区挡板（全出血页面滚动时内容不从状态栏文字下穿过）
+export { StatusBarGlass } from './StatusBarGlass';
+export type { StatusBarGlassProps } from './StatusBarGlass';
+
 // 色值小工具（类别色推导等）：withAlpha / mixWithWhite / categoryIconTint …
 export { withAlpha, mixWithWhite, hexToHsl, hslToHex, categoryIconTint } from './color';

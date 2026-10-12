@@ -51,7 +51,7 @@ import {
   TAB_CENTER_BUTTON_SIZE,
   TAB_CENTER_BUTTON_BOTTOM,
 } from './src/hooks/useTabClearance';
-// 标签文字走统一文字组件（令牌字号 caption2 = 11pt；英文自动走打包 Geist）
+// 标签文字走统一文字组件（令牌字号 caption2 = 11pt；英文自动走打包 Inter）
 import { AppText, GlassView } from './src/components/ui';
 // 启动占位页只需要"现有主题底色"这一个令牌：此时 ThemeModeProvider 还没挂载，
 // useTheme() 用不了（它会抛错），只能直接引 token
@@ -518,15 +518,17 @@ export default function App() {
   const galleryMode =
     Platform.OS === 'web' && typeof window !== 'undefined' && /[?&]gallery=1/.test(window.location.search);
 
-  // 打包字体（UI V2 第 2 节，2026-10-10）：数字 / 英文从 Inter 换成 Geist（Vercel 官方 OFL），
-  // 4 档静态字重随包发，只覆盖数字 / 拉丁字形，中文继续走系统字体。
-  // 键名 = 字体内部 PostScript 名，必须与 src/theme/theme.ts 的 fontFamily 令牌保持一致
-  // （改一处要同步另一处）。加载失败（fontError）回退系统字体，绝不白屏 / 卡死。
+  // 打包字体（V2.2c）：数字 / 英文 = Inter（4 档），中文 = Noto Sans SC（3 档子集，1.4MB/档）。
+  // 键名 = 字体内部 PostScript 名，必须与 src/theme/theme.ts 的 fontFamily / fontFamilyCjk
+  // 令牌保持一致（改一处要同步另一处）。加载失败（fontError）回退系统字体，绝不白屏 / 卡死。
   const [fontsLoaded, fontError] = useFonts({
-    'Geist-Light': require('./assets/fonts/Geist-Light.ttf'),
-    'Geist-Regular': require('./assets/fonts/Geist-Regular.ttf'),
-    'Geist-Medium': require('./assets/fonts/Geist-Medium.ttf'),
-    'Geist-SemiBold': require('./assets/fonts/Geist-SemiBold.ttf'),
+    'Inter-Regular': require('./assets/fonts/Inter-Regular.ttf'),
+    'Inter-Medium': require('./assets/fonts/Inter-Medium.ttf'),
+    'Inter-SemiBold': require('./assets/fonts/Inter-SemiBold.ttf'),
+    'Inter-Bold': require('./assets/fonts/Inter-Bold.ttf'),
+    'NotoSansSC-Regular': require('./assets/fonts/NotoSansSC-Regular.ttf'),
+    'NotoSansSC-Medium': require('./assets/fonts/NotoSansSC-Medium.ttf'),
+    'NotoSansSC-Bold': require('./assets/fonts/NotoSansSC-Bold.ttf'),
   });
   // 占位页底色：ThemeModeProvider 还没挂载（它在下面才渲染），读不到用户在设置项里选的
   // 深色偏好，只能按系统外观取 theme.ts 的既有底色令牌——只影响字体加载这一瞬间的画面。

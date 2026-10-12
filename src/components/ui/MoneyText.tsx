@@ -16,10 +16,15 @@
 //      取能放下的最大档；系数是 Inter 逐字符实测值（见下方 CHAR_EM 注释），
 //      逐字符相加比整串实测略宽（~1.6% 字距），方向安全 —— 漏算 +RM 里的 M（0.92em）
 //      就会选大一号档位、把最后一个 0 挤到第二行；
-//   2. 连最小档 18 都放不下 → 退回**紧凑格式**（+RM123.5T），完整金额进 accessibilityLabel，
-//      长按弹出完整金额（`compactFallback` 默认开）；
+//   2. 连最小档都放不下 → **只降档、不紧凑**（V2.2c 验收退回：资产页出现过 4k / 100k / RM156.7k）。
+//      compactFallback 默认关闭；日历是显式传 `compact`（格式选项，与这里无关）的那一个；
 //   3. 兜底：金额 Text 恒 numberOfLines={1} + ellipsizeMode="clip"
 //      —— 就算估算失灵也只是裁掉尾巴，**绝不换行、绝不出省略号**。
+//
+// V2.2c 全局金额规范
+//   - 字重下限 600（非 Hero 路径）：令牌里 300/400/500 的金额一律提到 600；
+//   - ≥28 号的大金额字距 = −2% 字号（40 号 → −0.8，与 display 令牌同值）；
+//   - 等宽数字（AppText 统一加 fontVariant ['tabular-nums']）。
 //
 // 用法
 //   <MoneyText value={tx.amount} kind="expense" variant="body" />
@@ -46,6 +51,16 @@ import AppText from './AppText';
  * 18 不是 typography 令牌档，是验收点名的兜底字号下限）。
  */
 const SHRINK_LADDER = [40, 34, 28, 22, 18];
+/**
+ * 小于 40 号的非 Hero 金额：按 Hero 同款比例降级（1 / .86 / .72 / .59），
+ * 但**不越过字号下限 11pt**（UI_RULES：禁止 7–10pt）—— 低于下限的档直接丢掉。
+ */
+const MIN_AMOUNT_FONT_SIZE = 11;
+/** V2.2c：金额最低字重（非 Hero 路径） */
+const MIN_AMOUNT_WEIGHT: FontWeightKey = '600';
+/** V2.2c：≥这个字号的大金额字距 = −2%（40 号 → −0.8，与 display 令牌同值） */
+const LARGE_AMOUNT_SIZE = 28;
+const LARGE_AMOUNT_LETTER_RATIO = -0.02;
 
 /**
  * UI V2 Hero 金额（首页 58 / 资产 42 / 记一笔 64）：整数段 500 + 负字距，
@@ -103,7 +118,8 @@ export interface MoneyTextProps extends FormatMoneyOptions {
    * 传 null 表示永不降级。
    */
   shrinkLadder?: number[] | null;
-  /** 连最小档都放不下时改用紧凑格式 + 长按看全文（默认 true；传 false 则一直用完整金额） */
+  /** 连最小档都放不下时改用紧凑格式 + 长按看全文（默认 false —— V2.2c：金额一律完整显示，
+   *  放不下只按字号档位降级；只有确实要缩写的地方才显式打开） */
   compactFallback?: boolean;
   /**
    * UI V2 Hero 样式：整数大（500）、RM 与小数为 300 且降透明度（渐变上的大金额用）。
@@ -185,6 +201,11 @@ function digitTier(intDigits: number): number {
     if (intDigits <= (LADDER_MAX_INT_DIGITS[i] ?? 0)) return i;
   }
   return LADDER_MAX_INT_DIGITS.length;
+}
+
+/** 字重下限：低于 floor 的档一律提到 floor（金额最低 600，V2.2c） */
+function weightAtLeast(weight: FontWeightKey, floor: FontWeightKey): FontWeightKey {
+  return Number(weight) >= Number(floor) ? weight : floor;
 }
 
 /* ---------------------------------------------------------------- 字符格 */
@@ -348,7 +369,7 @@ export function MoneyText({
   color,
   roll = true,
   shrinkLadder,
-  compactFallback = true,
+  compactFallback = false,
   hero = false,
   heroSize = 58,
   style,
@@ -381,15 +402,30 @@ export function MoneyText({
             : semantic.textPrimary;
   const resolvedColor = color ?? kindColor;
 
-  // 阶梯：基准 ≥40 的大字号档才走降级（display / amountEntry）；
+  // 阶梯：基准 ≥40 的大字号档走五档（display / amountEntry）；
+  // 40 以下按 Hero 同款比例降级（V2.2c：放不下只降档、绝不紧凑），地板 11pt
   // Hero 走自己的四档（58 → 50 → 42 → 34，比例制）
   const ladder = useMemo(() => {
     if (shrinkLadder === null) return [baseSize];
     if (shrinkLadder) return shrinkLadder;
     if (hero) return Array.from(new Set(HERO_LADDER_RATIOS.map((r) => Math.round(heroSize * r))));
-    if (token.fontSize < SHRINK_LADDER[0]) return [token.fontSize];
+    if (token.fontSize < SHRINK_LADDER[0]) {
+      return Array.from(new Set(HERO_LADDER_RATIOS.map((r) => Math.round(token.fontSize * r)))).filter(
+        (size) => size >= MIN_AMOUNT_FONT_SIZE
+      );
+    }
     return SHRINK_LADDER.map((step, index) => (index === 0 ? token.fontSize : step));
   }, [shrinkLadder, token.fontSize, hero, heroSize, baseSize]);
+
+  /**
+   * V2.2c「金额最低 600」：非 Hero 路径一律不低于 600（令牌里的 300/400/500 全提到 600）；
+   * Hero 整数段同样提到 600，RM 前缀 / 小数保持 Hero 规格的 300 小字。
+   */
+  const amountWeight: FontWeightKey = weightAtLeast(
+    weight ?? (String(token.fontWeight) as FontWeightKey),
+    MIN_AMOUNT_WEIGHT
+  );
+  const heroIntWeight: FontWeightKey = MIN_AMOUNT_WEIGHT;
 
   // 本组件被允许占的宽度（onLayout 实测：卡片里 = 卡片内宽，行内跟着自己的框走）
   const [availableWidth, setAvailableWidth] = useState(0);
@@ -467,8 +503,15 @@ export function MoneyText({
       : Math.max(0, fullTier, digitTier(moneyIntDigits(fullText)));
   const fontSize = ladder[Math.min(tier, ladder.length - 1)] ?? token.fontSize;
   const lineHeight = Math.round((token.lineHeight / token.fontSize) * fontSize);
+  // V2.2c：≥28 号的大金额字距 −2%（40 号 = −0.8，与 display 令牌同值）；Hero 走自己的 −4.14%
+  const largeLetterSpacing =
+    !hero && fontSize >= LARGE_AMOUNT_SIZE
+      ? Math.round(fontSize * LARGE_AMOUNT_LETTER_RATIO * 10) / 10
+      : undefined;
   const sizeStyle: TextStyle | undefined =
-    fontSize === token.fontSize && lineHeight === token.lineHeight ? undefined : { fontSize, lineHeight };
+    fontSize === token.fontSize && lineHeight === token.lineHeight && largeLetterSpacing === undefined
+      ? undefined
+      : { fontSize, lineHeight, letterSpacing: largeLetterSpacing };
 
   // Hero 渲染尺寸：各部件都从**当前档**（可能是降级后的 50/42/34）派生，保证整串等比缩放
   const heroPrefixSize = Math.round(fontSize * HERO_PREFIX_RATIO);
@@ -565,7 +608,7 @@ export function MoneyText({
     <MeasureLayer
       text={fullText}
       variant={variant}
-      weight={weight}
+      weight={amountWeight}
       textStyle={[sizeStyle, cellTextStyle]}
       boxWidth={Math.ceil((ladder[0] ?? token.fontSize) * estimatedEm + spacingTotal) * 2 + 24}
       onMeasured={(w) => {
@@ -615,7 +658,7 @@ export function MoneyText({
           ) : null}
           <AppText
             variant={variant}
-            weight="500"
+            weight={heroIntWeight}
             color="transparent"
             numberOfLines={1}
             style={{
@@ -693,7 +736,7 @@ export function MoneyText({
             progress={progress}
             startFraction={cell.delay / (motion.timing.numberRoll + STAGGER_MAX_STEPS * STAGGER_MS)}
             variant={variant}
-            weight="500"
+            weight={heroIntWeight}
             textStyle={[heroIntStyle, cellTextStyle]}
             color={resolvedColor}
           />
@@ -736,7 +779,7 @@ export function MoneyText({
     const textEl = (
       <AppText
         variant={variant}
-        weight={weight}
+        weight={amountWeight}
         color={resolvedColor}
         style={[sizeStyle, longPressable ? cellTextStyle : style]}
         numberOfLines={1}
@@ -788,7 +831,7 @@ export function MoneyText({
           progress={progress}
           startFraction={cell.delay / (motion.timing.numberRoll + STAGGER_MAX_STEPS * STAGGER_MS)}
           variant={variant}
-          weight={weight}
+          weight={amountWeight}
           textStyle={[sizeStyle, cellTextStyle]}
           color={resolvedColor}
         />
