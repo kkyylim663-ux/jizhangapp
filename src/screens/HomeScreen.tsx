@@ -7,6 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import Reanimated, { useSharedValue, useAnimatedStyle, useDerivedValue, withTiming, withSpring, withSequence, cancelAnimation, runOnJS, runOnUI, useAnimatedReaction, Easing } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
+import { HeroRollMoney, ColdStartReveal, claimColdRoll, COLD_ROLL_MS, COLD_EASE } from '../components/ui/ColdStartMotion';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -871,7 +872,8 @@ const HeroAmountPage = React.memo(function HeroAmountPage({
           {HIDDEN_AMOUNT}
         </AppText>
       ) : (
-        <MoneyText
+        <HeroRollMoney
+          code={code}
           value={total}
           kind="plain"
           currency={code}
@@ -910,8 +912,10 @@ type BudgetCardPageProps = {
   onFilledLayout: (h: number) => void;
   onPress: () => void;
   testID?: string;
+  /** 启动动效认领用的币种（本次启动第一屏：进度条从 0 长到真实占比） */
+  rollCode?: string;
 };
-const BudgetCardPage = React.memo(function BudgetCardPage({ expense, total, hidden, width, gap, styles, filledH, onFilledLayout, onPress, testID }: BudgetCardPageProps) {
+const BudgetCardPage = React.memo(function BudgetCardPage({ expense, total, hidden, width, gap, styles, filledH, onFilledLayout, onPress, testID, rollCode }: BudgetCardPageProps) {
   const { semantic, motion } = useTheme();
   const t = useT();
   const pct = total > 0 ? Math.min((expense / total) * 100, 100) : 0;
@@ -923,8 +927,16 @@ const BudgetCardPage = React.memo(function BudgetCardPage({ expense, total, hidd
   // 进度条：宽度变化走令牌时长补间（目的：state indication）；fill 是 overflow:hidden 轨道里
   // 无子元素的绝对定位元素——唯一放行的 width 动画，圆角不会被 scaleX 拉糊。
   // 初始值 = 当前百分比（首帧进度条就在正确位置，不靠动画跑过）；之后百分比变化才补间
-  const progress = useSharedValue(pct);
+  // 冷启动（本次启动第一屏）：进度条从 0 长到真实占比，与净资产数字同步；其余时候与原来一致
+  const coldBar = useRef<boolean | null>(null);
+  if (coldBar.current === null) coldBar.current = rollCode !== undefined && !motion.reduceMotion && claimColdRoll(rollCode);
+  const progress = useSharedValue(coldBar.current ? 0 : pct);
   useEffect(() => {
+    if (coldBar.current) {
+      coldBar.current = false;
+      progress.set(withTiming(pct, { duration: COLD_ROLL_MS, easing: COLD_EASE }));
+      return;
+    }
     progress.set(withTiming(pct, { duration: motion.spring.default.duration, easing: motion.easing.out }));
   }, [pct, progress, motion]);
   const fillAnimStyle = useAnimatedStyle(
@@ -1656,6 +1668,7 @@ export default function HomeScreen({ navigation }: any) {
     // 列表卡底边 = 末组最后一行：26 下圆角 + 4pt 卡底边（稿里卡内 padding 下 4）
     const isCardBottom = !!section.isLast && index === (section.data?.length ?? 0) - 1;
     return (
+      <ColdStartReveal delay={450}>
       <TxRow
         title={hasOwnTitle ? ownTitle : catName}
         categoryName={hasOwnTitle ? catName : ''}
@@ -1669,6 +1682,7 @@ export default function HomeScreen({ navigation }: any) {
         onPress={openEdit}
         testID={`tx-row-${item.id}`}
       />
+      </ColdStartReveal>
     );
   }, [t, getCategoryById, getAssetById, navigation]);
   const renderTxRow = useCallback(({ item, index, section }: { item: Transaction; index: number; section: TxDaySection }) => (
@@ -2250,6 +2264,7 @@ export default function HomeScreen({ navigation }: any) {
             onFilledLayout={onBudgetFilledLayout}
             onPress={openBudgetModalStable}
             testID={code === activeCurrency ? 'home-budget-card' : undefined}
+            rollCode={code}
           />
         ))}
       </Reanimated.View>
@@ -2263,6 +2278,7 @@ export default function HomeScreen({ navigation }: any) {
         onFilledLayout={onBudgetFilledLayout}
         onPress={openBudgetModalStable}
         testID="home-budget-card"
+        rollCode={activeCurrency}
       />
     );
   if (dayGroups.length > 0) hasEverHadDataRef.current = true;
@@ -2529,7 +2545,7 @@ export default function HomeScreen({ navigation }: any) {
               整卡点按 = 原预算编辑弹窗入口；未设预算时的空态行保留。
               每个币种一页（BudgetCardPage），多币种时排成与 hero 同步横移的一条：
               页距 = 窗口宽（邻页在屏幕外，不需要裁剪，卡片投影也不会被切）；单币种 / 未量到宽度时只画当前页 */}
-          {budgetStrip}
+          <ColdStartReveal delay={250}>{budgetStrip}</ColdStartReveal>
         </Reanimated.View>
         {neighbourPanels}
         {calNeighbourPanels}
