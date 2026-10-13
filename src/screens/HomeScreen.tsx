@@ -929,7 +929,7 @@ const BudgetCardPage = React.memo(function BudgetCardPage({ expense, total, hidd
   // 未封顶百分比：超支时显示真实值（如 130%），进度条宽度仍封顶 100
   const pctText = total > 0 ? Math.round((expense / total) * 100) : 0;
   // 预算条单色状态（T08 / H3）：<80% 白（渐变上的白档）/ 80–100% warning / >100% danger
-  const barColor = over ? semantic.danger : pctText >= 80 ? semantic.warning : semantic.textPrimary;
+  const barColor = over ? semantic.budgetFillOver : semantic.budgetFill;
   // 进度条：宽度变化走令牌时长补间（目的：state indication）；fill 是 overflow:hidden 轨道里
   // 无子元素的绝对定位元素——唯一放行的 width 动画，圆角不会被 scaleX 拉糊。
   // 初始值 = 当前百分比（首帧进度条就在正确位置，不靠动画跑过）；之后百分比变化才补间
@@ -984,7 +984,7 @@ const BudgetCardPage = React.memo(function BudgetCardPage({ expense, total, hidd
                   {`${t('home.budgetUsed')} `}
                 </AppText>
                 {/* 已用金额 = 已花的正数：kind 用 plain（不带 − 号），颜色显式取语义支出色（紫） */}
-                <MoneyText value={expense} kind="plain" color={semantic.amountExpense} variant="caption" hidden={hidden} />
+                <MoneyText value={expense} kind="plain" color={semantic.textPrimary} variant="caption" hidden={hidden} />
                 <AppText variant="caption" color={semantic.textPrimary}>
                   {' / '}
                 </AppText>
@@ -1718,34 +1718,9 @@ export default function HomeScreen({ navigation }: any) {
             {section.dateSub}
           </AppText>
         )}
-        <View style={styles.dayHeaderTotals}>
-          {section.expense > 0 && (
-            <>
-              <AppText variant="caption" weight="500" color={semantic.textTertiary}>
-                {`${t('report.expense')} `}
-              </AppText>
-              {/* 支出金额 = 语义支出色（紫，V3 规则），与收入（绿）成对 —— 不覆盖成次要色：
-                  显式 color 会把 amountExpense 语义色盖掉，表头就和下方流水行不一致了 */}
-              <MoneyText value={section.expense} kind="expense" variant="caption" weight="600" />
-            </>
-          )}
-          {section.expense > 0 && section.income > 0 && (
-            <AppText variant="caption" color={semantic.textTertiary}>
-              {'·'}
-            </AppText>
-          )}
-          {section.income > 0 && (
-            <>
-              <AppText variant="caption" weight="500" color={semantic.textTertiary}>
-                {`${t('report.income')} `}
-              </AppText>
-              <MoneyText value={section.income} variant="caption" weight="600" color={semantic.amountIncome} />
-            </>
-          )}
-        </View>
       </View>
     </View>
-  ), [semantic, styles, t]);
+  ), [semantic, styles]);
 
   // 列表内的日期头：切币种过渡时跟着列表淡出 / 上滑（吸顶条 / pinnedHeader 仍直接用 renderDayHeader，不动）
   const renderSectionHeaderEntering = useCallback(
@@ -2892,11 +2867,11 @@ function makeStyles(
       columnGap: spacing.sm,
     },
     budgetCardHeadRight: { flexDirection: 'row', alignItems: 'baseline', columnGap: spacing.xs, flexShrink: 1 },
-    // 进度条（V2 稿：8 高圆头白条；轨道 = 白 22%）
+    // 进度条：6 高圆头；轨道 / 填充（健康·超支）都走令牌，日夜各一套
     budgetTrack: {
       height: 6,
       borderRadius: radius.full,
-      backgroundColor: withAlpha(semantic.onAccent, 0.22),
+      backgroundColor: semantic.budgetTrack,
       overflow: 'hidden',
       marginTop: spacing.sm,
     },
@@ -2955,17 +2930,6 @@ function makeStyles(
     // V3 字号（设计稿逐值）：行标题 14/600、副标题 12/400、日期头 12、预算文字 12.5
     dayHeaderLabelText: { fontSize: 12, lineHeight: 16 },
     budgetText: { fontSize: 12.5, lineHeight: 17 },
-    // 当日合计：wrap 行（放不下自动换行到第二行，右对齐；不缩字、不省略）
-    dayHeaderTotals: {
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      justifyContent: 'flex-end',
-      alignItems: 'baseline',
-      columnGap: spacing.xs,
-      rowGap: 2,
-      flexShrink: 1,
-      marginLeft: 'auto',
-    },
     // 无账单空状态（EmptyState 自带内边距，这里只补与头部区的间距）
     listEmpty: { paddingTop: spacing.lg },
     // 货币下拉（T08 退回定版）：全 App 唯一遮罩色 + 不透明浮层底（surfaceElevated）+ level2 阴影

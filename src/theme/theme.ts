@@ -614,6 +614,12 @@ export type SemanticColors = {
   selectedRow: string;
   /** 系统导航栏区（底部安全区）的实底：日 #F5F2FB / 夜 #06050C */
   navBarBg: string;
+  /** 首页预算进度条轨道 */
+  budgetTrack: string;
+  /** 首页预算进度条填充（健康） */
+  budgetFill: string;
+  /** 首页预算进度条填充（超支） */
+  budgetFillOver: string;
 };
 
 export const lightSemantic: SemanticColors = {
@@ -654,6 +660,9 @@ export const lightSemantic: SemanticColors = {
   homeIconTile: '#F0EDFA',
   selectedRow: '#F0EDFE',
   navBarBg: '#F5F2FB',
+  budgetTrack: 'rgba(23,20,42,0.10)',
+  budgetFill: '#6C4DF6',
+  budgetFillOver: '#E11D48',
 };
 
 export const darkSemantic: SemanticColors = {
@@ -701,6 +710,9 @@ export const darkSemantic: SemanticColors = {
   homeIconTile: '#221E30',
   selectedRow: '#1F1A35',
   navBarBg: '#06050C',
+  budgetTrack: 'rgba(255,255,255,0.14)',
+  budgetFill: '#8B6CFF',
+  budgetFillOver: '#FB7185',
 };
 
 /**
