@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 // V2.2：Android 系统导航栏按钮明暗跟随应用主题（声明式，非 Android 端渲染 null）
 // —— 栏身底色不需要 API：SDK 57 强制 edge-to-edge，导航条后面就是页面根视图的
@@ -31,7 +31,7 @@ import { AppLockProvider, AppLockOverlay } from './src/context/AppLockContext';
 import { AppDialogProvider } from './src/components/AppDialog';
 import { useSyncManager } from './src/hooks/useSyncManager';
 import { ThemeModeProvider, useThemeMode } from './src/context/ThemeModeContext';
-import { LanguageProvider, useT } from './src/i18n/LanguageContext';
+import { LanguageProvider, useT, useLanguage } from './src/i18n/LanguageContext';
 // ⚠ 组件预览页（T03–T05 起）：只在 __DEV__ + web + ?gallery=1 时生效，不进正式导航。
 //   后续每一批都用它做回归截图，**T32 清理任务时才删**（本行 + App() 里的 galleryMode 守卫 + 预览页文件）。
 import ComponentGallery from './src/screens/_preview/ComponentGallery';
@@ -56,6 +56,9 @@ import {
 // 标签文字走统一文字组件（令牌字号 caption2 = 11pt；英文自动走打包 Inter）
 import { AppText, GlassView } from './src/components/ui';
 import { StartupSkeleton } from './src/components/ui/StartupSkeleton';
+import { ColdStartSnapshot } from './src/components/ui/ColdStartSnapshot';
+import { buildHomeSnapshot, readHomeSnapshot, writeHomeSnapshot, type HomeSnapshot } from './src/services/homeSnapshot';
+import { useMotion } from './src/theme/motion';
 // 启动占位页只需要"现有主题底色"这一个令牌：此时 ThemeModeProvider 还没挂载，
 // useTheme() 用不了（它会抛错），只能直接引 token
 import { lightColors, darkColors } from './src/theme/theme';
@@ -218,6 +221,8 @@ function devMark(label: string) {
   if (__DEV__) console.log(`[startup] ${label} +${Date.now() - JS_START_MS}ms`);
 }
 let splashHidden = false;
+/** 本次冷启动「JS 开始 → 本地数据读完」毫秒数（写入快照，供下次决定追赶快慢） */
+let coldHydratedMs: number | null = null;
 /** 收起原生启动页（只做一次）。骨架屏 / 页面接力，不会留白 */
 function hideSplash(reason: string) {
   if (splashHidden) return;
@@ -230,30 +235,120 @@ devMark('js-start');
 // 安全上限 2.5 秒：字体 / 本地数据迟迟不就绪也要收起启动页，之后由骨架屏接力（web / 开发期不会卡死）
 setTimeout(() => hideSplash('cap'), 2500);
 
+/** 上次快照的读取：模块加载时就开始（只读这一个小键，不等大数据） */
+const snapshotReadP = readHomeSnapshot();
+
 /**
- * 启动闸门：本地数据（AppContext.loading）与主题偏好（ThemeModeProvider.loaded）读完前，
- * 只渲染骨架屏、不挂载页面——所以「还没有记账 / 添加账户」这类空态不会在数据到位前闪出来。
- * 两者都就绪且根视图完成首次布局后收起原生启动页。
+ * 启动闸门：本地数据（AppContext.loading）与主题偏好（ThemeModeProvider.loaded）读完前不挂载页面。
+ * - 有上次快照：先显示「上次的样子」覆盖层（数字从 0 追赶，三块依次淡入），数据到达后平滑收敛到真实值再淡出；
+ * - 没有快照（首次启动 / 退出登录后）：显示骨架屏；
+ * - 两者都就绪且根视图完成首次布局后收起原生启动页。
  */
 function StartupGate({ children }: { children: React.ReactNode }) {
-  const { loading } = useApp();
+  const { loading, transactions, assets, budgets, categories, activeLedgerId, currency, decimalPlaces, getAssetById, getAssetBalance } = useApp();
   const { loaded: themeLoaded } = useThemeMode();
   const { semantic } = useTheme();
+  const { reduceMotion } = useMotion();
+  const { langMode } = useLanguage();
   const ready = !loading && themeLoaded;
   const [laidOut, setLaidOut] = useState(false);
+  // undefined = 还在读；null = 没有快照；HomeSnapshot = 可用
+  const [snap, setSnap] = useState<HomeSnapshot | null | undefined>(undefined);
+  const [overlayOn, setOverlayOn] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    snapshotReadP.then((s) => {
+      if (alive) setSnap(s);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // 真实值（只在就绪后计算，与快照同口径）
+  const real = useMemo(
+    () =>
+      ready
+        ? buildHomeSnapshot({
+            transactions,
+            assets,
+            budgets,
+            categories,
+            activeLedgerId,
+            currency,
+            decimals: Number(decimalPlaces),
+            lang: langMode,
+            loadMs: coldHydratedMs ?? 3000,
+            getAssetById,
+            getAssetBalance,
+          })
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ready, transactions, assets, budgets, categories, activeLedgerId, currency, decimalPlaces, langMode]
+  );
+
   useEffect(() => {
     if (!ready) return;
+    if (coldHydratedMs == null) coldHydratedMs = Date.now() - JS_START_MS;
     devMark('hydrated');
     devMark('children-mounted (first frame of the real app)');
   }, [ready]);
+
+  // 原生启动页：根视图布好、且「快照已就绪或数据已就绪」就收起，之后由覆盖层 / 骨架屏接力
   useEffect(() => {
-    if (ready && laidOut) hideSplash('ready');
-  }, [ready, laidOut]);
+    if (laidOut && (ready || snap !== undefined)) hideSplash(ready ? 'ready' : 'snapshot');
+  }, [laidOut, ready, snap]);
+  // 兜底：数据已就绪但根视图的布局回调迟迟不来（个别平台 / 首帧）→ 0.5 秒后也收起，不让启动页干等到上限
+  useEffect(() => {
+    if (!ready) return;
+    const t = setTimeout(() => hideSplash('ready-fallback'), 500);
+    return () => clearTimeout(t);
+  }, [ready]);
+
+  const showOverlay = !!snap && overlayOn;
   return (
     <View style={{ flex: 1, backgroundColor: semantic.bg }} onLayout={() => setLaidOut(true)}>
-      {ready ? children : <StartupSkeleton />}
+      {ready ? children : null}
+      {ready ? <HomeSnapshotWriter fallbackLoadMs={snap?.loadMs ?? 3000} /> : null}
+      {!ready && snap === null ? <StartupSkeleton /> : null}
+      {showOverlay && snap ? (
+        <ColdStartSnapshot
+          snap={snap}
+          real={ready ? real : null}
+          reduceMotion={reduceMotion}
+          onSettled={() => setOverlayOn(false)}
+        />
+      ) : null}
     </View>
   );
+}
+
+/** 快照写入：数据每次变化后防抖 1 秒写一次（只在数据就绪后挂载，所以不会在读完之前写） */
+function HomeSnapshotWriter({ fallbackLoadMs }: { fallbackLoadMs: number }) {
+  const { transactions, assets, budgets, categories, activeLedgerId, currency, decimalPlaces, getAssetById, getAssetBalance } = useApp();
+  const { langMode } = useLanguage();
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const snap = buildHomeSnapshot({
+        transactions,
+        assets,
+        budgets,
+        categories,
+        activeLedgerId,
+        currency,
+        decimals: Number(decimalPlaces),
+        lang: langMode,
+        loadMs: coldHydratedMs ?? fallbackLoadMs,
+        getAssetById,
+        getAssetBalance,
+      });
+      void writeHomeSnapshot(snap);
+    }, 1000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transactions, assets, budgets, categories, activeLedgerId, currency, decimalPlaces, langMode]);
+  return null;
 }
 
 /** 首屏之后再启动的后台服务（推送注册 / 云同步 / 付款提醒）：交互结束后再延后一小会儿 */
