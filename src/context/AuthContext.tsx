@@ -5,6 +5,7 @@ import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '../services/supabaseClient';
 import { INACTIVITY_LIMIT_MS } from '../config/supabaseConfig';
 import { fullSync, getSyncState, subscribeSyncState, SyncStatus } from '../services/syncService';
+import { clearHomeSnapshot } from '../services/homeSnapshot';
 
 // 距上次"上线"（打开 App）超过该时长 → 会话作废，要求重新登录
 const LAST_ACTIVE_KEY = '@jizhang/lastActiveAt';
@@ -74,6 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const last = await AsyncStorage.getItem(LAST_ACTIVE_KEY).catch(() => null);
         if (last != null && Date.now() - Number(last) > INACTIVITY_LIMIT_MS) {
           await supabase.auth.signOut();
+          await clearHomeSnapshot();
           setSessionExpired(true);
         } else {
           await markActive();
@@ -133,6 +135,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut: AuthContextValue['signOut'] = async () => {
     // 只退出登录，本机数据保留（离线照常用）；下次登录同账号会自动合并
     await supabase.auth.signOut();
+    // 退出登录：清掉「上次快照」，下次冷启动不再显示这个账号的旧数字
+    await clearHomeSnapshot();
     setSessionExpired(false);
   };
 
