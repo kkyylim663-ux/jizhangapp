@@ -19,7 +19,6 @@ import { getCurrencySymbol } from '../utils/currencies';
 import { computePlanOccurrences } from '../utils/paymentPlans';
 import { onLocalDataReplaced, schedulePush } from '../services/syncService';
 import { runStorageExclusive } from '../services/storageQueue';
-import { clearHomeSnapshot } from '../services/homeSnapshot';
 
 const STORAGE_KEYS = {
   transactions: '@jizhang/transactions',
@@ -497,8 +496,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteLedger: AppContextValue['deleteLedger'] = async (id) => {
-    // 删账本：清掉「上次快照」（之后快照按删除后的数据重新写一次，不会留着被删账本的数字）
-    void clearHomeSnapshot();
     // 用户定版：默认账本也可删除（其数据一并清除），但至少要留一个账本。
     // 删的是当前账本时回落：优先回落到剩下的第一个账本，一个都没有则回落 'default'
     // （'default' 是运行时兜底账本，不在 ledgers 数组里也会正常显示/工作）。
@@ -560,15 +557,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const assetHasRecords: AppContextValue['assetHasRecords'] = (id) => assetRecordCount(id) > 0;
 
   const archiveAsset: AppContextValue['archiveAsset'] = async (id) => {
-    // 归档：清快照（数据变化后会按归档后的状态重新写，已归档账户不再出现在快照里）
-    void clearHomeSnapshot();
     const archivedAt = new Date().toISOString();
     // 归档即取消默认：已归档账户不能再被记一笔时自动带出
     setAssets((prev) => prev.map((a) => (a.id === id ? { ...a, archivedAt, isDefault: false } : a)));
   };
 
   const unarchiveAsset: AppContextValue['unarchiveAsset'] = async (id) => {
-    void clearHomeSnapshot();
     setAssets((prev) =>
       prev.map((a) => {
         if (a.id !== id) return a;

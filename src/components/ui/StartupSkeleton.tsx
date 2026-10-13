@@ -18,6 +18,7 @@ import Reanimated, {
   withTiming,
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../theme/useTheme';
 import { useMotion } from '../../theme/motion';
 import { withAlpha } from './color';
@@ -31,6 +32,8 @@ export function StartupSkeleton() {
   const { semantic, layout, spacing, radius, isDark } = useTheme();
   const motion = useMotion();
   const { width } = useWindowDimensions();
+  // 顶部让位与真实首页一致（heroTopRow：insets.top + 14），骨架屏 → 首页不跳版
+  const insets = useSafeAreaInsets();
   const sweep = useSharedValue(0);
 
   useEffect(() => {
@@ -68,7 +71,7 @@ export function StartupSkeleton() {
   return (
     <View style={[styles.root, { backgroundColor: semantic.bg, paddingHorizontal: pad }]} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
       {/* 顶栏：左胶囊 + 右两颗圆 */}
-      <View style={[styles.topRow, { marginTop: spacing.lg }]}>
+      <View style={[styles.topRow, { marginTop: insets.top + 14 }]}>
         <Bone style={{ width: 112, height: 32, borderRadius: 16 }} />
         <View style={styles.topRight}>
           <Bone style={{ width: 36, height: 36, borderRadius: 18 }} />
