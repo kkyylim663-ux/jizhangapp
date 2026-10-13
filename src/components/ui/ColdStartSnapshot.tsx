@@ -147,7 +147,8 @@ export function ColdStartSnapshot({ snap, real, reduceMotion, onSettled }: Props
     let last = Date.now();
     const tick = () => {
       const now = Date.now();
-      const dt = Math.min(now - last, 100);
+      // 用真实帧间隔（上限 250ms 防止切后台再回来时一跳到位）；JS 忙时不会把追赶拖慢到 100ms 一帧
+      const dt = Math.min(now - last, 250);
       last = now;
       const tg = target.current;
       const k = 1 - Math.exp(-dt / tg.tau);
