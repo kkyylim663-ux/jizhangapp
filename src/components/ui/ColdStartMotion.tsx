@@ -2,20 +2,13 @@
 // 冷启动动效（只在「本次 App 启动」的第一屏播放一次，切 Tab / 横滑币种不再重放）：
 // - 净资产数字从 0.00 滚到真实值（HeroRollMoney）：一条连续的缓出曲线，约 1.6 秒落在真实值上；
 //   中途真实数据变化（同步写回）→ 从当前位置平滑改追新目标，不重新从 0 开始；
-// - 预算进度条同步从 0 长到真实占比（BudgetCardPage 调用 claimColdRoll）；
-// - 预算卡 / 账单行 淡入上浮（ColdStartReveal）：预算 250ms、账单 450ms 起步。
+// - 预算进度条同步从 0 长到真实占比（BudgetCardPage 调用 claimColdRoll）。
+// 只改数字与进度条的内容，不额外包任何一层视图（布局与首次版式完全一致）。
 //
 // 「本次启动」的判定：模块级变量。第一次调用 claim 时打开一个 2.2 秒窗口，窗口内挂载的组件才播放；
 // 窗口关闭后（以及减少动态效果时）一律直接显示最终值。
-import React, { useEffect, useRef, useState } from 'react';
-import Reanimated, {
-  Easing,
-  useAnimatedStyle,
-  useSharedValue,
-  withDelay,
-  withTiming,
-} from 'react-native-reanimated';
-import type { ViewStyle } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Easing } from 'react-native-reanimated';
 import { MoneyText, type MoneyTextProps } from './MoneyText';
 import { useMotion } from '../../theme/motion';
 
@@ -23,8 +16,6 @@ import { useMotion } from '../../theme/motion';
 export const COLD_ROLL_MS = 1600;
 /** 进度条 / 数字 追赶新目标的时长（ms） */
 const RETARGET_MS = 400;
-/** 淡入上浮时长（ms） */
-const REVEAL_MS = 240;
 /** 启动动效窗口（ms）：第一次 claim 之后这段时间内挂载的组件才播放 */
 const WINDOW_MS = 2200;
 export const COLD_EASE = Easing.out(Easing.cubic);
@@ -47,11 +38,6 @@ export function claimColdRoll(code: string): boolean {
   if (!ensureWindow()) return false;
   if (rollCode === null) rollCode = code;
   return rollCode === code;
-}
-
-/** 卡片 / 行是否播放淡入上浮（窗口内挂载的都播放） */
-export function claimColdReveal(): boolean {
-  return ensureWindow();
 }
 
 /**
@@ -95,30 +81,4 @@ export function HeroRollMoney({ code, value, ...rest }: MoneyTextProps & { code:
   }, [rolling]);
 
   return <MoneyText {...rest} value={rolling ? shown : value} roll={rolling ? false : undefined} />;
-}
-
-/** 淡入上浮：delay 毫秒后，透明度 0→1、位移 12→0（只在启动窗口内播放） */
-export function ColdStartReveal({
-  delay,
-  style,
-  children,
-}: {
-  delay: number;
-  style?: ViewStyle | ViewStyle[];
-  children: React.ReactNode;
-}) {
-  const { reduceMotion } = useMotion();
-  const claim = useRef<boolean | null>(null);
-  if (claim.current === null) claim.current = !reduceMotion && claimColdReveal();
-  const p = useSharedValue(claim.current ? 0 : 1);
-  useEffect(() => {
-    if (claim.current) {
-      p.value = withDelay(delay, withTiming(1, { duration: REVEAL_MS, easing: COLD_EASE }));
-    }
-  }, [delay, p]);
-  const animStyle = useAnimatedStyle(() => ({
-    opacity: p.value,
-    transform: [{ translateY: (1 - p.value) * 12 }],
-  }));
-  return <Reanimated.View style={[style, animStyle]}>{children}</Reanimated.View>;
 }

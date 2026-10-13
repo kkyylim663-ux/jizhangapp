@@ -7,7 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import Reanimated, { useSharedValue, useAnimatedStyle, useDerivedValue, withTiming, withSpring, withSequence, cancelAnimation, runOnJS, runOnUI, useAnimatedReaction, Easing } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
-import { HeroRollMoney, ColdStartReveal, claimColdRoll, COLD_ROLL_MS, COLD_EASE } from '../components/ui/ColdStartMotion';
+import { HeroRollMoney, claimColdRoll, COLD_ROLL_MS, COLD_EASE } from '../components/ui/ColdStartMotion';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -1668,7 +1668,6 @@ export default function HomeScreen({ navigation }: any) {
     // 列表卡底边 = 末组最后一行：26 下圆角 + 4pt 卡底边（稿里卡内 padding 下 4）
     const isCardBottom = !!section.isLast && index === (section.data?.length ?? 0) - 1;
     return (
-      <ColdStartReveal delay={450}>
       <TxRow
         title={hasOwnTitle ? ownTitle : catName}
         categoryName={hasOwnTitle ? catName : ''}
@@ -1682,7 +1681,6 @@ export default function HomeScreen({ navigation }: any) {
         onPress={openEdit}
         testID={`tx-row-${item.id}`}
       />
-      </ColdStartReveal>
     );
   }, [t, getCategoryById, getAssetById, navigation]);
   const renderTxRow = useCallback(({ item, index, section }: { item: Transaction; index: number; section: TxDaySection }) => (
@@ -2545,7 +2543,7 @@ export default function HomeScreen({ navigation }: any) {
               整卡点按 = 原预算编辑弹窗入口；未设预算时的空态行保留。
               每个币种一页（BudgetCardPage），多币种时排成与 hero 同步横移的一条：
               页距 = 窗口宽（邻页在屏幕外，不需要裁剪，卡片投影也不会被切）；单币种 / 未量到宽度时只画当前页 */}
-          <ColdStartReveal delay={250}>{budgetStrip}</ColdStartReveal>
+          {budgetStrip}
         </Reanimated.View>
         {neighbourPanels}
         {calNeighbourPanels}
