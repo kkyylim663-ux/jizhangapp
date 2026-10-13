@@ -53,7 +53,8 @@
           "enforceContrast": false,
           "style": "dark"
         }
-      ]
+      ],
+      "expo-splash-screen"
     ],
     "extra": {
       "eas": {
