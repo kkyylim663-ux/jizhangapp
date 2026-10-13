@@ -358,6 +358,12 @@ const CAL_ENTER_EASE = Easing.bezier(0.22, 1, 0.36, 1);
 const CAL_EXIT_EASE = Easing.bezier(0.5, 0, 0.75, 0);
 const CAL_LIFT_MAX = 480;
 const CAL_DIM_MAX = 0.25;
+// 开发期日历切换计时（只在 __DEV__ 打印；发布包里 devCalLog 是空操作）
+const devCal = { tapAt: 0, animDoneAt: 0, setAt: 0, committing: false };
+function devCalLog(label: string) {
+  if (!__DEV__) return;
+  console.log(`[cal] ${label} (+${(performance.now() - devCal.tapAt).toFixed(0)}ms since tap)`);
+}
 
 /** 列表格子统一的过渡包装：淡出 × 上升 × 日历下沉。所有格子共用同一份计算，没有逐行错峰。
  *  纯 UI 线程 useAnimatedStyle，不用 entering / exiting 属性（Fabric 下会 addViewAt 崩） */
@@ -1777,6 +1783,12 @@ export default function HomeScreen({ navigation }: any) {
   // 只在日历模式消费 dayGroups 派生数据，账单列表及其全部逻辑零改动。
   // viewMonth 独立记忆：切回详情再进来月份不重置
   const [viewMode, setViewMode] = useState<'detail' | 'calendar'>('detail');
+  // 开发期：setViewMode 提交的耗时（setState → 提交后的 effect）
+  useEffect(() => {
+    if (!__DEV__ || !devCal.committing) return;
+    devCal.committing = false;
+    console.log(`[cal] viewMode commit took ${(performance.now() - devCal.setAt).toFixed(0)}ms (${viewMode})`);
+  }, [viewMode]);
   // 日历底部弹层（见上面 calY / calO / listY / listO 的说明）：
   //  · 日历卡与列表都常驻挂载、数据原样保留（不清 sections、不挂载 / 卸载），关闭的那一层 opacity 精确为 0；
   //  · 点按在 UI 线程直接起动画（共享值），触感 fire-and-forget；React state viewMode 只在动画完全结束之后才更新
@@ -1846,9 +1858,18 @@ export default function HomeScreen({ navigation }: any) {
       // 动画结束的回调进来时目标已经被再次点按改掉了：这次收尾作废
       if ((calTarget.value === 1) !== open) return;
       if (finishHandleRef.current) finishHandleRef.current.cancel();
+      if (__DEV__) {
+        devCal.animDoneAt = performance.now();
+        devCalLog('animation finished; waiting for interactions');
+      }
       finishHandleRef.current = InteractionManager.runAfterInteractions(() => {
         finishHandleRef.current = null;
         if ((calTarget.value === 1) !== open) return;
+        if (__DEV__) {
+          devCalLog(`interactions done after ${(performance.now() - devCal.animDoneAt).toFixed(0)}ms; setViewMode`);
+          devCal.setAt = performance.now();
+          devCal.committing = true;
+        }
         React.startTransition(() => setViewMode(open ? 'calendar' : 'detail'));
       });
     },
@@ -1856,6 +1877,10 @@ export default function HomeScreen({ navigation }: any) {
   );
   // 点按后 JS 线程做的事：触感（fire-and-forget）、取消上一次还没执行的收尾
   const afterCalTap = useCallback(() => {
+    if (__DEV__) {
+      devCal.tapAt = performance.now();
+      devCalLog(devCal.committing ? 'tap while viewMode commit is pending' : 'tap (JS)');
+    }
     if (finishHandleRef.current) {
       finishHandleRef.current.cancel();
       finishHandleRef.current = null;

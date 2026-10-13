@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, Profiler } from 'react';
 import { StatusBar } from 'expo-status-bar';
 // V2.2：Android 系统导航栏按钮明暗跟随应用主题（声明式，非 Android 端渲染 null）
 // —— 栏身底色不需要 API：SDK 57 强制 edge-to-edge，导航条后面就是页面根视图的
@@ -264,6 +264,11 @@ function StartupGate({ children }: { children: React.ReactNode }) {
       {ready ? children : <StartupSkeleton />}
     </View>
   );
+}
+
+/** 开发期：记录每次提交的耗时（只在 __DEV__，>4ms 才打印；用于日历切换的成本测量） */
+function devOnRender(id: string, phase: string, actualDuration: number) {
+  if (actualDuration > 4) console.log(`[cal] commit ${id} ${phase} ${actualDuration.toFixed(1)}ms at ${Math.round(performance.now())}`);
 }
 
 /** 首屏之后再启动的后台服务（推送注册 / 云同步 / 付款提醒）：交互结束后再延后一小会儿 */
@@ -684,7 +689,7 @@ export default function App() {
                   <AppProvider>
                     {/* ⚠ 组件预览页（后续批次回归测试用，T32 清理时删）：
                         只在 __DEV__ + web + URL 带 ?gallery=1 时替换真实 App，不进正式导航。 */}
-                    {__DEV__ && galleryMode ? <ComponentGallery /> : <StartupGate><AppContent /></StartupGate>}
+                    {__DEV__ && galleryMode ? <ComponentGallery /> : <StartupGate>{__DEV__ ? <Profiler id="app" onRender={devOnRender}><AppContent /></Profiler> : <AppContent />}</StartupGate>}
                     {/* 全局主题化弹窗 Host 已内置于 AppDialogProvider：
                         <AppDialog /> 的 DialogHost 随 Provider 渲染 */}
                   </AppProvider>
