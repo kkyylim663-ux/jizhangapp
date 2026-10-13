@@ -359,7 +359,7 @@ const CAL_EXIT_EASE = Easing.bezier(0.5, 0, 0.75, 0);
 const CAL_LIFT_MAX = 480;
 const CAL_DIM_MAX = 0.25;
 // 开发期日历切换计时（只在 __DEV__ 打印；发布包里 devCalLog 是空操作）
-const devCal = { tapAt: 0, animDoneAt: 0, setAt: 0, committing: false };
+const devCal = { tapAt: 0 };
 function devCalLog(label: string) {
   if (!__DEV__) return;
   console.log(`[cal] ${label} (+${(performance.now() - devCal.tapAt).toFixed(0)}ms since tap)`);
@@ -572,7 +572,7 @@ function GlassRoundTapButton({
   iconOn,
   onProgress,
   accessibilityLabel,
-  accessibilityState,
+  selectedSV,
   onTapUI,
   onActivateJS,
   pressSpring,
@@ -583,7 +583,8 @@ function GlassRoundTapButton({
   iconOn: IconName;
   onProgress: SharedValue<number>;
   accessibilityLabel: string;
-  accessibilityState?: React.ComponentProps<typeof PressableScale>['accessibilityState'];
+  /** 日历模式的目标（1 = 日历）：按钮据此维护无障碍的选中状态（只重渲按钮自己） */
+  selectedSV: SharedValue<number>;
   onTapUI: () => void;
   onActivateJS: () => void;
   pressSpring: { dampingRatio: number; duration: number };
@@ -591,6 +592,14 @@ function GlassRoundTapButton({
 }) {
   const { semantic } = useTheme();
   const scale = useSharedValue(1);
+  const [selected, setSelected] = useState(false);
+  useAnimatedReaction(
+    () => selectedSV.value === 1,
+    (now, prev) => {
+      if (now !== prev) runOnJS(setSelected)(now);
+    },
+    [selectedSV]
+  );
   const gesture = useMemo(
     () =>
       Gesture.Tap()
@@ -615,7 +624,7 @@ function GlassRoundTapButton({
         accessible
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel}
-        accessibilityState={accessibilityState}
+        accessibilityState={{ selected }}
         accessibilityActions={[{ name: 'activate' }]}
         onAccessibilityAction={onActivateJS}
         testID={testID}
@@ -630,6 +639,34 @@ function GlassRoundTapButton({
         </GlassView>
       </Reanimated.View>
     </GestureDetector>
+  );
+}
+
+/**
+ * 日历弹层的指针外壳：open 状态只存在这个小组件里（只重渲它自己，不重渲页面）。
+ * 打开 = 接收触摸；关闭 = pointerEvents none。children 由页面传入，引用不变，不会被重渲。
+ */
+function CalPointerGate({
+  openSV,
+  style,
+  children,
+}: {
+  openSV: SharedValue<number>;
+  style: React.ComponentProps<typeof Reanimated.View>['style'];
+  children?: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  useAnimatedReaction(
+    () => openSV.value === 1,
+    (now, prev) => {
+      if (now !== prev) runOnJS(setOpen)(now);
+    },
+    [openSV]
+  );
+  return (
+    <Reanimated.View pointerEvents={open ? 'auto' : 'none'} style={style}>
+      {children}
+    </Reanimated.View>
   );
 }
 
@@ -739,8 +776,11 @@ function SwipePanel({
 }) {
   const style = useAnimatedStyle(() => {
     const base = listIdx.value;
+    // 有 sheetO 的预览（列表邻页 / 日历邻页）：所在层关闭时整张不参与点按（绝对定位，不影响布局）
+    const live = sheetO ? sheetO.value > 0.01 : true;
     return {
       opacity: swipeActive.value === 1 && (index !== base || frozen.value === 1) ? (sheetO ? sheetO.value : 1) : 0,
+      display: live ? ('flex' as const) : ('none' as const),
       transform: [
         { translateX: (index - base) * pitch.value + shiftX.value },
         { translateY: sheetY ? sheetY.value : 0 },
@@ -1757,29 +1797,22 @@ export default function HomeScreen({ navigation }: any) {
   // 日历视图（详情 ⇄ 日历切换，HTML 原型拍板形态）──
   // 只在日历模式消费 dayGroups 派生数据，账单列表及其全部逻辑零改动。
   // viewMonth 独立记忆：切回详情再进来月份不重置
-  const [viewMode, setViewMode] = useState<'detail' | 'calendar'>('detail');
-  // 开发期：setViewMode 提交的耗时（setState → 提交后的 effect）
-  useEffect(() => {
-    if (!__DEV__ || !devCal.committing) return;
-    devCal.committing = false;
-    console.log(`[cal] viewMode commit took ${(performance.now() - devCal.setAt).toFixed(0)}ms (${viewMode})`);
-  }, [viewMode]);
   // 日历底部弹层（见上面 calY / calO / listY / listO 的说明）：
   //  · 日历卡与列表都常驻挂载、数据原样保留（不清 sections、不挂载 / 卸载），关闭的那一层 opacity 精确为 0；
-  //  · 点按在 UI 线程直接起动画（共享值），触感 fire-and-forget；React state viewMode 只在动画完全结束之后才更新
-  //    （图标 / 无障碍状态 / 日历邻页挂载 / 列表区高度夹取 / 弹层 pointerEvents 都靠它），
-  //    所以切换路径上没有任何重渲染；第二次点按会取消还没执行的收尾，从当前值继续。
+  //  · 点按在 UI 线程直接起动画（共享值），触感 fire-and-forget。切换路径上不写任何 React state：
+  //    按钮的无障碍选中态在按钮自己里维护（selectedSV），弹层的 pointerEvents 在 CalPointerGate 里维护，
+  //    列表顶部日期头跟 listO 淡出，日历邻页常驻挂载（只随 listO / calO 淡入淡出）——所以一次切换不会重渲整个首页。
   //  · 日历卡是绝对定位（贴在列表起点），不占布局，列表区不会跳动。
   const [calMounted, setCalMounted] = useState(false);
+  // 日历是否已完全打开（列表区高度夹取用）：只在动画结束后变化，不参与动画过程
+  const [calClamp, setCalClamp] = useState(false);
+  const [calH, setCalH] = useState(0);
+  const onCalLayoutH = useCallback((h: number) => setCalH((prev) => (Math.abs(prev - h) >= 1 ? h : prev)), []);
   const calMountedRef = useRef(false);
   calMountedRef.current = calMounted;
   useEffect(() => {
     calReady.value = calMounted ? 1 : 0;
   }, [calMounted, calReady]);
-  const [calH, setCalH] = useState(0);
-  const onCalLayoutH = useCallback((h: number) => setCalH((prev) => (Math.abs(prev - h) >= 1 ? h : prev)), []);
-  const calRendered = viewMode === 'calendar';
-  const calSettled = viewMode === 'calendar';
   // 列表一页的间距 = 窗口宽（UI 线程读）
   useEffect(() => {
     listPitch.value = winW;
@@ -1795,6 +1828,13 @@ export default function HomeScreen({ navigation }: any) {
       if (timer) clearTimeout(timer);
     };
   }, []);
+  // 邻页日历（其余币种的日历卡）比真日历更重：在真日历预热之后再错开 1.5 秒挂载，不和首屏抢同一帧
+  const [calNbMounted, setCalNbMounted] = useState(false);
+  useEffect(() => {
+    if (!calMounted) return;
+    const t = setTimeout(() => setCalNbMounted(true), 1500);
+    return () => clearTimeout(t);
+  }, [calMounted]);
   const calLift = Math.min(CAL_LIFT_MAX, screenH * 0.6);
   useEffect(() => {
     calLiftSV.value = calLift;
@@ -1807,14 +1847,17 @@ export default function HomeScreen({ navigation }: any) {
     transform: [{ translateX: listShiftX.value }, { translateY: calY.value }],
   }));
   const calDimStyle = useAnimatedStyle(() => ({ opacity: CAL_DIM_MAX * calP.value }));
-  // 列表始终挂着（日历模式下它 opacity 0）；日历模式下列表区的滚动高度夹成「头部 + 日历」，不会滚进一大片空白
+  // 列表顶部的吸顶日期头：跟列表一起淡出（日历打开时隐藏），不再靠 React 状态条件挂载
+  const pinnedFadeStyle = useAnimatedStyle(() => ({ opacity: listO.value }));
+  // 列表始终挂着（日历模式下它 opacity 0）；日历打开后（calClamp 为真，只在动画结束时变一次）把列表内容高度夹成「头部 + 日历」，
+  // 不会滚进一大片空白，也不会让头部被滚走。这是唯一一次跟切换有关的 React 更新（见 finishToggle）
   const calContentH = calH > 0 ? heroH + calH + tabClearance + 12 : 0;
   const listContentStyle = useMemo(
     () =>
-      calRendered && calContentH > 0
+      calClamp && calContentH > 0
         ? { paddingBottom: tabClearance, minHeight: calContentH, maxHeight: calContentH, overflow: 'hidden' as const }
         : { paddingBottom: tabClearance },
-    [calRendered, calContentH, tabClearance]
+    [calClamp, calContentH, tabClearance]
   );
   // JS 兜底：预热没到就点了 —— 先挂上日历卡（藏着），两帧后在 UI 线程起动画
   const startSheetsRef = useRef<(open: boolean) => void>(() => {});
@@ -1827,25 +1870,17 @@ export default function HomeScreen({ navigation }: any) {
     []
   );
   // 动画结束之后才更新 state（可被第二次点按取消）
+  // 动画结束后（JS）：只在这里碰一次 React 状态（列表高度夹取），整个切换过程本身没有重渲染
   const finishHandleRef = useRef<{ cancel: () => void } | null>(null);
   const finishToggle = useCallback(
     (open: boolean) => {
       // 动画结束的回调进来时目标已经被再次点按改掉了：这次收尾作废
       if ((calTarget.value === 1) !== open) return;
       if (finishHandleRef.current) finishHandleRef.current.cancel();
-      if (__DEV__) {
-        devCal.animDoneAt = performance.now();
-        devCalLog('animation finished; waiting for interactions');
-      }
       finishHandleRef.current = InteractionManager.runAfterInteractions(() => {
         finishHandleRef.current = null;
         if ((calTarget.value === 1) !== open) return;
-        if (__DEV__) {
-          devCalLog(`interactions done after ${(performance.now() - devCal.animDoneAt).toFixed(0)}ms; setViewMode`);
-          devCal.setAt = performance.now();
-          devCal.committing = true;
-        }
-        React.startTransition(() => setViewMode(open ? 'calendar' : 'detail'));
+        React.startTransition(() => setCalClamp(open));
       });
     },
     [calTarget]
@@ -1854,7 +1889,7 @@ export default function HomeScreen({ navigation }: any) {
   const afterCalTap = useCallback(() => {
     if (__DEV__) {
       devCal.tapAt = performance.now();
-      devCalLog(devCal.committing ? 'tap while viewMode commit is pending' : 'tap (JS)');
+      devCalLog('tap (JS)');
     }
     if (finishHandleRef.current) {
       finishHandleRef.current.cancel();
@@ -1883,7 +1918,6 @@ export default function HomeScreen({ navigation }: any) {
         listY.value = open ? CAL_LIST_LIFT : 0;
         listO.value = open ? 0 : 1;
         viewP.value = open ? 1 : 0;
-        runOnJS(finishToggle)(open);
         return;
       }
       viewP.value = withTiming(open ? 1 : 0, { duration: 180 });
@@ -1992,7 +2026,7 @@ export default function HomeScreen({ navigation }: any) {
   const [calSeg, setCalSeg] = useState<SegKey>('expense');
   // 日历邻页的数据：落定后（calPanelsReady）一次算好每个币种的逐日 Map 与当月合计，
   // 只在账单 / 月份 / 语言变化时重算 —— 横滑提交（换当前币种）不会让它们换身份，邻页不重渲
-  const calPanelsReady = calRendered && calSettled && totalsByCurrency.length > 1;
+  const calPanelsReady = calNbMounted && totalsByCurrency.length > 1;
   const calDaysMap = useMemo(() => {
     const m = new Map<string, Map<string, CalendarDayTotals>>();
     if (!calPanelsReady) return m;
@@ -2184,7 +2218,7 @@ export default function HomeScreen({ navigation }: any) {
     return () => task.cancel();
   }, []);
   const neighbourPanels =
-    totalsByCurrency.length > 1 && amountRowW > 0 && !calRendered
+    totalsByCurrency.length > 1 && amountRowW > 0
       ? totalsByCurrency.map(([code], i) => {
           if (!previewsAll && Math.abs(i - Math.max(0, curIdx)) > 1) return null;
           return (
@@ -2198,6 +2232,7 @@ export default function HomeScreen({ navigation }: any) {
               pitch={listPitch}
               top={heroH}
               width={winW}
+              sheetO={listO}
             >
               <NeighbourList
                 groups={dayGroupsMap.get(code) ?? NO_GROUPS}
@@ -2394,7 +2429,7 @@ export default function HomeScreen({ navigation }: any) {
                 iconOn="list-outline"
                 onProgress={viewP}
                 accessibilityLabel={t('home.toggleView')}
-                accessibilityState={{ selected: viewMode === 'calendar' }}
+                selectedSV={calTarget}
                 onTapUI={toggleCalUI}
                 onActivateJS={() => {
                   hapticLight();
@@ -2551,7 +2586,7 @@ export default function HomeScreen({ navigation }: any) {
             卡面 = GlassView（UI V2.1 §2：全 App 唯一毛玻璃材质，P_Calendar 稿整张日历就是一块玻璃）
             + 圆角 26 / 内衬 12·10·10（与账单列表卡同一张卡的观感） */}
         {calMounted && (
-          <Reanimated.View pointerEvents={calRendered ? 'auto' : 'none'} style={[styles.calendarAbs, { top: calTop }, calEnterStyle]}>
+          <CalPointerGate openSV={calTarget} style={[styles.calendarAbs, { top: calTop }, calEnterStyle]}>
             <CalendarShell
               year={viewMonth.year}
               month={viewMonth.month}
@@ -2565,10 +2600,10 @@ export default function HomeScreen({ navigation }: any) {
               onPressItem={onCalPressItem}
               onSegKeyChange={setCalSeg}
               selectionKey={activeCurrency}
-              onLayoutH={onCalLayoutH}
               debugName="real"
+              onLayoutH={onCalLayoutH}
             />
-          </Reanimated.View>
+          </CalPointerGate>
         )}
           </View>
         }
@@ -2576,10 +2611,10 @@ export default function HomeScreen({ navigation }: any) {
       {/* 吸顶日期头（自绘，见 pinnedSection 的注释）：钉在列表视口顶部，与内容里的日期头同款；
           头部区还占着顶部时不显示 —— 只覆盖列表，不盖弹层（zIndex 低于弹层） */}
       {/* 只在列表视图显示：切到日历视图时列表（含吸顶条）必须完全不显示（验收退回第 2 条） */}
-      {Platform.OS === 'web' && viewMode === 'detail' && heroPassed && pinnedSection && (
-        <View style={styles.pinnedHeader} pointerEvents="none" testID="home-pinned-header">
+      {Platform.OS === 'web' && heroPassed && pinnedSection && (
+        <Reanimated.View style={[styles.pinnedHeader, pinnedFadeStyle]} pointerEvents="none" testID="home-pinned-header">
           {renderDayHeader({ section: pinnedSection })}
-        </View>
+        </Reanimated.View>
       )}
 
       {/* 账本抽屉（T10 / H11）：改用 ui/BottomSheet —— 拖动把手下拉 / 点遮罩 / 关闭键三条路径
