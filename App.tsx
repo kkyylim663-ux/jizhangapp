@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 // V2.2：Android 系统导航栏按钮明暗跟随应用主题（声明式，非 Android 端渲染 null）
 // —— 栏身底色不需要 API：SDK 57 强制 edge-to-edge，导航条后面就是页面根视图的
@@ -6,7 +6,8 @@ import { StatusBar } from 'expo-status-bar';
 //    关掉了系统对比度蒙层（enforceContrast: false），底色原样透出
 import { NavigationBar } from 'expo-navigation-bar';
 import { useFonts } from 'expo-font';
-import { View, StyleSheet, Pressable, Animated, Platform } from 'react-native';
+import * as SplashScreen from 'expo-splash-screen';
+import { View, StyleSheet, Pressable, Animated, Platform, InteractionManager } from 'react-native';
 import { NavigationContainer, CommonActions, DarkTheme, DefaultTheme, useNavigation } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { BottomTabBar } from '@react-navigation/bottom-tabs';
@@ -29,7 +30,7 @@ import { AuthProvider } from './src/context/AuthContext';
 import { AppLockProvider, AppLockOverlay } from './src/context/AppLockContext';
 import { AppDialogProvider } from './src/components/AppDialog';
 import { useSyncManager } from './src/hooks/useSyncManager';
-import { ThemeModeProvider } from './src/context/ThemeModeContext';
+import { ThemeModeProvider, useThemeMode } from './src/context/ThemeModeContext';
 import { LanguageProvider, useT } from './src/i18n/LanguageContext';
 // ⚠ 组件预览页（T03–T05 起）：只在 __DEV__ + web + ?gallery=1 时生效，不进正式导航。
 //   后续每一批都用它做回归截图，**T32 清理任务时才删**（本行 + App() 里的 galleryMode 守卫 + 预览页文件）。
@@ -54,6 +55,7 @@ import {
 } from './src/hooks/useTabClearance';
 // 标签文字走统一文字组件（令牌字号 caption2 = 11pt；英文自动走打包 Inter）
 import { AppText, GlassView } from './src/components/ui';
+import { StartupSkeleton } from './src/components/ui/StartupSkeleton';
 // 启动占位页只需要"现有主题底色"这一个令牌：此时 ThemeModeProvider 还没挂载，
 // useTheme() 用不了（它会抛错），只能直接引 token
 import { lightColors, darkColors } from './src/theme/theme';
@@ -207,6 +209,78 @@ function AddTransactionStack() {
       <AddTransactionStackNav.Screen name="添加资产账户" component={AddAssetScreen} options={{ headerShown: false }} />
     </AddTransactionStackNav.Navigator>
   );
+}
+
+// ---------- 启动闸门 / 原生启动页 / 开发期计时 ----------
+const JS_START_MS = Date.now();
+/** 开发期启动计时：只在 __DEV__ 打印，发布包里是空操作 */
+function devMark(label: string) {
+  if (__DEV__) console.log(`[startup] ${label} +${Date.now() - JS_START_MS}ms`);
+}
+let splashHidden = false;
+/** 收起原生启动页（只做一次）。骨架屏 / 页面接力，不会留白 */
+function hideSplash(reason: string) {
+  if (splashHidden) return;
+  splashHidden = true;
+  devMark(`splash-hidden (${reason})`);
+  if (Platform.OS !== 'web') SplashScreen.hideAsync().catch(() => undefined);
+}
+if (Platform.OS !== 'web') SplashScreen.preventAutoHideAsync().catch(() => undefined);
+devMark('js-start');
+// 安全上限 2.5 秒：字体 / 本地数据迟迟不就绪也要收起启动页，之后由骨架屏接力（web / 开发期不会卡死）
+setTimeout(() => hideSplash('cap'), 2500);
+
+/**
+ * 启动闸门：本地数据（AppContext.loading）与主题偏好（ThemeModeProvider.loaded）读完前，
+ * 只渲染骨架屏、不挂载页面——所以「还没有记账 / 添加账户」这类空态不会在数据到位前闪出来。
+ * 两者都就绪且根视图完成首次布局后收起原生启动页。
+ */
+function StartupGate({ children }: { children: React.ReactNode }) {
+  const { loading } = useApp();
+  const { loaded: themeLoaded } = useThemeMode();
+  const { semantic } = useTheme();
+  const ready = !loading && themeLoaded;
+  const [laidOut, setLaidOut] = useState(false);
+  useEffect(() => {
+    if (!ready) return;
+    devMark('hydrated');
+    devMark('children-mounted (first frame of the real app)');
+  }, [ready]);
+  useEffect(() => {
+    if (ready && laidOut) hideSplash('ready');
+  }, [ready, laidOut]);
+  return (
+    <View style={{ flex: 1, backgroundColor: semantic.bg }} onLayout={() => setLaidOut(true)}>
+      {ready ? children : <StartupSkeleton />}
+    </View>
+  );
+}
+
+/** 首屏之后再启动的后台服务（推送注册 / 云同步 / 付款提醒）：交互结束后再延后一小会儿 */
+function useAfterFirstPaint(): boolean {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const handle = InteractionManager.runAfterInteractions(() => {
+      timer = setTimeout(() => setReady(true), 600);
+    });
+    return () => {
+      handle.cancel();
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+  return ready;
+}
+
+/** 后台服务挂载点（只在首屏之后渲染一次，逻辑与原先 AppContent 里的三个 hook 完全一致） */
+function DeferredServices() {
+  useNotificationSetup();
+  useSyncManager();
+  usePaymentReminders();
+  useEffect(() => {
+    devMark('deferred services started');
+  }, []);
+  return null;
 }
 
 /** 系统导航栏区（底部安全区）实底遮罩：Expo Go 下原生导航栏设置不生效，由 App 自己画 */
@@ -374,14 +448,10 @@ function AppContent() {
     设置项: t('nav.settings'),
   };
 
-  // 推送注册（Expo Go 内自动跳过）
-  useNotificationSetup();
+  // 推送注册 / 云同步 / 付款提醒：首屏之后再启动（见 DeferredServices），不抢首帧
+  const servicesReady = useAfterFirstPaint();
 
-  // 云同步：登录成功 / 重启恢复登录态后做一次完整同步（拉取云端 → 合并 → 推送）
-  useSyncManager();
 
-  // 财务规划-付款提醒:每天 13:00/18:30 检查 7 天内到期的计划(仅"提醒不扣账"的计划)
-  usePaymentReminders();
 
   // web 端根节点底部有约 12px 布局偏移区，不垫色会露出白色；
   // 顺带把浏览器滚动溢出区也染成应用底色（T06 G1：跟随语义底色 semantic.bg）
@@ -545,6 +615,7 @@ function AppContent() {
           随主题切换（style 的可选值里 dark = 深色按钮、light = 浅色按钮） */}
       <NavigationBar style={isDark ? 'light' : 'dark'} />
       <NavBarScrim />
+      {servicesReady ? <DeferredServices /> : null}
     </>
   );
 }
@@ -558,6 +629,8 @@ export default function App() {
   // 键名 = 字体内部 PostScript 名，必须与 src/theme/theme.ts 的 fontFamily / fontFamilyCjk
   // 令牌保持一致（改一处要同步另一处）。加载失败（fontError）回退系统字体，绝不白屏 / 卡死。
   const [fontsLoaded, fontError] = useFonts({
+    // 图标字体（Ionicons）也在首屏前加载：否则第一帧里图标是空白圆
+    ...Ionicons.font,
     'Inter-Regular': require('./assets/fonts/Inter-Regular.ttf'),
     'Inter-Medium': require('./assets/fonts/Inter-Medium.ttf'),
     'Inter-SemiBold': require('./assets/fonts/Inter-SemiBold.ttf'),
@@ -566,6 +639,9 @@ export default function App() {
     'NotoSansSC-Medium': require('./assets/fonts/NotoSansSC-Medium.ttf'),
     'NotoSansSC-Bold': require('./assets/fonts/NotoSansSC-Bold.ttf'),
   });
+  useEffect(() => {
+    if (fontsLoaded) devMark('fonts-ready');
+  }, [fontsLoaded]);
   // 占位页底色：ThemeModeProvider 还没挂载（它在下面才渲染），读不到用户在设置项里选的
   // 深色偏好，只能按系统外观取 theme.ts 的既有底色令牌——只影响字体加载这一瞬间的画面。
   // ⚠ 用自研的 useSystemColorScheme（RN 自带 useColorScheme 在 web 上不跟随系统变化，见该文件头注释）
@@ -598,7 +674,7 @@ export default function App() {
                   <AppProvider>
                     {/* ⚠ 组件预览页（后续批次回归测试用，T32 清理时删）：
                         只在 __DEV__ + web + URL 带 ?gallery=1 时替换真实 App，不进正式导航。 */}
-                    {__DEV__ && galleryMode ? <ComponentGallery /> : <AppContent />}
+                    {__DEV__ && galleryMode ? <ComponentGallery /> : <StartupGate><AppContent /></StartupGate>}
                     {/* 全局主题化弹窗 Host 已内置于 AppDialogProvider：
                         <AppDialog /> 的 DialogHost 随 Provider 渲染 */}
                   </AppProvider>
