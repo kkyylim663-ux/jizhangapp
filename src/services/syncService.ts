@@ -92,7 +92,7 @@ function sleep(ms: number): Promise<void> {
  * 把任意同步异常归类成稳定错误码：
  * - network：fetch 失败/超时/DNS（弱网、部分运营商拦 *.supabase.co）
  * - auth：token 失效 / RLS 拒绝（401/403）
- * - constraint：数据库约束拒绝（NOT NULL / 外键 / 唯一冲突，Postgres 23xxx）
+ * - constraint：数据类拒绝（NOT NULL / 外键 / 唯一冲突 / 同语句重复行 / 类型不合法，Postgres 21-23xxx）
  * - schema：云端库结构落后于 App（未执行最新 schema.sql）——表/列在云端还不存在
  *   （Postgres 42P01/42703、PostgREST PGRST204/205；2026-10-20 归档功能的 archived_at 列踩过）
  * - server：Supabase 5xx
@@ -107,7 +107,11 @@ function classifySyncError(e: unknown): Exclude<SyncErrorCode, 'local_data_corru
   if (code === 'PGRST303' || /issued at future/i.test(msg)) return 'clock_skew';
   if (/fetch|network|timeout|timed out|socket|dns|unable to resolve/i.test(msg)) return 'network';
   if (status === 401 || status === 403 || /jwt|row-level security|permission denied/i.test(msg)) return 'auth';
-  if (/^23\d{3}$/.test(code) || /violates|duplicate key|null value in column/i.test(msg)) return 'constraint';
+  // 21xxx/22xxx/23xxx = Postgres 数据类错误（21 cardinality 如 21000 同语句重复行、
+  // 22 data_exception 如数值/文本不合法、23 integrity 如 NOT NULL/唯一冲突）。
+  // 统一按"坏行"处理：逐行隔离 + 上报告知，不会再把整批打成 500、也不会落进 unknown
+  //（2026-10-20 budgets 21000 事故教训：当时只认 23xxx，21000 被归成 unknown 导致弹窗无法定位）
+  if (/^2[123]\d{3}$/.test(code) || /violates|duplicate key|null value in column/i.test(msg)) return 'constraint';
   if (
     code === 'PGRST204' ||
     code === 'PGRST205' ||
