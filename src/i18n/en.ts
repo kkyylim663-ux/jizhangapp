@@ -652,6 +652,7 @@ export const en = {
     errNotLoggedIn: 'Not signed in. Sign in to sync to the cloud.',
     errConstraint: 'Some legacy records are incompatible with the cloud. Everything else was synced. Please screenshot this message and report it.',
     errServer: 'Cloud service is temporarily unavailable. Please retry later.',
+    errSchema: 'The cloud database is missing columns added by this app version. Run supabase/schema.sql in your Supabase dashboard (SQL Editor), then sync again. Your local data is safe.',
     errCorrupt: 'Local data is corrupt. Cloud sync has been paused to protect your data. Please screenshot this message and report it.',
     errUnknown: 'Something went wrong while syncing. Please retry later.',
   },

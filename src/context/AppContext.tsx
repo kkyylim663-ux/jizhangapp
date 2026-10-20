@@ -17,7 +17,7 @@ import {
 import { DEFAULT_CATEGORIES } from '../utils/defaultCategories';
 import { getCurrencySymbol } from '../utils/currencies';
 import { computePlanOccurrences } from '../utils/paymentPlans';
-import { onLocalDataReplaced, schedulePush } from '../services/syncService';
+import { budgetId, onLocalDataReplaced, schedulePush } from '../services/syncService';
 import { runStorageExclusive } from '../services/storageQueue';
 
 const STORAGE_KEYS = {
@@ -476,10 +476,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // 每次保存都新增一条、显示永远命中旧条目（用户感知为"改了数值不生效"）。
     // 命中旧条目更新时顺带把 currency 归一化写入，之后走正常更新路径。
     setBudgets((prev) => {
-      if (amount <= 0) return prev.filter((b) => !(b.categoryId === categoryId && (b.currency ?? currency) === currency));
-      const exists = prev.find((b) => b.categoryId === categoryId && (b.currency ?? currency) === currency);
-      if (exists) return prev.map((b) => (b === exists ? { ...b, amount, currency } : b));
-      return [...prev, { categoryId, amount, currency }];
+      const exists = amount > 0 ? prev.find((b) => b.categoryId === categoryId && (b.currency ?? currency) === currency) : undefined;
+      const next =
+        amount <= 0
+          ? prev.filter((b) => !(b.categoryId === categoryId && (b.currency ?? currency) === currency))
+          : exists
+            ? prev.map((b) => (b === exists ? { ...b, amount, currency } : b))
+            : [...prev, { categoryId, amount, currency }];
+      // 兜底去重：同 (分类+币种) 只保留第一条（界面按 find 读第一条，推送值必须与显示一致）。
+      // 历史版本曾在"老条目无 currency + 已有同币种条目"时改出两条同 id 预算 → 云端 upsert
+      // 同 id 两行被 Postgres 拒绝（21000）→ 整次同步失败（2026-10-20 事故）。
+      const seen = new Set<string>();
+      return next.filter((b) => {
+        const id = budgetId(b);
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
     });
   };
 

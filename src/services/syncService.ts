@@ -61,6 +61,7 @@ export type SyncErrorCode =
   | 'network'
   | 'auth'
   | 'constraint'
+  | 'schema'
   | 'server'
   | 'clock_skew'
   | 'local_data_corrupt'
@@ -92,6 +93,8 @@ function sleep(ms: number): Promise<void> {
  * - network：fetch 失败/超时/DNS（弱网、部分运营商拦 *.supabase.co）
  * - auth：token 失效 / RLS 拒绝（401/403）
  * - constraint：数据库约束拒绝（NOT NULL / 外键 / 唯一冲突，Postgres 23xxx）
+ * - schema：云端库结构落后于 App（未执行最新 schema.sql）——表/列在云端还不存在
+ *   （Postgres 42P01/42703、PostgREST PGRST204/205；2026-10-20 归档功能的 archived_at 列踩过）
  * - server：Supabase 5xx
  */
 function classifySyncError(e: unknown): Exclude<SyncErrorCode, 'local_data_corrupt' | 'not_logged_in' | 'sync_in_progress'> {
@@ -105,6 +108,15 @@ function classifySyncError(e: unknown): Exclude<SyncErrorCode, 'local_data_corru
   if (/fetch|network|timeout|timed out|socket|dns|unable to resolve/i.test(msg)) return 'network';
   if (status === 401 || status === 403 || /jwt|row-level security|permission denied/i.test(msg)) return 'auth';
   if (/^23\d{3}$/.test(code) || /violates|duplicate key|null value in column/i.test(msg)) return 'constraint';
+  if (
+    code === 'PGRST204' ||
+    code === 'PGRST205' ||
+    code === 'PGRST202' ||
+    code === '42703' ||
+    code === '42P01' ||
+    /does not exist|schema cache/i.test(msg)
+  )
+    return 'schema';
   if ((typeof status === 'number' && status >= 500) || /internal error|server error/i.test(msg)) return 'server';
   return 'unknown';
 }
@@ -360,7 +372,8 @@ function groupFromRow(r: Row): CategoryGroup {
 }
 
 // App 端预算没有 id：用 分类id+币种 生成确定性 id，多端一致
-function budgetId(b: Budget): string {
+// （AppContext.setBudget 也用它去重历史重复条目，故导出）
+export function budgetId(b: Budget): string {
   return `${b.categoryId}|${b.currency ?? ''}`;
 }
 
@@ -567,6 +580,7 @@ function toFiniteNumber(v: unknown, fallback: number): number {
  * - 资产缺 color/currency/icon/ledgerId/createdAt（每资产币种上线前的老设备数据）
  * - 交易缺 ledgerId/createdAt/date、金额非法（NaN 会变成 Postgres 拒绝的 NaN 字面量）
  * - 账本缺 icon/createdAt
+ * - 预算同 (分类+币种) 的重复条目去重（历史版本 setBudget 留下的重复，会让云端 upsert 报 500）
  * 返回 (快照, 是否有修复)：有修复时调用方把结果写回本地自愈，下次不再触发。
  */
 function normalizeSnapshot(s: LocalSnapshot): { snapshot: LocalSnapshot; changed: boolean } {
@@ -606,8 +620,11 @@ function normalizeSnapshot(s: LocalSnapshot): { snapshot: LocalSnapshot; changed
     return { ...l, ...patch } as Ledger;
   });
 
+  const budgets = dedupeBudgets(s.budgets);
+  if (budgets !== s.budgets) changed = true;
+
   return {
-    snapshot: changed ? { ...s, assets, transactions, ledgers } : s,
+    snapshot: changed ? { ...s, assets, transactions, ledgers, budgets } : s,
     changed,
   };
 }
@@ -693,12 +710,55 @@ interface RowFailure {
 
 function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
+  // postgrest-js 默认（非 throwOnError）把服务端错误解析成普通对象返回；此时 String(e)
+  // 只会得到 "[object Object]"，弹窗无法定位问题（2026-10-20 同步失败排查踩过）。
+  // 显式取字段拼成人话，并带上 PostgREST 错误码。
+  if (e && typeof e === 'object') {
+    const anyE = e as { message?: unknown; details?: unknown; hint?: unknown; code?: unknown };
+    const text = [anyE.message, anyE.details, anyE.hint]
+      .filter((v): v is string => typeof v === 'string' && v.length > 0)
+      .join(' | ');
+    if (text) return typeof anyE.code === 'string' && anyE.code ? `[${anyE.code}] ${text}` : text;
+    try {
+      return JSON.stringify(e);
+    } catch {
+      return String(e);
+    }
+  }
   return String(e);
 }
 
+/** 按 id 去重（保留第一条）；无重复时原样返回 */
+function dedupeRowsById(rows: Row[]): Row[] {
+  const seen = new Set<string>();
+  const out = rows.filter((r) => {
+    const id = String(r.id);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  return out.length === rows.length ? rows : out;
+}
+
+/** 预算列表按确定性 id 去重（保留第一条 = 界面 budgets.find 读到的值） */
+function dedupeBudgets(list: Budget[]): Budget[] {
+  const seen = new Set<string>();
+  const out = list.filter((b) => {
+    const id = budgetId(b);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  return out.length === list.length ? list : out;
+}
+
 async function upsertChunked(table: string, rows: Row[], failedRows: RowFailure[]): Promise<void> {
-  for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
-    const chunk = rows.slice(i, i + CHUNK_SIZE);
+  // 同一条 upsert 语句里出现两个相同 id → Postgres 报 21000（ON CONFLICT DO UPDATE cannot
+  // affect row a second time）→ PostgREST 500 → 整次同步失败（2026-10-20 预算重复条目事故）。
+  // 历史遗留重复在这里兜底去重，避免一条脏数据拖垮整张表（与坏行隔离同一理念）。
+  const unique = dedupeRowsById(rows);
+  for (let i = 0; i < unique.length; i += CHUNK_SIZE) {
+    const chunk = unique.slice(i, i + CHUNK_SIZE);
     const { error } = await withRetry(() => supabase.from(table).upsert(chunk));
     if (!error) continue;
     // 数据类失败（NOT NULL/外键等 23xxx）：退到逐行推送隔离坏行，不让一条脏数据卡死全表

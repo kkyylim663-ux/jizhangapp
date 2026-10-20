@@ -71,6 +71,8 @@ function syncErrorText(code: string | undefined, tr: (k: string) => string): str
       return tr('sync.errConstraint');
     case 'server':
       return tr('sync.errServer');
+    case 'schema':
+      return tr('sync.errSchema');
     case 'local_data_corrupt':
       return tr('sync.errCorrupt');
     case 'not_logged_in':

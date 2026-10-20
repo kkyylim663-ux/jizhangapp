@@ -655,6 +655,7 @@ export const zh = {
     errNotLoggedIn: '尚未登录，登录后才能同步到云端。',
     errConstraint: '部分历史数据格式与云端不兼容，其余数据已同步成功。请截图此提示反馈，以便修复该条数据。',
     errServer: '云服务暂时不可用，请稍后重试。',
+    errSchema: '云端数据库缺少 App 新版新增的字段。请到 Supabase 后台 → SQL Editor 执行仓库里 supabase/schema.sql 的补列语句，然后重试同步（本地数据不会丢失）。',
     errCorrupt: '本地数据异常，已暂停云同步以保护数据。请截图此提示反馈。',
     errUnknown: '同步出现问题，请稍后重试。',
   },
