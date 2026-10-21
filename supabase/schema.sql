@@ -57,9 +57,13 @@ create table if not exists public.assets (
   due_day smallint,
   interest_rate numeric,
   is_default boolean,
+  archived_at text,                    -- 归档时间(ISO)；null = 活跃账户
   created_at bigint not null,
   updated_at timestamptz not null default now()
 );
+
+-- 已有项目补列（幂等）：归档账户功能新增的 archived_at 列
+alter table public.assets add column if not exists archived_at text;
 
 -- ------------------------------------------------------------
 -- category_groups：用户自定义收支大类

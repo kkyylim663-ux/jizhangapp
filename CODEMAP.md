@@ -35,14 +35,15 @@ npx tsc --noEmit        # 本项目无 lint/测试，类型检查是唯一自动
 ## 二、目录地图
 
 ```
-App.tsx                     # 入口：Provider 层级 + 全部导航（Tab + 两个 Stack）
+App.tsx                     # 入口：Provider 层级 + 全部导航（Tab + 两个 Stack）+ 启动时加载 Inter 字体（未就绪先铺主题底色，失败回退系统字体）
 app.json / eas.json         # Expo & EAS 配置
+assets/fonts/               # Inter 4.1 静态字重（Regular/Medium/SemiBold/Bold，OFL）：只给数字与拉丁文本用，中文走系统字体
 src/
 ├─ config/aiConfig.ts       # OpenRouter API 配置（模型名、密钥）
 ├─ constants/uncategorized.ts
 ├─ context/
 │  ├─ AppContext.tsx        # ★ 单一全局 Context：全部业务数据 + AsyncStorage 持久化
-│  ├─ ThemeModeContext.tsx  # 深色模式偏好（跟随系统 + 手动覆盖）
+│  ├─ ThemeModeContext.tsx  # 主题模式：默认「跟随系统」（手机深色/省电模式自动变夜间），可固定日间/夜间；含一次性迁移标记 @jizhang/themeModeV2
 │  └─ TabBarAutoHideContext.tsx  # 滚动时浮空 TabBar 自动收起
 ├─ hooks/
 │  ├─ useAmountExpression.ts    # 金额四则表达式
@@ -56,17 +57,27 @@ src/
 │  ├─ DateRangePickerSheet.tsx
 │  ├─ DonutChart.tsx        # SVG 环形图
 │  ├─ PressableScale.tsx    # 按压缩放反馈
-│  └─ ReceiptCameraModal.tsx    # 拍小票
+│  ├─ HeroMetalSheen.tsx    # Hero 金额笔画内流光 + 卡面扫光（MaskedView + 陀螺仪/自动循环，同一光源、同一 sweepPos）
+│  ├─ ReceiptCameraModal.tsx    # 拍小票
+│  └─ ui/                   # ★ 设计系统组件（统一出口 ui/index.ts）：AppText / MoneyText / Button / Card / ListRow / …
+│     ├─ HeroGradient.tsx   # UI V2.1 页面渐变（165° 主渐变 + 3 光斑 + 可选 26dp 网格）；fill=铺满整页 / height=顶部块 + 淡出到 bg ——HeroGradient
+│     ├─ GlassView.tsx      # UI V2.1 唯一玻璃（半透明 + 1px 亮边 + 顶部内高光；iOS/Web 叠 BlurView，Android 退纯 rgba；web 的 BlurView 会叠 30% 白 → WEB_BLUR_CAP 压到 60）——GlassView
+│     └─ IconCircle.tsx     # UI V2.1 立体光泽球（42 列表 / 48 记一笔格；亮档与基色都按白图标 ≥3:1 压深、顶部高光条不压到图标；selected 两层外圈）——IconCircle
 ├─ screens/                 # 18 个屏幕（见下文导航树）
 ├─ theme/
-│  ├─ theme.ts              # ★ 全部设计令牌：颜色/间距/圆角/字号
-│  └─ useTheme.ts           # 取当前主题色（深色模式联动）
+│  ├─ theme.ts              # ★ 设计令牌：旧颜色层（兼容期保留）+ 语义层（颜色 / typography / spacing / radius / elevation，UI V2 新增 surfaceSunken·keypadPanel·tabBar·tabActive·tabInactive + gradients 品牌渐变 + glass 玻璃 + gradientAxis 角度换算）+ 字体层（Geist 四档 / fontFamilyByWeight / canUseLatinText）
+│  ├─ motion.ts             # 动效令牌：spring 350/400/180 · fade 150 · 数字滚动 600 · 减弱动态效果降级档
+│  ├─ useLayout.ts          # 版型分级：宽 compact/regular/large + 矮屏 short + 平板 560 收窄（页边距/键高/类别列数/Hero 字号/行高）
+│  ├─ useSystemColorScheme.ts  # ★ 实时系统外观：自订阅 Appearance + web matchMedia + 回前台重读（RN 自带 useColorScheme 在 web 上不跟随系统变化，勿用）
+│  └─ useTheme.ts           # 取当前主题：colors + semantic + typography + spacing + layout + radius + elevation + motion + fontFamily（深色模式联动）
 ├─ types/index.ts           # ★ 共享类型，改数据结构先改这里
 └─ utils/
    ├─ amountExpression.ts   # 四则表达式求值
    ├─ creditCard.ts         # 信用卡：可用额度 vs 欠费金额两套算法
    ├─ currencies.ts         # 内置 12 种货币
    ├─ defaultCategories.ts  # 预置 30 支出 + 6 收入分类
+   ├─ formatDate.ts         # ★ 日期格式化唯一入口：今天/昨天/10月7日 周三（英文 Today/Oct 7, Wed）
+   ├─ formatMoney.ts        # ★ 金额格式化唯一入口：千分位 / 真减号 U+2212 / 币种开关 / 紧凑 1.5k / 隐藏 ••••••
    ├─ haptics.ts            # 震动反馈封装
    ├─ notifications.ts      # expo-notifications 封装
    ├─ scanReceipt.ts        # AI 小票识别（OpenRouter 视觉模型）
@@ -125,6 +136,7 @@ push 进的是**当前所在 Stack** 自己的栈，`goBack()` 天然回到正�
 | 金额输入 / 计算器键盘 | `AmountCalculatorKeypad` `AmountEntryPanel` `MoneyInput` | `useAmountExpression` `useMoneyCentsInput` `amountExpression.ts` |
 | 交易类型/转账/手续费逻辑 | `AddTransactionScreen` | `AppContext.tsx`（类型定义+持久化）、`types/index.ts` |
 | 首页卡片 / 预算进度 / 月份切换 | `HomeScreen` | `AppContext.tsx`、`DonutChart`（若涉及图表） |
+| Hero 金额流光 / 卡面扫光 / 陀螺仪倾斜 | `src/components/HeroMetalSheen.tsx` | `HomeScreen`（金额区/卡顶光缝/卡面扫光插入层/三处触发）、`theme.homeAmount*` 与 `theme.homeCardSheen*` |
 | 账单明细分组 | `TransactionListScreen` | `AppContext.tsx` |
 | 资产账户 / 信用卡字段 | `AssetScreen` | `creditCard.ts`（可用额度≠欠费金额）、`AppContext.tsx` |
 | 统计图表 | `ReportScreen` `DonutChart` | `AppContext.tsx`、月份切换逻辑 |
@@ -137,7 +149,7 @@ push 进的是**当前所在 Stack** 自己的栈，`goBack()` 天然回到正�
 | AI 小票扫描 | `scanReceipt.ts` `ReceiptCameraModal` | `aiConfig.ts`、`AddTransactionScreen` 回填表单 |
 | AI 语音记账 | `voiceAccounting.ts` `AIScreen` | `aiConfig.ts` |
 | 计算器合集 | `CalculatorHubScreen` → `LoanCalculatorScreen` / `CompoundInterestScreen` | 双注册问题：目前只挂 HomeStack |
-| TabBar 样式 / 凸起按钮 / 自动收起 | `App.tsx`（`CenterTabButton`、自定义 TabBar） | `TabBarAutoHideContext` `useTabClearance` |
+| TabBar 样式 / 悬浮胶囊 / 中央「+」/ 自动收起 | `App.tsx`（`CenterTabButton` 54 圆内嵌胶囊、`SlidingTabBar`） | `TabBarAutoHideContext` `useTabClearance`（几何常量唯一来源：栏 68 / 距底 18 / 圆 54） |
 | 设置项列表 | `SettingsScreen` | 各子页面（货币/周期/类别/账本） |
 
 ---

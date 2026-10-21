@@ -48,3 +48,7 @@ jizhang-app-backup-pre-*/
 
 # ─── ZCode 工具配置（非 App 本体） ───
 .zcodeignore
+
+# ─── 临时工作目录（本地产物，不入库） ───
+_scratch/
+agent/

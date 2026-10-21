@@ -1,16 +1,37 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {View, Text, StyleSheet, TouchableOpacity, TextInput, Image, ScrollView, Keyboard } from 'react-native';
+import {
+  View,
+  StyleSheet,
+  TextInput,
+  Image,
+  ScrollView,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+} from 'react-native';
+
+/**
+ * 玻璃材质（UI V2.1 §2）在 web 上的偏差修正：expo-blur 的 web 实现用「tint 底色」模拟模糊——
+ * tint default + intensity 100 → 叠一层 rgba(255,255,255,.30) 的白，夜间玻璃被洗成中紫，
+ * 规范里的 text.secondary / income / danger 全部跌破 §4 硬指标（实测 2.7–4.2）。
+ * 这里把 web 强度降到 8（白底 2.4%，模糊 1.6px ≈ 不可见），玻璃回到稿里的 rgba(14,10,30,.46) 实色；
+ * iOS 仍用 GlassView 默认 100（真材质），Android 本来就没有模糊。
+ */
+const WEB_GLASS_INTENSITY = Platform.OS === 'web' ? 8 : undefined;
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../theme/useTheme';
-import { ThemeColors } from '../theme/theme';
+import { useLayout } from '../theme/useLayout';
 import { useT } from '../i18n/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
 import { useDialog } from '../components/AppDialog';
 import PressableScale from '../components/PressableScale';
+import SegmentedControl from '../components/SegmentedControl';
+import { AppText, GlassView, HeroGradient, withAlpha } from '../components/ui';
 
 type Mode = 'signin' | 'signup';
 
@@ -50,6 +71,8 @@ function syncErrorText(code: string | undefined, tr: (k: string) => string): str
       return tr('sync.errConstraint');
     case 'server':
       return tr('sync.errServer');
+    case 'schema':
+      return tr('sync.errSchema');
     case 'local_data_corrupt':
       return tr('sync.errCorrupt');
     case 'not_logged_in':
@@ -66,10 +89,10 @@ function syncErrorText(code: string | undefined, tr: (k: string) => string): str
  * 从设置项的「我的账户」或「账号与同步」进入。
  */
 export default function AuthScreen({ navigation }: any) {
-  const { colors } = useTheme();
+  const { semantic, gradients, isDark } = useTheme();
+  const { pagePadding } = useLayout();
   const tr = useT();
   const dialog = useDialog(); // 主题化弹窗（替代系统 Alert）
-  const styles = useMemo(() => makeStyles(colors), [colors]);
   const { signIn, signUp, signOut, sessionExpired, user, syncStatus, lastSyncAt, syncNow } = useAuth();
   const { transactions, ledgers, activeLedgerId } = useApp();
 
@@ -109,15 +132,18 @@ export default function AuthScreen({ navigation }: any) {
 
   // 头像（base64 存 AsyncStorage）+ 首次使用日期（算"使用天数"）
   useEffect(() => {
+    let mounted = true;
     (async () => {
       try {
         const saved = await AsyncStorage.getItem(AVATAR_STORAGE_KEY);
+        if (!mounted) return;
         if (saved) setAvatarUri(saved);
         let firstUse = await AsyncStorage.getItem(FIRST_USE_STORAGE_KEY);
         if (!firstUse) {
           firstUse = new Date().toISOString().slice(0, 10);
           await AsyncStorage.setItem(FIRST_USE_STORAGE_KEY, firstUse);
         }
+        if (!mounted) return;
         const days = Math.floor((Date.now() - new Date(`${firstUse}T00:00:00`).getTime()) / 86400000) + 1;
         setUseDays(Math.max(days, 1));
         avatarLoadedRef.current = true;
@@ -126,6 +152,9 @@ export default function AuthScreen({ navigation }: any) {
         avatarLoadedRef.current = true;
       }
     })();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   // 点头像 → 相册选一张 → 裁成方形 → base64 持久化
@@ -201,332 +230,339 @@ export default function AuthScreen({ navigation }: any) {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}
+    <SafeAreaView style={[styles.container, { backgroundColor: semantic.bg }]} edges={['top']}
       onTouchStart={() => { Keyboard.dismiss(); }}
     >
-      <View style={styles.header}>
-        {/* 返回键:与设置项/记一笔同款圆框设计(40×40、1.5px link 描边) */}
-        <PressableScale onPress={() => navigation.goBack()} style={styles.backButton} activeScale={0.92}>
-          <Ionicons name="chevron-back" size={22} color={colors.textPrimary} />
+      {/* UI V2.1 §1：渐变铺满整页 */}
+      <HeroGradient fill />
+
+      {/* 玻璃二级页头：稿里这条只有返回圆钮（大标题在页内，未登录视图用稿的 30/600 大标题） */}
+      <View style={styles.headerRow}>
+        <PressableScale
+          onPress={() => navigation.goBack()}
+          activeScale={0.9}
+          accessibilityRole="button"
+          accessibilityLabel={tr('common.back')}
+        >
+          <GlassView intensity={WEB_GLASS_INTENSITY} radius={999} style={styles.headerGlassBtn}>
+            <Ionicons name="chevron-back" size={20} color={semantic.textPrimary} />
+          </GlassView>
         </PressableScale>
-        <Text style={styles.headerTitle}>
-          {user ? tr('addTx.pageMyAccount') : tr('auth.pageTitle')}
-        </Text>
-        <View style={styles.headerPlaceholder} />
       </View>
 
       {user ? (
         // ============ 已登录:个人中心内容 ============
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.profileWrap} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={[styles.profileWrap, { paddingHorizontal: pagePadding }]}
+          showsVerticalScrollIndicator={false}
+        >
           {/* 头像：点击换自己的照片 */}
           <PressableScale
-            style={[styles.avatar, { backgroundColor: colors.avatarBg }]}
+            style={[styles.avatar, { backgroundColor: semantic.accentSoft }]}
             activeScale={0.95}
             onPress={pickAvatar}
+            accessibilityRole="button"
+            accessibilityLabel={tr('addTx.pcPhotoTitle')}
           >
             {avatarUri ? (
               <Image source={{ uri: avatarUri }} style={styles.avatarImage} />
             ) : (
-              <Ionicons name="person-outline" size={42} color={colors.icon} />
+              <Ionicons name="person-outline" size={42} color={semantic.textPrimary} />
             )}
-            <View style={[styles.avatarEditBadge, { backgroundColor: colors.fabBg, borderColor: colors.card }]}>
-              <Ionicons name="camera-outline" size={13} color={colors.fabIcon} />
+            <View style={[styles.avatarEditBadge, { backgroundColor: semantic.accent }]}>
+              <Ionicons name="camera-outline" size={13} color={semantic.onAccent} />
             </View>
           </PressableScale>
-          <Text style={[styles.name, { color: colors.textPrimary }]} numberOfLines={1}>
+          <AppText variant="title3" numberOfLines={1} style={styles.name}>
             {user.email}
-          </Text>
-          <Text style={[styles.sub, { color: colors.textTertiary }]}>Personal Finance</Text>
+          </AppText>
+          <AppText variant="footnote" color={semantic.textSecondary} style={styles.sub}>
+            Personal Finance
+          </AppText>
 
-          <Text style={[styles.section, { color: colors.textTertiary }]}>{tr('addTx.usage')}</Text>
-          <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.dividerHair }]}>
-            <Info label={tr('addTx.bookkeepingDays')} value={tr('addTx.daysUnit', { n: bookkeepingDays })} colors={colors} styles={styles} />
-            <Info label={tr('addTx.usedDays')} value={useDays !== null ? tr('addTx.daysUnit', { n: useDays }) : '--'} colors={colors} styles={styles} />
-            <Info label={tr('addTx.ledgerCount')} value={tr('addTx.countUnit', { n: ledgers.length })} colors={colors} styles={styles} />
-          </View>
+          <AppText variant="footnote" color={semantic.textSecondary} style={styles.section}>
+            {tr('addTx.usage')}
+          </AppText>
+          <GlassView intensity={WEB_GLASS_INTENSITY} radius={26} style={styles.card}>
+            <Info label={tr('addTx.bookkeepingDays')} value={tr('addTx.daysUnit', { n: bookkeepingDays })} muted={semantic.textSecondary} />
+            <Info label={tr('addTx.usedDays')} value={useDays !== null ? tr('addTx.daysUnit', { n: useDays }) : '--'} muted={semantic.textSecondary} />
+            <Info label={tr('addTx.ledgerCount')} value={tr('addTx.countUnit', { n: ledgers.length })} muted={semantic.textSecondary} />
+          </GlassView>
 
-          {/* 云同步:状态与"立即同步"合并成一行——显示状态一句话,点击即触发同步;选择框与退出登录按钮同尺寸 */}
-          <Text style={[styles.section, { color: colors.textTertiary }]}>{tr('auth.title')}</Text>
-          <View style={styles.syncCard}>
+          {/* 云同步:状态与"立即同步"合并成一行——显示状态一句话,点击即触发同步 */}
+          <AppText variant="footnote" color={semantic.textSecondary} style={styles.section}>
+            {tr('auth.title')}
+          </AppText>
+          <GlassView intensity={WEB_GLASS_INTENSITY} radius={26} style={styles.card}>
             <PressableScale
               style={styles.syncNowRow}
               activeScale={0.97}
               onPress={handleSyncNow}
               disabled={syncBusy || syncStatus === 'syncing'}
+              accessibilityRole="button"
+              accessibilityLabel={tr('auth.syncNow')}
             >
-              <Ionicons name="cloud-upload-outline" size={18} color={colors.link} />
+              <Ionicons name="cloud-upload-outline" size={18} color={semantic.textPrimary} />
               <View style={styles.syncNowTextWrap}>
-                <Text style={[styles.infoLabel, { color: colors.textPrimary }]}>
+                <AppText variant="subhead" weight="500">
                   {syncBusy || syncStatus === 'syncing' ? tr('auth.syncing') : tr('auth.syncNow')}
-                </Text>
-                <Text style={{ color: colors.textTertiary, fontSize: 12 }} numberOfLines={1}>
+                </AppText>
+                <AppText variant="caption" color={semantic.textSecondary} numberOfLines={1}>
                   {syncText}
-                </Text>
+                </AppText>
               </View>
-              <Ionicons name="chevron-forward" size={15} color={colors.textTertiary} />
+              <Ionicons name="chevron-forward" size={15} color={semantic.textSecondary} />
             </PressableScale>
-          </View>
+          </GlassView>
 
-          {/* 退出登录:红色紧凑药丸按钮——全宽锚定容器内水平居中(不依赖外层 alignItems),图标+文字居中;点击确认后登出(登出后自动切回登录表单视图) */}
+          {/* 退出登录:红色紧凑药丸按钮（15/700 = 大字档，danger 4.2 达标） */}
           <View style={styles.logoutBtnWrap}>
-            <PressableScale style={styles.logoutBtn} activeScale={0.95} onPress={handleSignOut}>
-              <Ionicons name="log-out-outline" size={18} color={colors.expenseOver} />
-              <Text style={[styles.logoutBtnText, { color: colors.expenseOver }]}>{tr('auth.logout')}</Text>
+            <PressableScale
+              style={styles.logoutBtn}
+              activeScale={0.95}
+              onPress={handleSignOut}
+              accessibilityRole="button"
+              accessibilityLabel={tr('auth.logout')}
+            >
+              <Ionicons name="log-out-outline" size={18} color={semantic.danger} />
+              <AppText variant="subhead" weight="700" color={semantic.danger}>
+                {tr('auth.logout')}
+              </AppText>
             </PressableScale>
           </View>
         </ScrollView>
       ) : (
-        // ============ 未登录:登录/注册表单 ============
-        <View style={{ padding: 20 }}>
-          {/* 14 天未上线被强制登出后的提示横幅 */}
-          {sessionExpired && (
-            <View style={styles.expiredBanner}>
-              <Ionicons name="time-outline" size={18} color={colors.expenseOver} />
-              <Text style={styles.expiredBannerText}>{tr('auth.expiredBanner')}</Text>
+        // ============ 未登录:登录/注册表单（稿 P_Auth：品牌方块 + 大标题 + 分段 + 玻璃表单卡 + 渐变主按钮）============
+        <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <ScrollView
+            contentContainerStyle={{ paddingHorizontal: pagePadding, paddingBottom: 40 }}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {/* 14 天未上线被强制登出后的提示横幅 */}
+            {sessionExpired && (
+              <View style={[styles.expiredBanner, { backgroundColor: withAlpha(semantic.danger, 0.12) }]}>
+                <Ionicons name="time-outline" size={20} color={semantic.danger} />
+                <AppText variant="footnote" style={styles.expiredBannerText}>
+                  {tr('auth.expiredBanner')}
+                </AppText>
+              </View>
+            )}
+
+            {/* 品牌方块（稿：64 圆角方 + accentSoft 底） */}
+            <View style={[styles.brandChip, { backgroundColor: semantic.accentSoft }]}>
+              <Ionicons name="wallet-outline" size={30} color={semantic.textPrimary} />
             </View>
-          )}
+            <AppText variant="title1" weight="600" style={styles.welcome}>
+              {tr('auth.welcomeBack')}
+            </AppText>
+            <AppText variant="subhead" color={semantic.textSecondary} style={styles.subtitle}>
+              {tr('auth.subtitle')}
+            </AppText>
 
-          {/* 登录 / 注册模式切换 */}
-          <View style={styles.modeSwitch}>
-            {(['signin', 'signup'] as Mode[]).map((m) => (
+            {/* 登录 / 注册分段（§2 玻璃分段：夜白胶囊 / 日紫胶囊） */}
+            <View style={styles.modeSwitchWrap}>
+              <SegmentedControl
+                stretch
+                appearance="glass"
+                options={[
+                  { label: tr('auth.modeSignIn'), value: 'signin' },
+                  { label: tr('auth.modeSignUp'), value: 'signup' },
+                ]}
+                selected={mode}
+                onSelect={(v) => setMode(v as Mode)}
+              />
+            </View>
+
+            <GlassView intensity={WEB_GLASS_INTENSITY} radius={26} style={styles.authCard}>
+              <View>
+                <AppText variant="caption" color={semantic.textSecondary} style={styles.fieldLabel}>
+                  {tr('auth.email')}
+                </AppText>
+                <TextInput
+                  style={[styles.authInput, { backgroundColor: semantic.accentSoft, color: semantic.textPrimary }]}
+                  value={email}
+                  onChangeText={setEmail}
+                  placeholder={tr('auth.emailPlaceholder')}
+                  placeholderTextColor={semantic.textSecondary}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </View>
+              <View>
+                <AppText variant="caption" color={semantic.textSecondary} style={styles.fieldLabel}>
+                  {tr('auth.password')}
+                </AppText>
+                <TextInput
+                  style={[styles.authInput, { backgroundColor: semantic.accentSoft, color: semantic.textPrimary }]}
+                  value={password}
+                  onChangeText={setPassword}
+                  placeholder={tr('auth.passwordPlaceholder')}
+                  placeholderTextColor={semantic.textSecondary}
+                  secureTextEntry
+                  autoCapitalize="none"
+                />
+              </View>
+              <AppText variant="caption" color={semantic.textSecondary}>
+                {tr('auth.passwordHint')}
+              </AppText>
+
+              {/* 主按钮 = accent 渐变胶囊（§3：渐变实心按钮保持白字）；17pt 粗体走大字档 3:1 */}
               <PressableScale
-                key={m}
-                style={[styles.modeOption, mode === m && styles.modeOptionActive]}
+                style={[styles.primaryBtn, !canSubmit && styles.primaryBtnDisabled]}
                 activeScale={0.97}
-                onPress={() => setMode(m)}
+                onPress={handleSubmit}
+                disabled={!canSubmit}
+                accessibilityRole="button"
+                accessibilityLabel={busy ? tr('auth.busy') : mode === 'signin' ? tr('auth.signIn') : tr('auth.signUp')}
               >
-                <Text style={[styles.modeText, mode === m && styles.modeTextActive]}>
-                  {m === 'signin' ? tr('auth.modeSignIn') : tr('auth.modeSignUp')}
-                </Text>
+                <LinearGradient
+                  colors={gradients.accent.colors}
+                  locations={gradients.accent.locations as [number, number, ...number[]]}
+                  start={gradients.accent.start}
+                  end={gradients.accent.end}
+                  style={styles.primaryBtnFill}
+                >
+                  <AppText variant="headline" weight="700" color="#FFFFFF" numberOfLines={1}>
+                    {busy ? tr('auth.busy') : mode === 'signin' ? tr('auth.signIn') : tr('auth.signUp')}
+                  </AppText>
+                </LinearGradient>
               </PressableScale>
-            ))}
-          </View>
 
-          <Text style={styles.subtitle}>{tr('auth.subtitle')}</Text>
-
-          <TextInput
-            style={styles.authInput}
-            value={email}
-            onChangeText={setEmail}
-            placeholder={tr('auth.emailPlaceholder')}
-            placeholderTextColor={colors.textTertiary}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          <TextInput
-            style={styles.authInput}
-            value={password}
-            onChangeText={setPassword}
-            placeholder={tr('auth.passwordPlaceholder')}
-            placeholderTextColor={colors.textTertiary}
-            secureTextEntry
-            autoCapitalize="none"
-          />
-
-          <PressableScale
-            style={[styles.primaryBtn, !canSubmit && styles.primaryBtnDisabled]}
-            activeScale={0.97}
-            onPress={handleSubmit}
-            disabled={!canSubmit}
-          >
-            <Text style={styles.primaryBtnText}>
-              {busy ? tr('auth.busy') : mode === 'signin' ? tr('auth.signIn') : tr('auth.signUp')}
-            </Text>
-          </PressableScale>
-
-          <PressableScale
-            style={styles.switchModeBtn}
-            activeScale={0.95}
-            onPress={() => setMode(mode === 'signin' ? 'signup' : 'signin')}
-          >
-            <Text style={styles.switchModeText}>
-              {mode === 'signin' ? tr('auth.switchToSignUp') : tr('auth.switchToSignIn')}
-            </Text>
-          </PressableScale>
-        </View>
+              <PressableScale
+                style={styles.switchModeBtn}
+                activeScale={0.95}
+                onPress={() => setMode(mode === 'signin' ? 'signup' : 'signin')}
+                accessibilityRole="button"
+                accessibilityLabel={mode === 'signin' ? tr('auth.switchToSignUp') : tr('auth.switchToSignIn')}
+              >
+                <AppText variant="footnote" align="center" numberOfLines={2}>
+                  {mode === 'signin' ? tr('auth.switchToSignUp') : tr('auth.switchToSignIn')}
+                </AppText>
+              </PressableScale>
+            </GlassView>
+          </ScrollView>
+        </KeyboardAvoidingView>
       )}
     </SafeAreaView>
   );
 }
 
-function Info({ label, value, colors, styles }: any) {
+function Info({ label, value, muted }: any) {
   return (
     <View style={styles.info}>
-      <Text style={[styles.infoLabel, { color: colors.textPrimary }]}>{label}</Text>
-      <Text style={{ color: colors.textTertiary, fontSize: 14 }}>{value}</Text>
+      <AppText variant="subhead" weight="500">
+        {label}
+      </AppText>
+      <AppText variant="subhead" color={muted}>
+        {value}
+      </AppText>
     </View>
   );
 }
 
-function makeStyles(colors: ThemeColors) {
-  return StyleSheet.create({
-    container: { flex: 1 },
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  flex: { flex: 1 },
 
-    header: {
-      height: 56,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: 20,
-    },
-    backButton: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
-      borderWidth: 1.5,
-      borderColor: colors.link,
-      backgroundColor: colors.card,
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginRight: 8,
-    },
-    headerTitle: {
-      fontSize: 18,
-      fontWeight: '700',
-      color: colors.textPrimary,
-    },
-    headerPlaceholder: {
-      width: 40,
-    },
+  headerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, minHeight: 52 },
+  headerGlassBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
 
-    // ============ 已登录:个人中心 ============
-    profileWrap: {
-      alignItems: 'center',
-      paddingHorizontal: 20,
-      paddingTop: 24,
-      paddingBottom: 40,
-    },
-    avatar: {
-      width: 88,
-      height: 88,
-      borderRadius: 44,
-      alignItems: 'center',
-      justifyContent: 'center',
-      overflow: 'hidden',
-    },
-    avatarImage: { width: 88, height: 88 },
-    avatarEditBadge: {
-      position: 'absolute',
-      right: 0,
-      bottom: 0,
-      width: 26,
-      height: 26,
-      borderRadius: 13,
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderWidth: 2,
-    },
-    name: { fontSize: 20, fontWeight: '700', marginTop: 14, maxWidth: '90%' },
-    sub: { fontSize: 13, marginTop: 5 },
-    section: { width: '100%', fontSize: 12, fontWeight: '600', marginTop: 28, marginBottom: 9 },
-    card: { width: '100%', borderWidth: 1, borderRadius: 16, paddingHorizontal: 16 },
-    info: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    infoLabel: { fontSize: 15, fontWeight: '500' },
-    // 立即同步行:一行合并状态+动作——图标 + 标题/状态 + 箭头,点击即同步
-    // 外框自成一档(minHeight 52、圆角 14、1px 描边、card 底);退出登录为独立紧凑药丸(48高)
-    syncCard: {
-      width: '100%',
-      minHeight: 52,
-      justifyContent: 'center',
-      backgroundColor: colors.card,
-      borderWidth: 1,
-      borderColor: colors.dividerHair,
-      borderRadius: 14,
-      paddingHorizontal: 14,
-      paddingVertical: 10,
-    },
-    syncNowRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 10,
-    },
-    syncNowTextWrap: { flex: 1 },
+  // ============ 已登录:个人中心 ============
+  profileWrap: {
+    alignItems: 'center',
+    paddingTop: 24,
+    paddingBottom: 40,
+  },
+  avatar: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  avatarImage: { width: 88, height: 88 },
+  avatarEditBadge: {
+    position: 'absolute',
+    right: 0,
+    bottom: 0,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  name: { marginTop: 12, maxWidth: '90%' },
+  sub: { marginTop: 2 },
+  section: { alignSelf: 'flex-start', marginTop: 24, marginBottom: 8 },
+  card: { alignSelf: 'stretch', width: '100%', paddingHorizontal: 16 },
+  info: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    gap: 12,
+  },
+  syncNowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+    minHeight: 56,
+  },
+  syncNowTextWrap: { flex: 1, minWidth: 0, gap: 2 },
+  logoutBtnWrap: { alignSelf: 'stretch', alignItems: 'center', marginTop: 24 },
+  logoutBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 999,
+  },
 
-    // 全宽锚定容器:无论外层对齐方式如何,药丸始终严格水平居中
-    logoutBtnWrap: { width: '100%', alignItems: 'center', marginTop: 20 },
-    // 紧凑药丸:宽度由内容决定(弃百分比——Yoga 在收窄父级里解析百分比有歧义),
-    // 左右 padding 对称=图标+文字视觉必然居中
-    logoutBtn: {
-      minHeight: 48,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 6,
-      backgroundColor: colors.card,
-      borderWidth: 1,
-      borderColor: colors.expenseOver + '55',
-      borderRadius: 14,
-      paddingHorizontal: 24,
-      paddingVertical: 10,
-    },
-    logoutBtnText: { fontSize: 15, fontWeight: '700' },
-
-    // ============ 未登录:登录/注册表单 ============
-    // 14 天未登录横幅：暖色底 + 描边
-    expiredBanner: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-      backgroundColor: colors.expenseOver + '14',
-      borderWidth: 1,
-      borderColor: colors.expenseOver + '55',
-      borderRadius: 12,
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      marginBottom: 16,
-    },
-    expiredBannerText: { flex: 1, fontSize: 12, color: colors.expenseOver, lineHeight: 17 },
-
-    // 登录/注册 分段切换
-    modeSwitch: {
-      flexDirection: 'row',
-      backgroundColor: colors.card,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: colors.cardBorder,
-      padding: 4,
-      marginBottom: 14,
-    },
-    modeOption: {
-      flex: 1,
-      paddingVertical: 10,
-      alignItems: 'center',
-      borderRadius: 9,
-      borderWidth: 1.5,
-      borderColor: 'transparent',
-    },
-    modeOptionActive: {
-      backgroundColor: colors.link + '14',
-      borderColor: colors.link,
-    },
-    modeText: { fontSize: 15, fontWeight: '700', color: colors.textTertiary },
-    modeTextActive: { color: colors.link },
-
-    subtitle: { fontSize: 12, color: colors.textTertiary, marginBottom: 14, lineHeight: 17 },
-
-    authInput: {
-      borderWidth: 1,
-      borderColor: colors.dividerHair,
-      borderRadius: 12,
-      paddingHorizontal: 14,
-      paddingVertical: 10,
-      fontSize: 15,
-      color: colors.textPrimary,
-      marginBottom: 10,
-    },
-
-    primaryBtn: {
-      backgroundColor: colors.link,
-      borderRadius: 12,
-      paddingVertical: 12,
-      alignItems: 'center',
-      marginTop: 2,
-    },
-    primaryBtnDisabled: { opacity: 0.45 },
-    primaryBtnText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
-
-    switchModeBtn: { alignItems: 'center', paddingVertical: 12 },
-    switchModeText: { color: colors.link, fontSize: 14, fontWeight: '600' },
-  });
-}
+  // ============ 未登录:登录/注册表单 ============
+  brandChip: {
+    width: 64,
+    height: 64,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 34,
+  },
+  welcome: { marginTop: 18 },
+  subtitle: { marginTop: 6 },
+  modeSwitchWrap: { marginTop: 22 },
+  authCard: { marginTop: 16, padding: 16, gap: 12 },
+  fieldLabel: { marginBottom: 6 },
+  // 胶囊输入框（§2：输入框 radius 999）
+  authInput: {
+    height: 50,
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    fontSize: 15,
+  },
+  primaryBtn: { alignSelf: 'stretch', marginTop: 4 },
+  primaryBtnDisabled: { opacity: 0.5 },
+  primaryBtnFill: {
+    height: 54,
+    borderRadius: 999,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  switchModeBtn: { alignSelf: 'stretch', paddingVertical: 8 },
+  expiredBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 12,
+    borderRadius: 18,
+    marginTop: 12,
+  },
+  expiredBannerText: { flex: 1, minWidth: 0 },
+});

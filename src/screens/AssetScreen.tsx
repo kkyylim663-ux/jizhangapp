@@ -1,39 +1,84 @@
+// AssetScreen.tsx —— 资产页（T19 / 计划 5.4 S1–S5）
+//
+// 本次只改展示与交互（功能冻结：数据、计算、导航入口全部照旧）：
+//   S1 页头大标题（V2.2：顶部净资产汇总卡已删，页面只留币种分组列表）
+//   S2 币种分组：V2.2 定稿 —— 表头（币种胶囊 + 「净资产」+ 合计）在玻璃卡**外**、卡片上方，
+//      卡内只有账户行（立体图标 + 名称 + 类型 + 余额，行间 hairline）
+//   S3 信用卡行主数字显示欠款（−402.29），副行还款日、值下方"可用 X"，行下 2pt 额度使用率细条
+//   S4 账户详情从居中弹窗改 BottomSheet；删除走 danger 色按钮；"设为默认"改 Switch 行
+//   S5 空状态 EmptyState + 添加账户按钮；排序模式显示拖动把手
+//
+// 另外删掉首页式的「minHeight: 视口高 + 130」撑高写法（计划 G4）：内容短时不再滚出大片空白。
+//
+// 信用卡账单口径（computeCreditStatement）与本月流水（computeAssetFlowStats）的计算一字未动，
+// 与 creditCard.ts 的 getAssetDisplayBalance 一样原样复用。
+
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  TextInput,
-  Modal,
   Keyboard,
   PanResponder,
+  PixelRatio,
+  ScrollView,
+  StyleProp,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  ViewStyle,
 } from 'react-native';
 import { BlinkingCursor } from '../components/BlinkingCursor';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Swipeable } from 'react-native-gesture-handler';
 import DraggableFlatList, { ScaleDecorator, RenderItemParams } from 'react-native-draggable-flatlist';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import { useT } from '../i18n/LanguageContext';
 import { useDialog } from '../components/AppDialog';
-import { getGroupLabel } from '../i18n/categories';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useApp } from '../context/AppContext';
 import { ROUTES } from '../navigation/routes';
-import { getCurrencySymbol, getCurrencyFlag } from '../utils/currencies';
 import { getAssetDisplayBalance } from '../utils/creditCard';
+import { formatMoney } from '../utils/formatMoney';
 import { AssetType } from '../types';
 import { useTheme } from '../theme/useTheme';
+import { useLayout } from '../theme/useLayout';
 import { useTabClearance } from '../hooks/useTabClearance';
 import { useTabBarScrollHandler } from '../context/TabBarAutoHideContext';
-import { ThemeColors } from '../theme/theme';
 import { AmountCalculatorKeypad } from '../components/AmountCalculatorKeypad';
 import { useAmountExpression } from '../hooks/useAmountExpression';
 import { hapticWarning } from '../utils/haptics';
 import PressableScale from '../components/PressableScale';
+import { LinearGradient } from 'expo-linear-gradient';
+import type { Layout, Radius, SemanticColors, Spacing, Typography } from '../theme/theme';
+import { gradients } from '../theme/theme';
+import {
+  AppText,
+  BottomSheet,
+  Button,
+  Card,
+  EmptyState,
+  GlassView,
+  HeroGradient,
+  IconCircle,
+  ListRow,
+  MoneyText,
+  StatusBarGlass,
+  Switch,
+} from '../components/ui';
+import { withAlpha } from '../components/ui/color';
+
+/**
+ * 账户类型 → i18n 键（与 AddAssetScreen 的 TYPE_OPTIONS.label 同源，六档齐全：
+ * 投资 / 其他是 AssetType 本来就有的档，老数据里的这类账户列表照常显示）。
+ * 账户行副行用「类型 · 默认」——UI V2 定稿每行都有副行，类型与是否默认都是现有数据。
+ */
+const TYPE_LABEL_KEYS: Record<AssetType, string> = {
+  cash: 'asset.typeCash',
+  bank: 'asset.typeBank',
+  credit: 'asset.typeCredit',
+  ewallet: 'asset.typeEwallet',
+  investment: 'asset.typeInvestment',
+  other: 'asset.typeOther',
+};
 
 type IconName = keyof typeof Ionicons.glyphMap;
 
@@ -46,8 +91,369 @@ const TYPE_OPTIONS: { type: AssetType; label: string; icon: IconName; color: str
 // 用户手动拖拽排出来的账户顺序，按币种分组各自记一份序号，存本地，不动 Asset 数据结构
 const ASSET_ORDER_KEY = '@jizhang/assetOrder';
 
+/** V2.2c 层级：账户名 16/500（令牌 body 17/400 → 覆盖字号 + 提字重）；类型行 13 secondary（footnote） */
+const TITLE_FONT_SIZE = 16;
+
+/** 信用卡额度使用率细条高度（计划 S3：2pt）—— 纯几何常量 */
+/** 额度使用率细条高度（UI V2 定稿：3，与统计页占比细条同规格） */
+const USAGE_BAR_HEIGHT = 3;
+/** 细条的横向品牌渐变（accent 渐变的 start/end 是给方块用的对角；细条要横着走） */
+const USAGE_BAR_GRADIENT = { start: { x: 0, y: 0.5 }, end: { x: 1, y: 0.5 } } as const;
+/** 额度使用率预警点（与预算条同一套语义：≥80% warning、≥100% danger） */
+const USAGE_WARN_PCT = 80;
+const USAGE_FULL_PCT = 100;
+/** 已归档账户行的淡化透明度（仍可读，区别于活跃账户） */
+const ARCHIVED_ROW_OPACITY = 0.7;
+
 function toDateStr(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * 账户图标方块（UI_RULES 第 7 节统一规格：40 方块、radius.md 圆角、账户色 12% 底 + 100% 图标）。
+ * 账户色是资产自带的数据（与类别色同一套用法），不是写死的设计色。
+ */
+/**
+ * 账户行图标（UI V2 第 1 节「形状」：账户图标改圆形）。
+ * 42 圆 + 底色 = 账户色 15%（夜）/ 近白淡底（日）—— 全部由 IconCircle 按主题推导，
+ * 圆色仍取账户自带的数据色（与类别色同一套用法），不是写死的设计色。
+ */
+function AccountIcon({ color, icon }: { color: string; icon: IconName }) {
+  return <IconCircle size={42} color={color} icon={icon} />;
+}
+
+/**
+ * 渐变上的玻璃胶囊按钮（UI V2 稿：资产页右上「+ 添加账户」/ 排序模式「完成」）。
+ * 为什么不用共享 Button：Button 只有 primary / secondary / destructive / ghost 四档，
+ * 都是「实底 / 描边」材质，没有玻璃档；这里要的是 GlassView 材质 + 胶囊，
+ * 所以按 GlassView 的规格页内组合一次（颜色 / 圆角 / 字号全部取令牌，不写死）。
+ * 文字 / 图标 = text.primary（UI V2.1 §3：玻璃上的文字一律主文字色，日间不再有白字压浅色）。
+ * 材质与规格照稿：高 40、左右内衬 14、radius.full、15/500、图标 16、图标与文字间距 6。
+ */
+function GlassPillButton({
+  label,
+  icon,
+  onPress,
+  testID,
+}: {
+  label: string;
+  icon?: IconName;
+  onPress: () => void;
+  testID?: string;
+}) {
+  const { semantic, radius } = useTheme();
+  return (
+    <PressableScale
+      onPress={onPress}
+      activeScale={0.97}
+      hitSlop={0}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      testID={testID}
+    >
+      <GlassView
+        radius={radius.full}
+        style={{
+          height: 40,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 6,
+          paddingHorizontal: 14,
+        }}
+      >
+        {!!icon && <Ionicons name={icon} size={16} color={semantic.textPrimary} />}
+        <AppText variant="subhead" weight="500" color={semantic.textPrimary}>
+          {label}
+        </AppText>
+      </GlassView>
+    </PressableScale>
+  );
+}
+
+/**
+ * 币种小节头（V2.2c：放进玻璃卡**卡内**，一组一个节标题行）——
+ *   左：币种代码小胶囊（accent 软底 + accent 字，如 MYR）；
+ *   右：该币种合计（15/600，text.secondary，**完整两位小数千分位、不带货币符号** ——
+ *       币种只靠左侧胶囊，否则 CNY / JPY 都是 ¥ 分不清）；
+ *   「净资产」字样与每个组各自的实白卡都已删（V2.2c：所有组共用同一张玻璃卡）。
+ * 只有 1 个账户的组不显示合计（合计 = 那一个账户的余额，重复且占宽）。
+ * 为什么不用共享 Chip：稿里币种标记是「实心小胶囊（24 高 / 左右内衬 9 / 12-600）」，
+ * 而 Chip 是描边胶囊 + 44 触控外框，当分组头会把这一行撑高一档。
+ * 收起 / 展开的功能一点没变：胶囊本身就是原来的开关（点它收起该组）；
+ * 收起时胶囊降透明度，读屏照旧报「选中 / 未选中」。
+ */
+function CurrencySectionHeader({
+  code,
+  total,
+  showTotal,
+  collapsed,
+  onToggle,
+  testID,
+}: {
+  code: string;
+  total: number;
+  /** 组内账户数 > 1 才显示合计（V2.2c） */
+  showTotal: boolean;
+  collapsed: boolean;
+  onToggle: () => void;
+  testID?: string;
+}) {
+  const { semantic, spacing, radius, layout } = useTheme();
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        columnGap: spacing.sm,
+        rowGap: spacing.xs,
+        paddingHorizontal: layout.card,
+        paddingTop: spacing.md,
+        paddingBottom: spacing.sm,
+      }}
+    >
+      <PressableScale
+        onPress={onToggle}
+        activeScale={0.96}
+        // 胶囊只有 24 高，外扩到 44 触控（UI_RULES：可点元素 ≥44pt）
+        hitSlop={{ top: 10, bottom: 10, left: 0, right: 0 }}
+        accessibilityRole="button"
+        accessibilityLabel={code}
+        accessibilityState={{ selected: !collapsed }}
+        testID={testID}
+      >
+        {/* 胶囊底：不透明软紫 —— 页面底是渐变，直接用 10% 的 accentSoft 会被渐变拉暗
+            （实测 12pt 紫字只有 3.4:1，§4 要 4.5）；不透明底 + accent 7%（≈ accentSoft 浅一档）
+            落在 4.6:1。底色由「surfaceElevated 实底 + 半透明紫叠层」合成，不手写色值 */}
+        <View
+          style={{
+            height: 24,
+            borderRadius: radius.full,
+            paddingHorizontal: 9,
+            justifyContent: 'center',
+            backgroundColor: semantic.surfaceElevated,
+            overflow: 'hidden',
+            opacity: collapsed ? 0.55 : 1,
+          }}
+        >
+          <View
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, { backgroundColor: withAlpha(semantic.accentText, 0.07) }]}
+          />
+          <AppText variant="caption" weight="600" color={semantic.accentText}>
+            {code}
+          </AppText>
+        </View>
+      </PressableScale>
+      {showTotal && (
+        <MoneyText value={total} variant="subhead" weight="600" color={semantic.textSecondary} />
+      )}
+    </View>
+  );
+}
+
+/**
+ * 账户行（验收退回第 1 条定版）。
+ *
+ * 为什么不用 ListRow：ListRow 的三块排布是「一行 flexWrap + space-between」——
+ * 账户名一长，右侧金额整块会被挤到第二行；而这一行要求的是
+ * 「金额永远留在第一行最右（flexShrink:0）、标题在自己那一栏里最多 2 行、
+ * 副行与额度细条都对齐标题栏（不伸到图标下方）」，ListRow 表达不了，所以在页面内用
+ * 令牌 + 同一套 40 图标方块规格实现（画风与 ListRow 一致：行高 ≥ useLayout().rowMinHeight）。
+ */
+function AssetRow({
+  color,
+  icon,
+  title,
+  subtitle,
+  value,
+  barFraction,
+  barTone,
+  trailing,
+  onPress,
+  onLongPress,
+  style,
+  testID,
+}: {
+  color: string;
+  icon: IconName;
+  title: string;
+  /** 副行（信用卡：可用额度 · 还款日）；放不下时自己换行，不截断不缩略 */
+  subtitle?: string;
+  /** 右侧金额（flexShrink:0，永远留在第一行最右） */
+  value?: React.ReactNode;
+  /** 行下细条（信用卡额度使用率；0–1） */
+  barFraction?: number;
+  /** 细条色调：accent（正常，走品牌渐变）/ warning（≥80%）/ danger（≥100%）—— 告警档沿用原来的语义色 */
+  barTone?: 'accent' | 'warning' | 'danger';
+  /** 行尾自定义内容（排序模式的拖动把手） */
+  trailing?: React.ReactNode;
+  onPress?: () => void;
+  onLongPress?: () => void;
+  style?: StyleProp<ViewStyle>;
+  testID?: string;
+}) {
+  const { semantic, typography, spacing, radius, layout } = useTheme();
+  const { rowMinHeight } = useLayout();
+
+  // 标题是否占到了第二行（实测高度判定，与 ScreenHeader 同一套做法）：
+  // 单行时三块垂直居中（和 ListRow 观感一致）；两行时文字块与金额一律靠上，
+  // 金额因此永远停在第一行最右边，不会被顶到第二行去
+  const [titleLines, setTitleLines] = useState(1);
+  // V2.2c 层级：账户名 16/500（body 令牌 17/400，按稿覆盖字号 + 提半档字重）
+  const singleLineHeight =
+    TITLE_FONT_SIZE *
+    Math.min(PixelRatio.getFontScale(), typography.body.maxFontSizeMultiplier);
+  useEffect(() => {
+    setTitleLines(1);
+  }, [title]);
+  const alignTop = titleLines > 1;
+
+  return (
+    <PressableScale
+      onPress={onPress}
+      onLongPress={onLongPress}
+      activeScale={0.98}
+      hitSlop={0}
+      style={[
+        {
+          minHeight: rowMinHeight,
+          paddingHorizontal: layout.card,
+          paddingVertical: spacing.md,
+          justifyContent: 'center',
+        },
+        style,
+      ]}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      testID={testID}
+    >
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: alignTop ? 'flex-start' : 'center',
+          columnGap: spacing.md,
+        }}
+      >
+        <View style={{ alignSelf: 'center' }}>
+          <AccountIcon color={color} icon={icon} />
+        </View>
+        <View style={{ flexGrow: 1, flexShrink: 1 }}>
+          <AppText
+            variant="body"
+            weight="500"
+            style={{ fontSize: TITLE_FONT_SIZE }}
+            numberOfLines={2}
+            onLayout={(e) =>
+              setTitleLines(Math.max(1, Math.round(e.nativeEvent.layout.height / singleLineHeight)))
+            }
+          >
+            {title}
+          </AppText>
+          {!!subtitle && (
+            <AppText variant="footnote" color={semantic.textSecondary} style={{ marginTop: spacing.xs }}>
+              {subtitle}
+            </AppText>
+          )}
+          {barFraction != null && (
+            <View
+              style={{
+                marginTop: spacing.sm,
+                height: USAGE_BAR_HEIGHT,
+                borderRadius: radius.full,
+                backgroundColor: semantic.hairline,
+                overflow: 'hidden',
+              }}
+            >
+              {barTone === 'accent' ? (
+                // 正常档（UI V2 稿）：品牌横向渐变；超 80% / 100% 仍退回语义告警色
+                <LinearGradient
+                  colors={gradients.accent.colors}
+                  locations={gradients.accent.locations as [number, number, ...number[]]}
+                  start={USAGE_BAR_GRADIENT.start}
+                  end={USAGE_BAR_GRADIENT.end}
+                  style={{
+                    width: `${Math.min(Math.max(barFraction, 0), 1) * 100}%`,
+                    height: USAGE_BAR_HEIGHT,
+                    borderRadius: radius.full,
+                  }}
+                />
+              ) : (
+                <View
+                  style={{
+                    width: `${Math.min(Math.max(barFraction, 0), 1) * 100}%`,
+                    height: USAGE_BAR_HEIGHT,
+                    borderRadius: radius.full,
+                    backgroundColor:
+                      barTone === 'danger' ? semantic.danger : semantic.warning,
+                  }}
+                />
+              )}
+            </View>
+          )}
+        </View>
+        {value != null && (
+          <View style={{ flexShrink: 0, marginLeft: spacing.sm, alignSelf: alignTop ? 'flex-start' : 'center' }}>
+            {value}
+          </View>
+        )}
+        {trailing}
+      </View>
+    </PressableScale>
+  );
+}
+
+/**
+ * 详情抽屉里的只读信息行（V2.2c B3）。
+ * 为什么不用共享 ListRow：ListRow 的标题是 headline 17/600，而抽屉里的信息行按稿是
+ * 「标签 15 常规 text.secondary / 值 15-600 text.primary」—— 字号窄一档、字重按语义分档；
+ * 几何仍与 ListRow 一致（最小行高 rowMinHeight、行间 hairline、值列永不被挤压）。
+ */
+function SheetInfoRow({
+  label,
+  value,
+  caption,
+  separator,
+  testID,
+}: {
+  label: string;
+  value: React.ReactNode;
+  /** 值下方小字（如「（3 笔）」） */
+  caption?: string;
+  /** 行底发丝线 */
+  separator?: boolean;
+  testID?: string;
+}) {
+  const { semantic, spacing } = useTheme();
+  const { rowMinHeight } = useLayout();
+  return (
+    <View
+      style={{
+        minHeight: rowMinHeight,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        columnGap: spacing.md,
+        paddingVertical: spacing.sm,
+        borderBottomWidth: separator ? StyleSheet.hairlineWidth : 0,
+        borderBottomColor: semantic.hairline,
+      }}
+      testID={testID}
+    >
+      <AppText variant="subhead" color={semantic.textSecondary} style={{ flexShrink: 1 }}>
+        {label}
+      </AppText>
+      <View style={{ flexShrink: 0, alignItems: 'flex-end' }}>
+        {value}
+        {!!caption && (
+          <AppText variant="caption" color={semantic.textTertiary} style={{ marginTop: 2 }}>
+            {caption}
+          </AppText>
+        )}
+      </View>
+    </View>
+  );
 }
 
 interface CreditStatement {
@@ -87,7 +493,6 @@ function computeCreditStatement(
 
   return { currentCycleSpend, lastStatementAmount, isOverdue, overdueDays, estimatedInterest, available };
 }
-
 
 interface AssetFlowStats {
   inflowAmount: number; // 本月流入：收入 + 转入
@@ -138,42 +543,60 @@ function computeAssetFlowStats(
 }
 
 export default function AssetScreen() {
-  const { assets, transactions, getAssetBalance, deleteAsset, setDefaultAsset, updateAsset } = useApp();
+  const {
+    assets,
+    activeAssets,
+    transactions,
+    getAssetBalance,
+    deleteAsset,
+    archiveAsset,
+    unarchiveAsset,
+    assetRecordCount,
+    setDefaultAsset,
+    updateAsset,
+  } = useApp();
+  // 已归档账户（底部可折叠分组，默认收起）
+  const archivedAssets = useMemo(() => assets.filter((a) => !!a.archivedAt), [assets]);
+  const [archivedOpen, setArchivedOpen] = useState(false);
   type AssetItem = (typeof assets)[number];
-  const { colors } = useTheme();
+  const { semantic, typography, spacing, radius, layout } = useTheme();
+  const { pagePadding, contentMaxWidth } = useLayout();
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const tabClearance = useTabClearance();
   const onTabScroll = useTabBarScrollHandler();
-  // 内容不满一屏时也要能上滑收起 Tab 栏：内容 minHeight 撑到容器高 + 130
-  const [viewportH, setViewportH] = useState(0);
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const styles = useMemo(
+    () => makeStyles(semantic, typography, spacing, radius, layout),
+    [semantic, typography, spacing, radius, layout]
+  );
   const t = useT();
   const dialog = useDialog(); // 主题化弹窗（替代系统 Alert）
 
   // ---------- "我的账户"：编辑排列模式 / 币种分组折叠 / 自定义拖拽顺序 ----------
-  // reorderMode：长按账户卡进入，此时强制展开全部分组改成可拖拽的卡片，右上"完成"退出
-  // expandedCurrencies：浏览模式下展开的币种分组（收起时只显示该币种的合并总额）
+  // reorderMode：长按账户行进入，此时强制展开全部分组改成可拖拽的行，右上"完成"退出
+  // collapsedCurrencies：浏览模式下收起（默认全展开，点币种 Chip 收起该组）
   // assetOrder：拖拽产生的顺序，只在同一币种分组内比较，不需要跨分组唯一，存本地不动账户数据结构
   const [reorderMode, setReorderMode] = useState(false);
-  const [expandedCurrencies, setExpandedCurrencies] = useState<string[]>([]);
+  const [collapsedCurrencies, setCollapsedCurrencies] = useState<string[]>([]);
   const [assetOrder, setAssetOrder] = useState<Record<string, number>>({});
   const toggleCurrencyGroup = (code: string) => {
-    setExpandedCurrencies((prev) =>
-      prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]
-    );
+    setCollapsedCurrencies((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
   };
 
   // 启动时恢复上次保存的拖拽排序
   useEffect(() => {
+    let mounted = true;
     (async () => {
       try {
         const raw = await AsyncStorage.getItem(ASSET_ORDER_KEY);
-        if (raw) setAssetOrder(JSON.parse(raw));
+        if (mounted && raw) setAssetOrder(JSON.parse(raw));
       } catch (e) {
         console.warn('读取账户排序失败', e);
       }
     })();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const persistAssetOrder = (next: Record<string, number>) => {
@@ -191,17 +614,26 @@ export default function AssetScreen() {
     persistAssetOrder(next);
   };
 
-  // ---------- 负债汇总：只统计信用卡欠款 ----------
-  const liabilitiesByCurrency = useMemo(() => {
-    const totals: Record<string, number> = {};
-    assets
-      .filter((a) => a.type === 'credit')
-      .forEach((a) => {
-        const owed = Math.max(0, -getAssetBalance(a.id));
-        if (owed > 0) totals[a.currency] = (totals[a.currency] || 0) + owed;
-      });
-    return Object.entries(totals);
-  }, [assets, getAssetBalance]);
+  // V2.2：顶部净资产汇总卡已删（各币种资产 / 负债汇总随之退役），页面只保留下面的币种分组列表
+
+  // 有记录的账户不删除：归档（隐藏、不计净资产，历史保持不变，可随时恢复）
+  const handleArchive = (id: string, assetName: string) => {
+    const count = assetRecordCount(id);
+    dialog.alert({
+      title: t('asset.archiveTitle', { name: assetName }),
+      message: t('asset.archiveMsg', { count }),
+      buttons: [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('asset.archive'),
+          onPress: () => {
+            closeDetail();
+            archiveAsset(id);
+          },
+        },
+      ],
+    });
+  };
 
   const handleDelete = (id: string, assetName: string) => {
     dialog.alert({
@@ -209,16 +641,23 @@ export default function AssetScreen() {
       message: t('asset.deleteAssetMsg'),
       buttons: [
         { text: t('common.cancel'), style: 'cancel' },
-        { text: t('common.delete'), style: 'destructive', onPress: () => { hapticWarning(); deleteAsset(id); } },
+        // 删除后账户已不存在：连带关闭详情抽屉，避免留下空壳抽屉（删除入口在抽屉内）
+        { text: t('common.delete'), style: 'destructive', onPress: () => { closeDetail(); hapticWarning(); deleteAsset(id); } },
       ],
     });
   };
 
   // ---------- 点击账户查看详情：信用卡看账单周期，银行卡/现金看本月收支流水 ----------
-  // 弹窗打开即可直接改：名称是输入框、点金额数字调起计算器键盘，一个"保存"统一提交（无单独编辑模式）
+  // 抽屉打开即可直接改：名称是输入框、点金额数字调起计算器键盘，一个"保存"统一提交（无单独编辑模式）
   const [viewingAssetId, setViewingAssetId] = useState<string | null>(null);
   const [viewSetDefault, setViewSetDefault] = useState(false);
   const viewingAsset = assets.find((a) => a.id === viewingAssetId);
+  // 抽屉出场动画播放期间父级已把 viewingAssetId 置空：留住最后一份数据，动画不会闪成空壳
+  const lastViewingRef = useRef<AssetItem | undefined>(undefined);
+  if (viewingAsset) lastViewingRef.current = viewingAsset;
+  const sheetAsset = viewingAsset ?? lastViewingRef.current;
+  // 同一次编辑会话（"放弃修改"对话框点取消后抽屉弹回）不重新预填，用户已输入的内容不丢
+  const prefilledIdRef = useRef<string | null>(null);
 
   const [viewName, setViewName] = useState('');
   const [viewBalanceStr, setViewBalanceStr] = useState('');
@@ -237,27 +676,30 @@ export default function AssetScreen() {
     });
   };
   const amountCursorDragRef = useRef(false);
-  // 系统键盘高度（名称输入框弹出的那块）：用于和自绘计算器键盘统一"上拉"高度
-  const [sysKbH, setSysKbH] = useState(0);
-  const [viewKeypadH, setViewKeypadH] = useState(0);
+  // 抽屉内名称框的键盘避让：键盘弹出时垫高滚动区底部（spacer），并把名称框滚到顶部附近
+  const [sheetKbHeight, setSheetKbHeight] = useState(0);
+  const sheetScrollRef = useRef<ScrollView>(null);
+  const nameBlockYRef = useRef(0);
+  const nameFocusedRef = useRef(false);
   useEffect(() => {
     const show = Keyboard.addListener('keyboardDidShow', (e) => {
-      setSysKbH(e.endCoordinates.height);
       // 系统键盘（名称输入）弹出 → 自绘键盘收起（两套键盘互斥协调）
       setViewKeypadOpen(false);
+      setSheetKbHeight(e.endCoordinates.height);
+      if (nameFocusedRef.current) {
+        sheetScrollRef.current?.scrollTo({ y: Math.max(0, nameBlockYRef.current - 16), animated: true });
+      }
     });
     const hide = Keyboard.addListener('keyboardDidHide', () => {
-      setSysKbH(0);
       // 系统键盘收起 → 自绘键盘显示回来（含 Android 返回键收起键盘的情况）
       setViewKeypadOpen(true);
+      setSheetKbHeight(0);
     });
     return () => {
       show.remove();
       hide.remove();
     };
   }, []);
-  // 任一键盘（系统键盘 / 自绘计算器键盘）弹出即视为"编辑中"：弹窗统一切换到顶部对齐
-  const viewKeyboardUp = viewKeypadOpen || sysKbH > 0;
   const viewDisplayRef = useRef('');
   viewDisplayRef.current = viewKeypadOpen ? balanceExpr.displayValue : '';
   // 光标在显示串里的下标（渲染切片用）
@@ -300,26 +742,30 @@ export default function AssetScreen() {
       },
     })
   ).current;
+  // PressableScale 的 onPress 类型不带事件参数，运行时事件照常透传（两个处理函数要 pageX 定位光标）
   const amountBoxPressProps = {
-    onPress: handleAmountBoxPress,
-    onLongPress: handleAmountBoxLongPress,
+    onPress: handleAmountBoxPress as unknown as () => void,
+    onLongPress: handleAmountBoxLongPress as unknown as () => void,
     delayLongPress: 300,
   };
 
   useEffect(() => {
-    if (viewingAssetId) {
-      const asset = assets.find((a) => a.id === viewingAssetId);
-      if (asset) {
-        setViewSetDefault(!!asset.isDefault);
-        setViewName(asset.name);
-        // 金额字段预填当前值：非信用卡是当前余额（输入"想让当前余额变成的数"），信用卡是信用额度
-        setViewBalanceStr(
-          String(asset.type === 'credit' ? asset.creditLimit ?? 0 : getAssetBalance(asset.id)),
-        );
-      }
+    if (!viewingAssetId) return;
+    // 同一次编辑会话：不重新预填（"放弃修改"对话框点取消后抽屉弹回时保留已输入内容）
+    if (prefilledIdRef.current === viewingAssetId) return;
+    const asset = assets.find((a) => a.id === viewingAssetId);
+    if (asset) {
+      prefilledIdRef.current = viewingAssetId;
+      setViewSetDefault(!!asset.isDefault);
+      setViewName(asset.name);
+      // 金额字段预填当前值：非信用卡是当前余额（输入"想让当前余额变成的数"），信用卡是信用额度
+      setViewBalanceStr(
+        String(asset.type === 'credit' ? asset.creditLimit ?? 0 : getAssetBalance(asset.id)),
+      );
     }
     setViewKeypadOpen(false);
-  }, [viewingAssetId, assets]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewingAssetId]);
 
   const openViewKeypad = () => {
     // 名称框的系统键盘/光标退场：一次只允许一个光标显示（点余额/额度 = 切换输入焦点）
@@ -347,19 +793,36 @@ export default function AssetScreen() {
           ? viewingAsset.creditLimit ?? 0
           : getAssetBalance(viewingAsset.id)));
 
-  // 关弹窗：有未保存修改先确认放弃，防误触
-  const tryCloseModal = () => {
+  /** 真正关掉详情抽屉（清掉预填标记，下次打开同一账户重新读数据） */
+  const closeDetail = () => {
+    prefilledIdRef.current = null;
+    setViewingAssetId(null);
+  };
+
+  // 关抽屉：有未保存修改先确认放弃，防误触。
+  // ⚠ BottomSheet 收到 onClose 时已经播完出场动画把自己卸载了，所以这里只能"拦"在数据层：
+  //   点取消 = 重新打开同一账户（预填标记还在，已输入内容原样保留），点放弃 = 真正关闭。
+  const tryCloseDetail = () => {
     if (viewEditDirty) {
+      const id = viewingAssetId;
       dialog.alert({
         title: t('asset.discardEditTitle'),
         buttons: [
-          { text: t('common.cancel'), style: 'cancel' },
-          { text: t('common.discard'), style: 'destructive', onPress: () => setViewingAssetId(null) },
+          {
+            text: t('common.cancel'),
+            style: 'cancel',
+            onPress: () => {
+              // 先置空再置回：visible 变化才会触发 BottomSheet 重新挂载并播入场动画
+              setViewingAssetId(null);
+              setTimeout(() => setViewingAssetId(id), 0);
+            },
+          },
+          { text: t('common.discard'), style: 'destructive', onPress: closeDetail },
         ],
       });
       return;
     }
-    setViewingAssetId(null);
+    closeDetail();
   };
 
   const saveViewChanges = async (overrideBalance?: number) => {
@@ -381,11 +844,11 @@ export default function AssetScreen() {
       const delta = getAssetBalance(viewingAsset.id) - viewingAsset.initialBalance;
       await updateAsset(viewingAsset.id, { name: viewName.trim(), initialBalance: typed - delta });
     }
-    // 默认账户勾选随本次保存一并生效；保存后关闭弹窗（列表已是最新数据）
+    // 默认账户勾选随本次保存一并生效；保存后关闭抽屉（列表已是最新数据）
     if (viewSetDefault !== !!viewingAsset.isDefault) {
       await setDefaultAsset(viewSetDefault ? viewingAsset.id : null);
     }
-    setViewingAssetId(null);
+    closeDetail();
   };
 
   const viewingCreditAsset = viewingAsset?.type === 'credit' ? viewingAsset : undefined;
@@ -405,6 +868,18 @@ export default function AssetScreen() {
     );
   }, [viewingCreditAsset, transactions, getAssetBalance]);
 
+  // V2.2c B1：还款日 / 账单日一行（账单日只在数据已有 statementDay 时出现，不新增字段；
+  // 两个都没有 → 整行不渲染）
+  const creditDayLine = useMemo(() => {
+    if (!sheetAsset || sheetAsset.type !== 'credit') return '';
+    return [
+      sheetAsset.dueDay ? t('asset.creditDueDay', { day: sheetAsset.dueDay }) : null,
+      sheetAsset.statementDay ? t('asset.creditStatementDay', { day: sheetAsset.statementDay }) : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  }, [sheetAsset, t]);
+
   // 银行卡/现金类：本月流入流出（含转账）金额与笔数
   const viewingFlowStats = useMemo(() => {
     if (!viewingAsset || viewingAsset.type === 'credit') return null;
@@ -412,13 +887,6 @@ export default function AssetScreen() {
     const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
     return computeAssetFlowStats(viewingAsset.id, monthStart, transactions);
   }, [viewingAsset, transactions]);
-
-  const renderDeleteAction = (id: string, assetName: string) => (
-    <TouchableOpacity style={styles.swipeDeleteBtn} onPress={() => handleDelete(id, assetName)}>
-      <Ionicons name="trash-outline" size={18} color={colors.fabIcon} />
-      <Text style={styles.swipeDeleteText}>{t('common.delete')}</Text>
-    </TouchableOpacity>
-  );
 
   // ---------- 先按货币分大组，组内再按类型顺序（现金 / 银行卡 / 信用卡）排列 ----------
   const typeOrder = useMemo(() => {
@@ -430,8 +898,8 @@ export default function AssetScreen() {
   }, []);
 
   const groupedAssets = useMemo(() => {
-    const byCurrency: Record<string, typeof assets> = {};
-    assets.forEach((a) => {
+    const byCurrency: Record<string, typeof activeAssets> = {};
+    activeAssets.forEach((a) => {
       if (!byCurrency[a.currency]) byCurrency[a.currency] = [];
       byCurrency[a.currency].push(a);
     });
@@ -451,551 +919,624 @@ export default function AssetScreen() {
           return (typeOrder[a.type] ?? 99) - (typeOrder[b.type] ?? 99);
         }),
       }));
-  }, [assets, typeOrder, assetOrder]);
+  }, [activeAssets, typeOrder, assetOrder]);
 
-  // 排序模式下强制展示全部分组（拖拽需要看到全部账户），浏览模式直接用分组折叠
+  /** 浏览模式的一行：图标方块 + 名称 + 余额；信用卡换成"欠款 + 可用 / 还款日 + 使用率细条" */
+  const renderAssetRow = (a: AssetItem) => {
+    const balance = getAssetBalance(a.id);
+    const isCredit = a.type === 'credit';
+    const limit = a.creditLimit ?? 0;
+    const owed = isCredit ? Math.max(0, -balance) : 0;
+    const available = getAssetDisplayBalance(a, balance);
+    const usedPct = isCredit && limit > 0 ? Math.min(USAGE_FULL_PCT, (owed / limit) * 100) : 0;
+    // 告警分档原封不动（≥100% danger / ≥80% warning / 其余 accent 渐变）
+    const barTone: 'accent' | 'warning' | 'danger' =
+      usedPct >= USAGE_FULL_PCT ? 'danger' : usedPct >= USAGE_WARN_PCT ? 'warning' : 'accent';
+    // 信用卡副行：可用额度 + 还款日（分组头已标币种）。放不下时副行自己换行，
+    // 不挤金额、也不出省略号（UI_RULES 第 6 节 ③）。
+    const creditSubtitle = isCredit
+      ? [
+          `${t('asset.creditAvailableShort')} ${formatMoney(available)}`,
+          a.dueDay ? t('asset.creditDueDay', { day: a.dueDay }) : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : undefined;
+    // 其余账户的副行：账户类型（+ 默认标记），UI V2 定稿每行都有副行
+    const accountSubtitle = [
+      t(TYPE_LABEL_KEYS[a.type] ?? 'asset.typeOther'),
+      a.isDefault ? t('asset.defaultTag') : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+
+    return (
+      <AssetRow
+        key={a.id}
+        color={a.color}
+        icon={a.icon as IconName}
+        title={a.name}
+        subtitle={isCredit ? creditSubtitle : accountSubtitle}
+        // 信用卡：主数字是欠款（分组头已标币种）；其余账户就是余额。
+        // V2.2c：行余额 17/600（text.primary + tabular，AppText 统一给等宽数字）
+        value={<MoneyText value={isCredit ? -owed : balance} variant="body" weight="600" />}
+        barFraction={isCredit && limit > 0 ? usedPct / 100 : undefined}
+        barTone={barTone}
+        onPress={() => setViewingAssetId(a.id)}
+        onLongPress={() => setReorderMode(true)}
+        testID={`asset-row-${a.id}`}
+      />
+    );
+  };
+
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={{ flex: 1 }} onLayout={(e) => setViewportH(e.nativeEvent.layout.height)}>
-      <ScrollView onScroll={onTabScroll ?? undefined} scrollEventThrottle={16} contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: tabClearance, minHeight: viewportH ? viewportH + 130 : undefined }}>
-        {liabilitiesByCurrency.length > 0 && (
-          <View style={styles.liabilityCard}>
-            <Text style={styles.liabilityLabel}>{t('asset.liabilityLabel')}</Text>
-            {liabilitiesByCurrency.map(([code, value]) => (
-              <Text key={code} style={styles.liabilityValue}>
-                {value.toFixed(2)} <Text style={styles.liabilityCode}>{code}</Text>
-              </Text>
-            ))}
+    // 全出血（同首页）：SafeAreaView 不让位，渐变一路通到屏幕顶；内容自己用 insets.top 让开状态栏
+    <SafeAreaView style={styles.container} edges={[]}>
+      {/* UI V2.1 §1：品牌渐变铺满整页（fill），卡片 / 列表直接浮在渐变上 */}
+      <HeroGradient fill />
+      <ScrollView
+        onScroll={onTabScroll ?? undefined}
+        scrollEventThrottle={16}
+        style={
+          contentMaxWidth ? { maxWidth: contentMaxWidth, width: '100%', alignSelf: 'center' } : undefined
+        }
+        contentContainerStyle={{ paddingBottom: tabClearance }}
+      >
+        {/* 页头（G5）：大标题 30/600（text.primary，§3：渐变上不再用白字）+ 右侧玻璃胶囊动作；
+            排序模式换成「完成」（长按账户行进入）。空状态时页头不放按钮，动作只留空状态卡里那一个 */}
+        <View style={{ paddingHorizontal: pagePadding, paddingTop: insets.top + 14 }}>
+          <View style={styles.headerRow}>
+            <AppText
+              variant="title1"
+              weight="600"
+              color={semantic.textPrimary}
+              style={styles.heroTitle}
+              testID="asset-header"
+            >
+              {t('asset.title')}
+            </AppText>
+            {assets.length > 0 &&
+              (reorderMode ? (
+                <GlassPillButton
+                  label={t('common.done')}
+                  onPress={() => setReorderMode(false)}
+                  testID="asset-reorder-done"
+                />
+              ) : (
+                <GlassPillButton
+                  label={t('asset.addAccount')}
+                  icon="add"
+                  onPress={() => navigation.navigate(ROUTES.ADD_ASSET)}
+                  testID="asset-add-button"
+                />
+              ))}
           </View>
-        )}
-
-        {/* 标题带上账户总数；右侧常驻"添加账户"，排序模式时换成"完成"退出（排序靠长按账户卡拖动） */}
-        <View style={styles.sectionTitleRow}>
-          <Text style={styles.title}>
-            {t('asset.myAccounts')}{assets.length > 0 ? t('asset.accountsCount', { count: assets.length }) : ''}
-          </Text>
-          {reorderMode ? (
-            <PressableScale
-              style={styles.headerDoneBtn}
-              activeScale={0.92}
-              onPress={() => setReorderMode(false)}
-            >
-              <Text style={styles.headerDoneBtnText}>{t('common.done')}</Text>
-            </PressableScale>
-          ) : (
-            <PressableScale
-              style={styles.headerAddBtn}
-              activeScale={0.92}
-              onPress={() => navigation.navigate(ROUTES.ADD_ASSET)}
-            >
-              <Ionicons name="add" size={16} color={colors.bg} />
-              <Text style={styles.headerAddBtnText}>{t('asset.addAccount')}</Text>
-            </PressableScale>
-          )}
         </View>
 
         {assets.length === 0 ? (
-          <View style={styles.assetList}>
-            <Text style={styles.emptyText}>{t('asset.emptyAssets')}</Text>
+          /* S5 空状态：图标 + 一句话 + 一个按钮 */
+          <View style={{ paddingHorizontal: pagePadding, marginTop: spacing.xl }}>
+            <Card>
+              <EmptyState
+                icon="wallet-outline"
+                title={t('asset.emptyTitle')}
+                description={t('asset.emptyHint')}
+                actionLabel={t('asset.addAccount')}
+                onAction={() => navigation.navigate(ROUTES.ADD_ASSET)}
+                testID="asset-empty"
+              />
+            </Card>
           </View>
         ) : reorderMode ? (
-          // ---------- 编辑排列模式：每个币种分组各自一个可拖拽列表，长按拖动排序 ----------
-          groupedAssets.map((group) => (
-            <View key={group.code} style={{ marginBottom: 16 }}>
-              <Text style={styles.groupTitle}>{group.code}</Text>
-              <DraggableFlatList
-                data={group.items}
-                scrollEnabled={false}
-                keyExtractor={(item) => item.id}
-                onDragEnd={({ data }) => handleGroupReorder(data)}
-                renderItem={({ item: a, drag, isActive }: RenderItemParams<AssetItem>) => (
-                  <ScaleDecorator>
-                    <TouchableOpacity
-                      style={[styles.assetCardBig, isActive && { opacity: 0.85 }]}
-                      activeOpacity={0.8}
-                      onLongPress={drag}
-                      delayLongPress={150}
-                    >
-                      <View style={styles.assetCardTopRow}>
-                        <View style={[styles.assetIconWrap, { backgroundColor: '#FFFFFF' }]}>
-                          <Ionicons name={a.icon as IconName} size={22} color={a.color} />
-                        </View>
-                        <Text style={[styles.assetName, { flex: 1, marginLeft: 12 }]}>{a.name}</Text>
-                        <Ionicons name="reorder-three-outline" size={22} color={colors.textTertiary} />
-                      </View>
-                    </TouchableOpacity>
-                  </ScaleDecorator>
-                )}
-              />
-            </View>
-          ))
-        ) : (
-          // ---------- 正常浏览模式：按币种分组折叠——收起时每张卡显示该币种的合并总额，
-          // 点击展开看组内各个账户（账户讯息在分组内合并成一张总额卡） ----------
-          groupedAssets.map((group) => {
-            const isExpanded = expandedCurrencies.includes(group.code);
-            // 同一币种下所有账户的余额合并成组的总额（信用卡按负数计入，欠款另在负债卡汇总）
-            const groupTotal = group.items.reduce((sum, a) => sum + getAssetBalance(a.id), 0);
-            return (
-              <View key={group.code} style={styles.currencyGroupShadow}>
-                {/* 货币分组卡：与首页资产总览大卡同款渐变/描边/圆角，日夜间各有一组 token 自动切换 */}
-                <LinearGradient
-                  colors={[colors.netWorthGradientFrom, colors.netWorthGradientTo]}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={styles.currencyGroupCard}
-                >
-                <PressableScale
-                  style={styles.currencyGroupHeader}
-                  activeScale={0.98}
-                  onPress={() => toggleCurrencyGroup(group.code)}
-                >
-                  <View style={styles.currencyFlagBadge}>
-                    {(() => {
-                      const flag = getCurrencyFlag(group.code);
-                      return (
-                        <Text style={flag ? styles.currencyFlagEmoji : styles.currencyFlagText}>
-                          {flag ?? getCurrencySymbol(group.code)}
-                        </Text>
-                      );
-                    })()}
-                  </View>
-                  <Text style={styles.currencyGroupCode}>{group.code}</Text>
-                  <Text style={styles.currencyGroupTotal}>{groupTotal.toFixed(2)}</Text>
-                  <Ionicons
-                    name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                    size={16}
-                    color={colors.netWorthAccent}
-                    style={{ marginLeft: 6 }}
+          // ---------- 编辑排列模式：所有币种组共一张玻璃卡，组内各是一个可拖拽列表 ----------
+          <View style={[styles.groupsCardWrap, { paddingHorizontal: pagePadding }]}>
+            <GlassView radius={26} style={styles.groupsCard}>
+              {groupedAssets.map((group, groupIndex) => (
+                <View key={group.code}>
+                  {groupIndex > 0 && <View style={styles.groupDivider} />}
+                  {/* 排序模式不收起，但合计照旧（组内 > 1 个账户才显示） */}
+                  <CurrencySectionHeader
+                    code={group.code}
+                    total={group.items.reduce((sum, a) => sum + getAssetBalance(a.id), 0)}
+                    showTotal={group.items.length > 1}
+                    collapsed={false}
+                    onToggle={() => undefined}
                   />
-                </PressableScale>
-                {isExpanded && (
-                  <View style={styles.currencyGroupBody}>
-                    {group.items.map((a) => {
-                      return (
-                        <Swipeable
-                          key={a.id}
-                          overshootRight={false}
-                          renderRightActions={() => renderDeleteAction(a.id, a.name)}
-                        >
-                          <PressableScale
-                            style={styles.assetRowOnGradient}
-                            activeScale={0.97}
-                            onPress={() => setViewingAssetId(a.id)}
-                            onLongPress={() => setReorderMode(true)}
-                          >
-                            {/* 卡片只保留三样东西：图标、账户名、金额；点击进详情，长按进排序 */}
-                            <View style={styles.assetCardTopRow}>
-                              <View style={[styles.assetIconWrap, { backgroundColor: '#FFFFFF' }]}>
-                                <Ionicons name={a.icon as IconName} size={22} color={a.color} />
-                              </View>
-                              <View style={{ flex: 1, marginLeft: 12 }}>
-                                {/* 长英文账户名单行截断，不撑高卡片 */}
-                                <Text style={styles.assetNameOnGradient} numberOfLines={1}>{a.name}</Text>
-                              </View>
-                              {(() => {
-                                // 信用卡这里显示的是"还能刷多少"（可用额度），不是欠了多少钱——
-                                // 欠款已经在上面的"负债"卡片里单独汇总了，这里再显示一遍欠款反而容易看错方向
-                                const displayValue = getAssetDisplayBalance(a, getAssetBalance(a.id));
-                                return (
-                                  <Text style={[styles.assetNameOnGradient, { fontSize: 17 }, a.type === 'credit' && displayValue < 0 && { color: colors.expense }]}>
-                                    {a.type === 'credit' && displayValue < 0 ? '-' : ''}
-                                    {Math.abs(displayValue).toFixed(2)}
-                                  </Text>
-                                );
-                              })()}
-                              <Ionicons name="chevron-forward" size={16} color={colors.netWorthAccent} style={{ marginLeft: 4 }} />
-                            </View>
-                          </PressableScale>
-                        </Swipeable>
-                      );
-                    })}
+                  <DraggableFlatList
+                    data={group.items}
+                    scrollEnabled={false}
+                    keyExtractor={(item) => item.id}
+                    onDragEnd={({ data }) => handleGroupReorder(data)}
+                    renderItem={({ item: a, drag, isActive }: RenderItemParams<AssetItem>) => (
+                      <ScaleDecorator>
+                        <AssetRow
+                          color={a.color}
+                          icon={a.icon as IconName}
+                          title={a.name}
+                          // 排序模式：行尾是拖动把手（计划 S5）
+                          trailing={
+                            <Ionicons name="reorder-three-outline" size={20} color={semantic.textTertiary} />
+                          }
+                          onLongPress={drag}
+                          style={isActive ? styles.draggingRow : undefined}
+                          testID={`asset-drag-${a.id}`}
+                        />
+                      </ScaleDecorator>
+                    )}
+                  />
+                </View>
+              ))}
+            </GlassView>
+          </View>
+        ) : activeAssets.length === 0 ? null : (
+          // ---------- 浏览模式：所有币种组放进**同一张玻璃卡**（V2.2c），
+          // 组之间用卡内小节标题（币种胶囊 + 合计）+ hairline 分隔 ----------
+          <View style={[styles.groupsCardWrap, { paddingHorizontal: pagePadding }]}>
+            <GlassView radius={26} style={styles.groupsCard}>
+              {groupedAssets.map((group, groupIndex) => {
+                const isCollapsed = collapsedCurrencies.includes(group.code);
+                // 同一币种下所有账户的余额合并成组的合计（信用卡按负数计入，即"欠款"）
+                const groupTotal = group.items.reduce((sum, a) => sum + getAssetBalance(a.id), 0);
+                return (
+                  <View key={group.code}>
+                    {groupIndex > 0 && <View style={styles.groupDivider} />}
+                    <CurrencySectionHeader
+                      code={group.code}
+                      total={groupTotal}
+                      showTotal={group.items.length > 1}
+                      collapsed={isCollapsed}
+                      onToggle={() => toggleCurrencyGroup(group.code)}
+                      testID={`asset-group-${group.code}`}
+                    />
+                    {!isCollapsed &&
+                      group.items.map((a, index) => (
+                        <View key={a.id}>
+                          {index > 0 && <View style={styles.groupSeparator} />}
+                          {renderAssetRow(a)}
+                        </View>
+                      ))}
                   </View>
-                )}
-                </LinearGradient>
-              </View>
-            );
-          })
+                );
+              })}
+            </GlassView>
+          </View>
         )}
 
+        {/* 已归档账户：折叠分组，行变淡；恢复按钮在行下方 */}
+        {!reorderMode && archivedAssets.length > 0 && (
+          <View style={[styles.groupsCardWrap, { paddingHorizontal: pagePadding, marginTop: spacing.lg }]}>
+            <GlassView radius={26} style={styles.groupsCard}>
+              <PressableScale
+                onPress={() => setArchivedOpen((v) => !v)}
+                activeScale={0.98}
+                style={styles.archivedHeader}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: archivedOpen }}
+                testID="asset-archived-toggle"
+              >
+                <AppText variant="subhead" weight="600" color={semantic.textSecondary}>
+                  {t('asset.archived')} · {archivedAssets.length}
+                </AppText>
+                <Ionicons
+                  name={archivedOpen ? 'chevron-up' : 'chevron-down'}
+                  size={18}
+                  color={semantic.textTertiary}
+                />
+              </PressableScale>
+              {archivedOpen &&
+                archivedAssets.map((a) => (
+                  <View key={a.id}>
+                    <View style={styles.groupSeparator} />
+                    <View style={{ opacity: ARCHIVED_ROW_OPACITY }}>{renderAssetRow(a)}</View>
+                    <View style={styles.archivedActionRow}>
+                      <PressableScale
+                        onPress={() => unarchiveAsset(a.id)}
+                        activeScale={0.95}
+                        style={[styles.archivedUnarchiveBtn, { borderColor: semantic.hairline }]}
+                        accessibilityRole="button"
+                        accessibilityLabel={t('asset.unarchive')}
+                        testID={`asset-unarchive-${a.id}`}
+                      >
+                        <AppText variant="footnote" weight="600" color={semantic.accentText}>
+                          {t('asset.unarchive')}
+                        </AppText>
+                      </PressableScale>
+                    </View>
+                  </View>
+                ))}
+            </GlassView>
+          </View>
+        )}
       </ScrollView>
-      </View>
 
-      {/* 账户详情弹窗：信用卡看账单周期，银行卡/现金看本月收支流水 */}
-      <Modal visible={!!viewingAssetId} transparent animationType="fade" onRequestClose={tryCloseModal}>
-        <TouchableOpacity
-          style={[styles.modalOverlay, viewKeyboardUp && styles.modalOverlayTop]}
-          activeOpacity={1}
-          onPress={tryCloseModal}
-        >
-          {/* 卡片单独包一层边距：计算器键盘不进这层，保持与记一笔页相同的全宽原样 */}
-          {/* 键盘弹出时：边距层 flex:1 占满键盘上方空间，卡片 maxHeight 100% ——
-              卡片底部永远紧贴键盘上缘，结构上不可能重叠（不再用像素公式估算） */}
-          <View style={[styles.modalSidePadding, viewKeyboardUp && { flex: 1 }]} onStartShouldSetResponder={() => true}>
-          <View style={[styles.modalCard, viewKeyboardUp && { maxHeight: '100%' }]}>
+      {/* C1：顶部安全区挡板（玻璃 = 浮空 Tab 栏同款）—— 全出血页面滚起来内容不从状态栏文字下穿过 */}
+      <StatusBarGlass />
+
+      {/* S4 账户详情：底部抽屉（替换原来的居中弹窗）；删除走 danger 按钮，"设为默认"是 Switch 行。
+          V2.2c：面板改高不透明磨砂（复用 tabBar 填充：夜 .88 / 日 .90），背后是全局 scrim 遮罩；
+          标题带上币种（「账户详情 · MYR」）—— 抽屉里的金额因此不再带币种后缀 */}
+      <BottomSheet
+        visible={!!viewingAssetId}
+        onClose={tryCloseDetail}
+        title={sheetAsset ? `${t('asset.accountDetail')} · ${sheetAsset.currency}` : t('asset.accountDetail')}
+        fill={semantic.homeCard}
+        maxHeightRatio={viewKeypadOpen ? 0.92 : 0.9}
+        accessibilityLabel={t('asset.accountDetail')}
+        testID="asset-detail"
+      >
+        {sheetAsset && (
+          <View style={styles.sheetColumn}>
             <ScrollView
+              ref={sheetScrollRef}
+              style={styles.sheetScroll}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
-              contentContainerStyle={viewKeyboardUp ? { paddingBottom: 4 } : undefined}
+              contentContainerStyle={[styles.sheetContent, { paddingHorizontal: layout.card }]}
             >
-            {viewingAsset && (
-              <>
-                {/* 名称：可编辑框格 + 笔图标（为空标红、"保存"不可用） */}
-                <View style={[styles.editNameBox, !viewName.trim() && styles.editInputError]}>
-                  <TextInput
-                    ref={viewNameInputRef}
-                    style={styles.editNameInput}
-                    value={viewName}
-                    onChangeText={setViewName}
-                    placeholder={t('addTx.accountNamePlaceholder')}
-                    placeholderTextColor={colors.textTertiary}
-                    selectionColor={colors.link}
-                    returnKeyType="done"
-                  />
-                  <Ionicons name="pencil" size={15} color={colors.link} />
+              {/* V2.2c B1：信用卡详情第一屏 = 欠款大字（title2/600，完整两位小数、不带币种）
+                  + 还款日 / 账单日一行（账单日只在数据已有该字段时显示，不新增字段） */}
+              {sheetAsset.type === 'credit' && (
+                <View style={styles.debtBlock}>
+                  <View style={styles.debtRow}>
+                    <AppText variant="footnote" color={semantic.textSecondary} style={styles.debtLabel}>
+                      {t('asset.creditDebt')}
+                    </AppText>
+                    <MoneyText
+                      value={-Math.max(0, -getAssetBalance(sheetAsset.id))}
+                      variant="title2"
+                      weight="600"
+                    />
+                  </View>
+                  {!!creditDayLine && (
+                    <AppText variant="footnote" color={semantic.textSecondary} style={styles.debtMeta}>
+                      {creditDayLine}
+                    </AppText>
+                  )}
                 </View>
+              )}
 
-                {/* 信用卡：信用额度框格，点整格调起计算器键盘 */}
-                {viewingCreditAsset && (
-                  <View {...amountCursorPan.panHandlers}>
-                    <TouchableOpacity style={styles.editAmountBox} activeOpacity={0.7} {...amountBoxPressProps}>
-                      <Text style={styles.editAmountLabel}>{t('addTx.creditLimitLabel')}</Text>
-                      <View style={styles.balanceValueWrap}>
-                        <Text style={styles.editAmountValue} ref={amountTextRef} onLayout={refreshAmountTextBox}>
-                          {viewKeypadOpen ? (
-                            <>
-                              <Text>{viewDisplayRef.current.slice(0, viewCursorIdx)}</Text>
-                              <BlinkingCursor style={styles.editAmountCursor} />
-                              <Text>{viewDisplayRef.current.slice(viewCursorIdx)}</Text>
-                            </>
-                          ) : (
-                            (parseFloat(viewBalanceStr) || 0).toFixed(2)
-                          )}
-                        </Text>
-                        <Text style={styles.editAmountCurrency}>{viewingCreditAsset.currency}</Text>
-                      </View>
-                      <Ionicons name="pencil" size={15} color={colors.link} />
-                    </TouchableOpacity>
-                  </View>
-                )}
-
-                {/* 当前余额：框格，点整格调起计算器键盘；输入"想让当前余额变成的数"（保存时按差额写回起始余额） */}
-                {!viewingCreditAsset && (
-                  <View {...amountCursorPan.panHandlers}>
-                    <TouchableOpacity style={styles.editAmountBox} activeOpacity={0.7} {...amountBoxPressProps}>
-                      <Text style={styles.editAmountLabel}>{t('asset.currentBalance')}</Text>
-                      <View style={styles.balanceValueWrap}>
-                        <Text style={styles.editAmountValue} ref={amountTextRef} onLayout={refreshAmountTextBox}>
-                          {viewKeypadOpen ? (
-                            <>
-                              <Text>{viewDisplayRef.current.slice(0, viewCursorIdx)}</Text>
-                              <BlinkingCursor style={styles.editAmountCursor} />
-                              <Text>{viewDisplayRef.current.slice(viewCursorIdx)}</Text>
-                            </>
-                          ) : (
-                            (parseFloat(viewBalanceStr) || 0).toFixed(2)
-                          )}
-                        </Text>
-                        <Text style={styles.editAmountCurrency}>{viewingAsset.currency}</Text>
-                      </View>
-                      <Ionicons name="pencil" size={15} color={colors.link} />
-                    </TouchableOpacity>
-                  </View>
-                )}
-
-                {viewingCreditAsset ? (
-                  !viewingStatement ? (
-                    <Text style={styles.emptyText}>{t('asset.noStatement')}</Text>
-                  ) : (
-                    <>
-                      <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>{t('asset.availableLimit')}</Text>
-                        <Text style={styles.detailValue}>
-                          {viewingStatement.available.toFixed(2)} {viewingCreditAsset.currency}
-                        </Text>
-                      </View>
-                      <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>{t('asset.currentSpend')}</Text>
-                        <Text style={styles.detailValue}>
-                          {viewingStatement.currentCycleSpend.toFixed(2)} {viewingCreditAsset.currency}
-                        </Text>
-                      </View>
-                      <View style={styles.detailDivider} />
-                      <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>{t('asset.lastStatement')}</Text>
-                        <Text style={styles.detailValue}>
-                          {viewingStatement.lastStatementAmount.toFixed(2)} {viewingCreditAsset.currency}
-                        </Text>
-                      </View>
-                      {viewingStatement.isOverdue && viewingStatement.estimatedInterest > 0 && (
-                        <View style={styles.detailRow}>
-                          <Text style={styles.detailLabel}>{t('asset.estInterest')}</Text>
-                          <Text style={[styles.detailValue, { color: colors.expense }]}>
-                            {viewingStatement.estimatedInterest.toFixed(2)} {viewingCreditAsset.currency}
-                          </Text>
-                        </View>
-                      )}
-                    </>
-                  )
-                ) : (
-                  viewingFlowStats && (
-                    <>
-                      <View style={styles.detailDivider} />
-                      <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>{t('asset.inflow')}</Text>
-                        <Text style={[styles.detailValue, { color: colors.income }]}>
-                          +{viewingFlowStats.inflowAmount.toFixed(2)}
-                          <Text style={styles.detailLabel}>{t('asset.inflowCount', { count: viewingFlowStats.inflowCount })}</Text>
-                        </Text>
-                      </View>
-                      <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>{t('asset.outflow')}</Text>
-                        <Text style={[styles.detailValue, { color: colors.expense }]}>
-                          -{viewingFlowStats.outflowAmount.toFixed(2)}
-                          <Text style={styles.detailLabel}>{t('asset.inflowCount', { count: viewingFlowStats.outflowCount })}</Text>
-                        </Text>
-                      </View>
-                      <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>{t('asset.netChange')}</Text>
-                        <Text
-                          style={[
-                            styles.detailValue,
-                            {
-                              color:
-                                viewingFlowStats.inflowAmount - viewingFlowStats.outflowAmount >= 0
-                                  ? colors.income
-                                  : colors.expense,
-                            },
-                          ]}
-                        >
-                          {viewingFlowStats.inflowAmount - viewingFlowStats.outflowAmount >= 0 ? '+' : ''}
-                          {(viewingFlowStats.inflowAmount - viewingFlowStats.outflowAmount).toFixed(2)}
-                        </Text>
-                      </View>
-                    </>
-                  )
-                )}
-
-                {/* 设为默认账户：随"保存"一并提交 */}
-                <PressableScale
-                  style={styles.defaultCheckRow}
-                  activeScale={0.97}
-                  onPress={() => setViewSetDefault((v) => !v)}
-                >
-                  <Ionicons
-                    name={viewSetDefault ? 'checkbox' : 'square-outline'}
-                    size={20}
-                    color={viewSetDefault ? colors.textPrimary : colors.textTertiary}
-                  />
-                  <Text style={styles.defaultCheckLabel}>{t('asset.setDefault')}</Text>
-                </PressableScale>
-
-                <PressableScale
-                  style={[styles.saveBtn, !viewName.trim() && { opacity: 0.5 }]}
-                  activeScale={0.97}
-                  onPress={() => saveViewChanges()}
-                >
-                  <Text style={styles.saveBtnText}>{t('common.save')}</Text>
-                </PressableScale>
-              </>
-            )}
-            </ScrollView>
-          </View>
-          </View>
-
-          {/* 计算器键盘：不进卡片边距层，全宽原样（与记一笔/添加账户页一致）；点金额数字弹出，「完成」＝求值并直接保存 */}
-          {viewingAsset && viewKeypadOpen && (
-            <View
-              style={[
-                styles.viewKeypadFooter,
-                {
-                  paddingBottom: Math.max(insets.bottom, 16),
-                  backgroundColor: colors.card,
-                  borderTopColor: colors.dividerHair,
-                },
-              ]}
-              onStartShouldSetResponder={() => true}
-              onLayout={(e) => setViewKeypadH(e.nativeEvent.layout.height)}
-            >
-              <AmountCalculatorKeypad
-                onPressKey={handleViewKeyPress}
-                onPressToday={() => {}}
-                onClear={() => {
-                  balanceExpr.reset(0);
-                  setViewBalanceCursor(0);
+              {/* 名称：内联可改（为空时描边转 danger，"保存"变灰）。
+                  V2.2c B3：输入框改胶囊，小标签放框上方、左边与框内文字对齐 */}
+              <View
+                onLayout={(e) => {
+                  nameBlockYRef.current = e.nativeEvent.layout.y;
                 }}
-                onConfirm={handleViewKeypadConfirm}
+              >
+                <AppText variant="footnote" color={semantic.textSecondary} style={styles.fieldLabelInline}>
+                  {t('addTx.accountName')}
+                </AppText>
+                <TextInput
+                  ref={viewNameInputRef}
+                  style={[
+                    styles.nameInput,
+                    { backgroundColor: semantic.bg, borderColor: semantic.hairline, color: semantic.textPrimary },
+                    !viewName.trim() && { borderColor: semantic.danger },
+                  ]}
+                  value={viewName}
+                  onChangeText={setViewName}
+                  onFocus={() => {
+                    nameFocusedRef.current = true;
+                  }}
+                  onBlur={() => {
+                    nameFocusedRef.current = false;
+                  }}
+                  placeholder={t('addTx.accountNamePlaceholder')}
+                  placeholderTextColor={semantic.textTertiary}
+                  selectionColor={semantic.accent}
+                  returnKeyType="done"
+                  testID="asset-detail-name"
+                />
+              </View>
+
+              {/* V2.2c B2：信用额度 / 当前余额下移到只读信息行之后（可编辑行放最后一段） */}
+
+              {/* 信用卡：账单周期明细（计算原样，只读信息行 = 标签 15 常规次要色 / 值 15-600 主色） */}
+              {sheetAsset.type === 'credit' ? (
+                !viewingStatement ? (
+                  <AppText variant="footnote" color={semantic.textTertiary} style={styles.sheetNote}>
+                    {t('asset.noStatement')}
+                  </AppText>
+                ) : (
+                  <View style={styles.sheetList}>
+                    <SheetInfoRow
+                      label={t('asset.availableLimit')}
+                      value={<MoneyText value={viewingStatement.available} variant="subhead" weight="600" />}
+                      separator
+                    />
+                    <SheetInfoRow
+                      label={t('asset.currentSpend')}
+                      value={
+                        <MoneyText value={viewingStatement.currentCycleSpend} variant="subhead" weight="600" />
+                      }
+                      separator
+                    />
+                    <SheetInfoRow
+                      label={t('asset.lastStatement')}
+                      value={
+                        <MoneyText
+                          value={viewingStatement.lastStatementAmount}
+                          variant="subhead"
+                          weight="600"
+                        />
+                      }
+                      separator={viewingStatement.isOverdue && viewingStatement.estimatedInterest > 0}
+                    />
+                    {viewingStatement.isOverdue && viewingStatement.estimatedInterest > 0 && (
+                      <SheetInfoRow
+                        label={t('asset.estInterest')}
+                        value={
+                          <MoneyText
+                            value={viewingStatement.estimatedInterest}
+                            variant="subhead"
+                            kind="expense"
+                            weight="600"
+                          />
+                        }
+                      />
+                    )}
+                  </View>
+                )
+              ) : (
+                viewingFlowStats && (
+                  <View style={styles.sheetList}>
+                    <SheetInfoRow
+                      label={t('asset.inflow')}
+                      value={<MoneyText value={viewingFlowStats.inflowAmount} variant="subhead" kind="income" weight="600" />}
+                      caption={t('asset.inflowCount', { count: viewingFlowStats.inflowCount })}
+                      separator
+                    />
+                    <SheetInfoRow
+                      label={t('asset.outflow')}
+                      value={<MoneyText value={viewingFlowStats.outflowAmount} variant="subhead" kind="expense" weight="600" />}
+                      caption={t('asset.inflowCount', { count: viewingFlowStats.outflowCount })}
+                      separator
+                    />
+                    <SheetInfoRow
+                      label={t('asset.netChange')}
+                      value={
+                        <MoneyText
+                          value={viewingFlowStats.inflowAmount - viewingFlowStats.outflowAmount}
+                          variant="subhead"
+                          weight="600"
+                        />
+                      }
+                    />
+                  </View>
+                )
+              )}
+
+              {/* V2.2c B2：可编辑金额行（信用卡 = 信用额度，其余 = 当前余额）——胶囊框 + 框上小标签；
+                  点整格调起计算器键盘，长按拖动可把光标放到任意字符处 */}
+              <AppText variant="footnote" color={semantic.textSecondary} style={styles.fieldLabelInline}>
+                {sheetAsset.type === 'credit' ? t('addTx.creditLimitLabel') : t('asset.currentBalance')}
+              </AppText>
+              <View {...amountCursorPan.panHandlers}>
+                <PressableScale
+                  style={[styles.amountBox, { backgroundColor: semantic.bg, borderColor: semantic.hairline }]}
+                  activeScale={0.98}
+                  {...amountBoxPressProps}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    sheetAsset.type === 'credit' ? t('addTx.creditLimitLabel') : t('asset.currentBalance')
+                  }
+                  testID="asset-detail-amount"
+                >
+                  <View style={styles.amountValueRow}>
+                    {viewKeypadOpen ? (
+                      <Text
+                        ref={amountTextRef}
+                        onLayout={refreshAmountTextBox}
+                        style={[
+                          styles.amountText,
+                          { color: semantic.textPrimary },
+                        ]}
+                      >
+                        <Text style={styles.amountText}>{viewDisplayRef.current.slice(0, viewCursorIdx)}</Text>
+                        <BlinkingCursor style={[styles.amountText, { color: semantic.accentText }]} />
+                        <Text style={styles.amountText}>{viewDisplayRef.current.slice(viewCursorIdx)}</Text>
+                      </Text>
+                    ) : (
+                      <MoneyText value={parseFloat(viewBalanceStr) || 0} variant="title3" weight="600" />
+                    )}
+                  </View>
+                  <Ionicons name="pencil" size={16} color={semantic.accentText} />
+                </PressableScale>
+              </View>
+
+              {/* 设为默认账户：Switch 行（随"保存"一并提交） */}
+              <View style={styles.sheetList}>
+                <ListRow
+                  title={t('asset.setDefaultRow')}
+                  trailing={
+                    <Switch
+                      value={viewSetDefault}
+                      onValueChange={setViewSetDefault}
+                      accessibilityLabel={t('asset.setDefaultRow')}
+                    />
+                  }
+                />
+              </View>
+
+              <Button
+                title={t('common.save')}
+                variant="gradient"
+                onPress={() => saveViewChanges()}
+                disabled={!viewName.trim()}
+                style={styles.sheetButton}
+                testID="asset-detail-save"
               />
-            </View>
-          )}
-        </TouchableOpacity>
-      </Modal>
+              {sheetAsset && sheetAsset.archivedAt ? (
+                <Button
+                  title={t('asset.unarchive')}
+                  variant="secondary"
+                  onPress={() => {
+                    unarchiveAsset(sheetAsset.id);
+                    closeDetail();
+                  }}
+                  style={styles.sheetButton}
+                  testID="asset-detail-unarchive"
+                />
+              ) : sheetAsset && assetRecordCount(sheetAsset.id) > 0 ? (
+                <Button
+                  title={t('asset.archive')}
+                  variant="secondary"
+                  onPress={() => handleArchive(sheetAsset.id, sheetAsset.name)}
+                  style={styles.sheetButton}
+                  testID="asset-detail-archive"
+                />
+              ) : (
+                <Button
+                  title={t('asset.deleteAccount')}
+                  variant="destructive"
+                  onPress={() => sheetAsset && handleDelete(sheetAsset.id, sheetAsset.name)}
+                  style={styles.sheetButton}
+                  testID="asset-detail-delete"
+                />
+              )}
+              {/* 键盘高度的底部垫片：让滚动区能把名称框滚到键盘上方 */}
+              {sheetKbHeight > 0 && <View style={{ height: sheetKbHeight }} />}
+            </ScrollView>
+
+            {/* 计算器键盘：抽屉内全宽呈现；「完成」＝求值并直接保存（与"保存"按钮同一效果） */}
+            {viewKeypadOpen && (
+              <View
+                style={[
+                  styles.keypadFooter,
+                  { borderTopColor: semantic.hairline, paddingBottom: Math.max(insets.bottom, spacing.lg) },
+                ]}
+              >
+                <AmountCalculatorKeypad
+                  onPressKey={handleViewKeyPress}
+                  onPressToday={() => {}}
+                  onClear={() => {
+                    balanceExpr.reset(0);
+                    setViewBalanceCursor(0);
+                  }}
+                  onConfirm={handleViewKeypadConfirm}
+                />
+              </View>
+            )}
+          </View>
+        )}
+      </BottomSheet>
     </SafeAreaView>
   );
 }
 
-function makeStyles(colors: ThemeColors) {
+/** 令牌进、StyleSheet 出（禁止写死色值 / 字号 / 间距；几何常量只留纯图形尺寸） */
+function makeStyles(
+  semantic: SemanticColors,
+  typography: Typography,
+  spacing: Spacing,
+  radius: Radius,
+  layout: Layout
+) {
   return StyleSheet.create({
     container: { flex: 1 },
-    // 币种分组折叠卡：与首页资产总览大卡同款——渐变底 + 半透明白描边 + 投影，
-    // 渐变色/文字色走 netWorth* token，日间浅紫、夜间深紫自动切换
-    currencyGroupShadow: {
-      borderRadius: 20,
-      shadowColor: '#1B1040',
-      shadowOffset: { width: 0, height: 10 },
-      shadowOpacity: 0.16,
-      shadowRadius: 20,
-      elevation: 5,
-      marginBottom: 5,
+    // 页头：大标题与右侧动作垂直居中对齐（同一行，动作跟着大标题中线走）；
+    // 放不下时动作整块掉到第二行（UI_RULES 第 6 节 ②）
+    headerRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      columnGap: spacing.md,
+      rowGap: spacing.xs,
     },
-    currencyGroupCard: {
-      borderRadius: 20,
-      borderWidth: 1,
-      borderColor: 'rgba(255,255,255,0.12)',
-      overflow: 'hidden',
-    },
-    currencyGroupHeader: {
+    headerTitle: { flexGrow: 1, flexShrink: 1, minWidth: 0 },
+    // 大标题（渐变上的白字）：稿为 30 / 600（token title1 是 28/700，字号按稿覆盖）
+    heroTitle: { fontSize: 30, lineHeight: 36 },
+    // V2.2c：所有币种组共用一张玻璃卡（卡内小节头 + hairline 分组），卡与页头之间 24
+    groupsCardWrap: { marginTop: 24 },
+    // overflow hidden：行 / 小节头的 hairline 与按压高光不越出 26 圆角
+    groupsCard: { overflow: 'hidden' },
+    archivedHeader: {
       flexDirection: 'row',
       alignItems: 'center',
-      paddingHorizontal: 16,
-      paddingVertical: 12,
+      justifyContent: 'space-between',
+      paddingHorizontal: layout.card,
+      paddingVertical: spacing.md,
     },
-    currencyFlagBadge: {
-      width: 34,
-      height: 34,
-      borderRadius: 17,
-      backgroundColor: 'rgba(255,255,255,0.14)',
+    archivedActionRow: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      paddingHorizontal: layout.card,
+      paddingBottom: spacing.sm,
+    },
+    archivedUnarchiveBtn: {
+      minHeight: 36,
+      paddingHorizontal: spacing.md,
+      borderRadius: 18,
+      borderWidth: StyleSheet.hairlineWidth,
       alignItems: 'center',
       justifyContent: 'center',
     },
-    currencyFlagText: { fontSize: 13, fontWeight: '700', color: colors.netWorthValue },
-    // 国旗 emoji 稍大一点，撑满圆形徽章
-    currencyFlagEmoji: { fontSize: 22, marginTop: -2 },
-    currencyGroupCode: { flex: 1, fontSize: 16, fontWeight: '700', color: colors.netWorthLabel, marginLeft: 10 },
-    currencyGroupTotal: { fontSize: 20, fontWeight: '800', color: colors.netWorthValue, marginLeft: 6, fontVariant: ['tabular-nums'] },
-    currencyGroupBody: { paddingHorizontal: 10, paddingBottom: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,255,255,0.18)', paddingTop: 10 },
-    // 展开后叠在渐变卡上的账户行：半透明白底 + 白色系文字（与首页卡内子元素同语言）
-    assetRowOnGradient: {
-      backgroundColor: 'rgba(255,255,255,0.10)',
-      borderRadius: 12,
-      paddingVertical: 5,
-      paddingHorizontal: 9,
-      marginBottom: 3,
+    // 组与组之间的分组线：左右各缩进卡内衬 16（行内分割线则是 70 左缩进，见下）
+    groupDivider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: semantic.hairline,
+      marginHorizontal: layout.card,
     },
-    assetNameOnGradient: { fontSize: 15, fontWeight: '700', color: colors.netWorthValue },
-    liabilityCard: { backgroundColor: colors.card, borderRadius: 16, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: colors.expense + '33' },
-    liabilityLabel: { fontSize: 12, color: colors.textSecondary, marginBottom: 8 },
-    liabilityValue: { fontSize: 20, fontWeight: '700', color: colors.expense, marginBottom: 4 },
-    liabilityCode: { fontSize: 12, color: colors.textTertiary, fontWeight: '400' },
-    emptyText: { color: colors.textTertiary, fontSize: 13 },
-    sectionTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-    title: { fontSize: 17, fontWeight: '700', color: colors.textPrimary, flexShrink: 1 },
-    // 头部右侧常驻按钮：实心"＋ 添加账户"；排序模式换成"完成"
-    headerAddBtn: {
+    // 分组卡内的行间分割线：左缩进 = 图标 42 + 间距 12 + 卡内衬 16 = 70（与稿一致，右侧通到卡边）
+    groupSeparator: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: semantic.hairline,
+      marginLeft: 70,
+    },
+    draggingRow: { opacity: 0.85 },
+    // ---------- 详情抽屉 ----------
+    sheetColumn: { flexShrink: 1 },
+    sheetScroll: { flexShrink: 1 },
+    sheetContent: { paddingBottom: spacing.md },
+    // V2.2c B1：欠款大字块（信用卡详情顶部）
+    debtBlock: { paddingTop: spacing.sm, paddingBottom: spacing.xs },
+    debtRow: { flexDirection: 'row', alignItems: 'baseline', columnGap: spacing.sm },
+    debtLabel: { flexShrink: 0 },
+    debtMeta: { marginTop: spacing.xs },
+    // V2.2c B3：小标签在输入框上方，左边与框内文字对齐（内缩 = 输入框 paddingHorizontal）
+    fieldLabelInline: { marginTop: spacing.lg, marginBottom: spacing.xs, marginLeft: spacing.lg },
+    nameInput: {
+      minHeight: 44,
+      // 胶囊框（V2.2c）：与 radius.full 一致的圆角，不用矩形输入框
+      borderRadius: radius.full,
+      borderWidth: StyleSheet.hairlineWidth,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.sm,
+      fontSize: typography.body.fontSize,
+      lineHeight: typography.body.lineHeight,
+    },
+    amountBox: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: colors.fabBg,
-      borderRadius: 17,
-      paddingHorizontal: 14,
-      paddingVertical: 8,
-      marginLeft: 10,
+      flexWrap: 'wrap',
+      justifyContent: 'space-between',
+      columnGap: spacing.sm,
+      rowGap: spacing.xs,
+      minHeight: 44,
+      borderRadius: radius.full,
+      borderWidth: StyleSheet.hairlineWidth,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.sm,
     },
-    headerAddBtnText: { color: colors.bg, fontSize: 13, fontWeight: '700', marginLeft: 3 },
-    // 完成按钮：实心紫色，跟"添加账户"同色系，深浅色模式下都够醒目
-    headerDoneBtn: {
+    amountValueRow: {
       flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: colors.fabBg,
-      borderRadius: 17,
-      paddingHorizontal: 16,
-      paddingVertical: 8,
-      marginLeft: 10,
+      alignItems: 'baseline',
+      flexShrink: 1,
+      columnGap: spacing.xs,
     },
-    headerDoneBtnText: { color: colors.fabIcon, fontSize: 13, fontWeight: '700' },
-    saveBtn: { backgroundColor: colors.fabBg, borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
-    saveBtnText: { color: colors.bg, fontWeight: '700', fontSize: 15 },
-    groupTitle: { fontSize: 12, color: colors.textTertiary, fontWeight: '600', marginBottom: 8, marginLeft: 4 },
-    assetList: { backgroundColor: colors.card, borderRadius: 14, overflow: 'hidden' },
-    assetCardBig: {
-      backgroundColor: colors.card,
-      borderRadius: 14,
-      padding: 16,
-      marginBottom: 10,
-      borderWidth: 1,
-      borderColor: colors.cardBorder,
+    amountText: {
+      fontSize: typography.title3.fontSize,
+      lineHeight: typography.title3.lineHeight,
+      fontWeight: typography.title3.fontWeight,
+      includeFontPadding: false,
+      fontVariant: ['tabular-nums'],
     },
-    assetCardTopRow: { flexDirection: 'row', alignItems: 'center' },
-    assetIconWrap: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
-    assetName: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
-    assetBalance: { fontSize: 17, fontWeight: '700', color: colors.textPrimary },
-    swipeDeleteBtn: {
-      backgroundColor: colors.expense,
-      justifyContent: 'center',
-      alignItems: 'center',
-      width: 64,
+    sheetList: { marginTop: spacing.sm },
+    sheetNote: { marginTop: spacing.lg, paddingHorizontal: spacing.sm },
+    sheetButton: { marginTop: spacing.md },
+    keypadFooter: {
+      paddingTop: spacing.sm,
+      borderTopWidth: StyleSheet.hairlineWidth,
     },
-    swipeDeleteText: { color: colors.fabIcon, fontSize: 11, marginTop: 2, fontWeight: '600' },
-    modalOverlay: {
-      flex: 1,
-      backgroundColor: colors.overlay,
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
-    // 卡片单独包的左右边距层：计算器键盘不进这层，保持全宽原样不被压窄
-    modalSidePadding: { width: '100%', paddingHorizontal: 20 },
-    // 计算器键盘弹出时卡片靠顶，给底部键盘让位
-    modalOverlayTop: { justifyContent: 'flex-start', paddingTop: 56 },
-    // 弹窗内计算器键盘的底座（与"记一笔"/添加账户页同规格：卡片底色 + 顶部分隔线 + 安全区垫高）
-    viewKeypadFooter: { width: '100%', paddingTop: 6, borderTopWidth: 1, marginTop: 'auto' },
-    modalCard: { width: '100%', backgroundColor: colors.card, borderRadius: 18, padding: 20 },
-    // ---------- 弹窗内行内编辑（与"添加账户"页同视觉：bg 底框格 + 笔图标表示可编辑） ----------
-    // 名称框格
-    editNameBox: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-      backgroundColor: colors.bg,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: colors.dividerHair,
-      height: 48,
-      paddingHorizontal: 12,
-      marginBottom: 12,
-    },
-    editNameInput: {
-      flex: 1,
-      fontSize: 17,
-      fontWeight: '700',
-      color: colors.textPrimary,
-      paddingVertical: 0,
-      textAlign: 'center',
-    },
-    editInputError: { borderColor: colors.expense, borderWidth: 1.5 },
-    // 金额框格（当前余额/信用额度）：点整格调起计算器键盘
-    editAmountBox: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-      backgroundColor: colors.bg,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: colors.dividerHair,
-      height: 48,
-      paddingHorizontal: 12,
-      marginBottom: 12,
-    },
-    editAmountLabel: { flex: 1, fontSize: 13, fontWeight: '600', color: colors.textSecondary },
-    balanceValueWrap: { flexDirection: 'row', alignItems: 'baseline', flexShrink: 1 },
-    editAmountValue: { fontSize: 17, fontWeight: '800', color: colors.textPrimary, fontVariant: ['tabular-nums'] },
-    // 自绘光标：与金额同字号、细体、主题紫（BlinkingCursor 组件负责闪烁）
-    editAmountCursor: { fontSize: 17, fontWeight: '300', color: colors.link },
-    editAmountCurrency: { fontSize: 12, fontWeight: '700', color: colors.textSecondary, marginLeft: 6 },
-    detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 9 },
-    // 英文文案比中文长 30-60%：label 可收缩、value 不被挤走
-    detailLabel: { flex: 1, flexShrink: 1, fontSize: 14, color: colors.textSecondary },
-    detailValue: { flexShrink: 1, marginLeft: 12, fontSize: 15, fontWeight: '700', color: colors.textPrimary },
-    detailDivider: { height: 1, backgroundColor: colors.dividerHair, marginVertical: 8 },
-    defaultCheckRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4, marginBottom: 16 },
-    defaultCheckLabel: { fontSize: 14, color: colors.textPrimary, marginLeft: 8 },
   });
 }

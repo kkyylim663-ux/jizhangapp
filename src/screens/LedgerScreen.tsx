@@ -1,5 +1,15 @@
-import React, { useMemo, useState } from 'react';
-import {View, Text, StyleSheet, TouchableOpacity, TextInput, Keyboard } from 'react-native';
+import React, { useState } from 'react';
+import { KeyboardAvoidingView, Platform, StyleSheet, TextInput, View, Keyboard } from 'react-native';
+
+/**
+ * 玻璃材质（UI V2.1 §2）在 web 上的偏差修正：expo-blur 的 web 实现用「tint 底色」模拟模糊——
+ * tint default + intensity 100 → 叠一层 rgba(255,255,255,.30) 的白，夜间玻璃被洗成中紫，
+ * 规范里的 text.secondary / income / danger 全部跌破 §4 硬指标（实测 2.7–4.2）。
+ * 这里把 web 强度降到 8（白底 2.4%，模糊 1.6px ≈ 不可见），玻璃回到稿里的 rgba(14,10,30,.46) 实色；
+ * iOS 仍用 GlassView 默认 100（真材质），Android 本来就没有模糊。
+ */
+const WEB_GLASS_INTENSITY = Platform.OS === 'web' ? 8 : undefined;
+import { LinearGradient } from 'expo-linear-gradient';
 import PressableScale from '../components/PressableScale';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,11 +17,11 @@ import { useNavigation } from '@react-navigation/native';
 import { useApp } from '../context/AppContext';
 import { useDialog } from '../components/AppDialog';
 import { useTheme } from '../theme/useTheme';
+import { useLayout } from '../theme/useLayout';
 import { useTabClearance } from '../hooks/useTabClearance';
-import { ThemeColors } from '../theme/theme';
 import { useT } from '../i18n/LanguageContext';
-import { getGroupLabel } from '../i18n/categories';
 import { hapticSuccess } from '../utils/haptics';
+import { AppText, GlassView, HeroGradient, IconCircle, ScreenHeader } from '../components/ui';
 
 type IconName = keyof typeof Ionicons.glyphMap;
 
@@ -28,12 +38,28 @@ const COLOR_OPTIONS = [
   '#F9A825', '#8D6E63', '#A1887F', '#FFB300', '#795548',
 ];
 
+/** UI V2.1 玻璃二级页头：ScreenHeader 的返回键是透明 44 触控区，这里在它底下垫一枚 44 玻璃圆钮（稿） */
+function GlassBackHeader({ title, onBack }: { title: string; onBack: () => void }) {
+  const { spacing } = useTheme();
+  const { pagePadding } = useLayout();
+  return (
+    <View>
+      <View pointerEvents="none" style={[styles.headerGlass, { left: pagePadding, top: spacing.sm }]}>
+        <GlassView intensity={WEB_GLASS_INTENSITY} radius={999} style={styles.headerGlassInner} />
+      </View>
+      <ScreenHeader variant="compact" title={title} onBack={onBack} />
+    </View>
+  );
+}
+
 export default function LedgerScreen() {
     const { ledgers, addLedger } = useApp();
-  const { colors } = useTheme();
+  const { semantic, gradients, isDark, spacing } = useTheme();
+  // 玻璃卡上的次要字色（§4 硬指标）：夜间玻璃在 web 上被 BlurView 的白底洗亮
+  // （expo-blur web：tint default + intensity 100 → 叠 rgba(255,255,255,.30)），
+  const { pagePadding } = useLayout();
   const navigation = useNavigation();
   const tabClearance = useTabClearance();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
   const t = useT();
   const dialog = useDialog(); // 主题化弹窗（替代系统 Alert）
   const [newName, setNewName] = useState('');
@@ -63,136 +89,131 @@ export default function LedgerScreen() {
     });
   };
 
-  // 顶栏与"记一笔"同款：原生 header 已关闭（App.tsx），自绘圆环返回键 + 标题；
-  // edges 含 top：原生顶栏没了，需要自己垫状态栏高度
+  // 二级页统一版式（UI V2.1 §1/§2）：渐变铺满整页 + 玻璃页头 + 玻璃表单卡 + accent 渐变主按钮；
+  // edges 含 top：原生顶栏已关（App.tsx），状态栏高度自己垫
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}
+    <SafeAreaView
+      style={[styles.container, { backgroundColor: semantic.bg }]}
+      edges={['top', 'left', 'right']}
       onTouchStart={() => { Keyboard.dismiss(); }}
     >
-      <View style={styles.topBar}>
-        <PressableScale
-          style={styles.topBackBtn}
-          activeScale={0.92}
-          onPress={() => navigation.goBack()}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Ionicons name="chevron-back" size={22} color={colors.icon} />
-        </PressableScale>
-        <Text style={styles.topBarTitle}>{t('ledger.pageTitle')}</Text>
-        <View style={styles.topBarSpacer} />
-      </View>
-      <View style={{ flex: 1, paddingHorizontal: 20 }}>
-        {/* 自定义账本表单：页面锁死不滚动（Scroll 会遮挡输入区），内容直接平铺 */}
-        <View style={{ flex: 1, paddingTop: 6, paddingHorizontal: 20 }}>
-          <Text style={styles.sectionTitle}>{t('ledger.customTitle')}</Text>
-          <View style={styles.addCard}>
-            <View style={styles.previewRow}>
-              <View style={[styles.previewIconWrap, { backgroundColor: newColor + '22' }]}>
-                <Ionicons name={DEFAULT_LEDGER_ICON} size={40} color={newColor} />
+      <HeroGradient fill />
+      <GlassBackHeader title={t('ledger.pageTitle')} onBack={() => navigation.goBack()} />
+      {/* 键盘弹出时不遮住名称输入框与底部创建键 */}
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <View style={{ flex: 1, paddingHorizontal: pagePadding }}>
+          {/* 自定义账本表单：页面锁死不滚动（Scroll 会遮挡输入区），内容直接平铺 */}
+          <View style={[styles.flex, styles.formWrap]}>
+            <AppText variant="footnote" color={semantic.textSecondary} style={styles.sectionTitle}>
+              {t('ledger.customTitle')}
+            </AppText>
+            <GlassView intensity={WEB_GLASS_INTENSITY} radius={26} style={styles.addCard}>
+              <View style={styles.previewRow}>
+                {/* 中心预览：立体光泽球（§5），创建时用的默认图标 + 当前选中色 */}
+                <IconCircle size={72} color={newColor} icon={DEFAULT_LEDGER_ICON} />
               </View>
-            </View>
 
-            <TextInput
-              style={styles.input}
-              value={newName}
-              onChangeText={setNewName}
-              placeholder={t('ledger.namePlaceholder')}
-              placeholderTextColor={colors.textTertiary}
-            />
-            {/* 颜色固定 5×5 网格：25 色按色系分行渲染，每排 5 个 */}
-            <Text style={styles.pickerLabel}>{t('ledger.colorLabel')}</Text>
-            {[0, 1, 2, 3, 4].map((row) => (
-              <View key={row} style={styles.colorRow}>
-                {COLOR_OPTIONS.slice(row * 5, row * 5 + 5).map((color) => (
-                  <TouchableOpacity
-                    key={color}
-                    style={[
-                      styles.colorOption,
-                      { backgroundColor: color },
-                      newColor === color && styles.colorOptionActive,
-                    ]}
-                    onPress={() => setNewColor(color)}
-                  />
-                ))}
-              </View>
-            ))}
+              <TextInput
+                style={[styles.input, { backgroundColor: semantic.accentSoft, color: semantic.textPrimary }]}
+                value={newName}
+                onChangeText={setNewName}
+                placeholder={t('ledger.namePlaceholder')}
+                placeholderTextColor={semantic.textSecondary}
+              />
+              {/* 颜色固定 5×5 网格：25 色按色系分行渲染，每排 5 个 */}
+              <AppText variant="caption" color={semantic.textSecondary} style={styles.pickerLabel}>
+                {t('ledger.colorLabel')}
+              </AppText>
+              {[0, 1, 2, 3, 4].map((row) => (
+                <View key={row} style={styles.colorRow}>
+                  {COLOR_OPTIONS.slice(row * 5, row * 5 + 5).map((color) => (
+                    <PressableScale
+                      key={color}
+                      style={[
+                        styles.colorOption,
+                        { backgroundColor: color },
+                        // 选中：色环 + 页面底色留缝（稿 .dk/.lt --bg 的 3px 打底 + 5px 外环）
+                        newColor === color && {
+                          boxShadow: `0px 0px 0px 3px ${semantic.bg}, 0px 0px 0px 5px ${color}`,
+                        },
+                      ]}
+                      activeScale={0.92}
+                      onPress={() => setNewColor(color)}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected: newColor === color }}
+                      accessibilityLabel={color}
+                    />
+                  ))}
+                </View>
+              ))}
+            </GlassView>
           </View>
-        </View>
 
-        {/* 保存按钮钉在页面最底部（避开浮空Tab栏），不再随内容滚动 */}
-        <PressableScale
-          style={[styles.saveBtn, { marginTop: 1, marginBottom: Math.max(4, tabClearance - 20) }]}
-          onPress={() => handleAdd(newName, DEFAULT_LEDGER_ICON, newColor)}
-          activeScale={0.97}
-        >
-          <Ionicons name="add" size={20} color={colors.bg} />
-          <Text style={styles.saveBtnText}>{t('ledger.create')}</Text>
-        </PressableScale>
-      </View>
+          {/* 创建账本按钮钉在页面最底部（避开浮空Tab栏），不再随内容滚动 */}
+          <PressableScale
+            onPress={() => handleAdd(newName, DEFAULT_LEDGER_ICON, newColor)}
+            activeScale={0.97}
+            style={[styles.saveBtn, { marginBottom: tabClearance + spacing.sm }]}
+            accessibilityRole="button"
+            accessibilityLabel={t('ledger.create')}
+          >
+            {/* 主按钮 = accent 渐变胶囊（§3：渐变实心按钮保持白字） */}
+            <LinearGradient
+              colors={gradients.accent.colors}
+              locations={gradients.accent.locations as [number, number, ...number[]]}
+              start={gradients.accent.start}
+              end={gradients.accent.end}
+              style={styles.saveBtnFill}
+            >
+              <Ionicons name="add" size={20} color="#FFFFFF" />
+              <AppText variant="headline" weight="700" color="#FFFFFF">
+                {t('ledger.create')}
+              </AppText>
+            </LinearGradient>
+          </PressableScale>
+        </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-function makeStyles(colors: ThemeColors) {
-  return StyleSheet.create({
-    container: { flex: 1 },
-    // 顶栏：与其他二级页同款——圆环返回键 + 居中标题
-    topBar: { height: 52, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16 },
-    topBackBtn: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
-      borderWidth: 1.5,
-      borderColor: colors.link,
-      backgroundColor: colors.card,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    topBarTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '700', color: colors.textPrimary },
-    topBarSpacer: { width: 40 },
-    sectionTitle: { fontSize: 15, fontWeight: '700', color: colors.textPrimary, marginBottom: 8 },
-    addCard: { backgroundColor: colors.card, borderRadius: 16, padding: 16 },
-    previewRow: { alignItems: 'center', marginBottom: 12 },
-    // 中心预览图标：做大做明显，作为本页视觉主角
-    previewIconWrap: {
-      width: 72,
-      height: 72,
-      borderRadius: 20,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    input: {
-      backgroundColor: colors.bg,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: colors.dividerHair,
-      padding: 10,
-      minHeight: 48,
-      fontSize: 15,
-      color: colors.textPrimary,
-      marginBottom: 12,
-    },
-    pickerLabel: { fontSize: 12, color: colors.textTertiary, marginBottom: 8 },
-    colorRow: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      marginBottom: 8,
-    },
-    // 5×5 色格：方框样式，放大到行宽 17% 的正方形，固定网格、整页不滚动
-    colorOption: { width: '17%', aspectRatio: 1, borderRadius: 10 },
-    colorOptionActive: { borderWidth: 3, borderColor: colors.textPrimary },
-    // 创建账本按钮：缩短不再全宽，钉在页面底部并水平居中
-    saveBtn: {
-      flexDirection: 'row',
-      alignSelf: 'center',
-      backgroundColor: colors.fabBg,
-      borderRadius: 22,
-      paddingHorizontal: 44,
-      paddingVertical: 14,
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 6,
-    },
-    saveBtnText: { color: colors.bg, fontWeight: '700', fontSize: 16 },
-  });
-}
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  flex: { flex: 1 },
+  // 玻璃页头：透明返回键底下那枚 44 玻璃圆钮（与 ScreenHeader 左侧槽位对齐）
+  headerGlass: { position: 'absolute', width: 44, height: 44 },
+  headerGlassInner: { width: 44, height: 44 },
+  formWrap: { paddingTop: 6, paddingHorizontal: 6 },
+  sectionTitle: { paddingHorizontal: 6, paddingBottom: 10 },
+  addCard: { padding: 16 },
+  previewRow: { alignItems: 'center', marginBottom: 12 },
+  // 胶囊输入框（稿：高 48 / radius 999 / --chip 底）
+  input: {
+    height: 48,
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    fontSize: 15,
+    marginBottom: 12,
+  },
+  pickerLabel: { paddingHorizontal: 6, marginBottom: 8 },
+  colorRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  // 5×5 色格：圆形色点（稿），撑到行宽 17%，固定网格、整页不滚动
+  colorOption: { width: '17%', aspectRatio: 1, borderRadius: 999 },
+  // 创建账本按钮：全宽、钉在页面底部
+  saveBtn: { alignSelf: 'stretch' },
+  saveBtnFill: {
+    height: 54,
+    borderRadius: 999,
+    overflow: 'hidden',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    // 稿：0 14 28 -12 rgba(155,91,214,.9)
+    boxShadow: '0px 14px 28px -12px rgba(155,91,214,0.9)',
+  },
+});

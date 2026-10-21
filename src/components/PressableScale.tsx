@@ -1,19 +1,33 @@
 // PressableScale.tsx
-// 全局统一的按压反馈：按下去 scale 0.97、120ms ease-out（animate-expo skill 的
-// press feedback 配方）。反馈发生在按下瞬间，而不是松手之后——这是"界面在听你"的感觉来源。
+// 全局统一的按压反馈：按下瞬间缩放（默认 0.97，可传 activeScale 调），松手弹回。
+// 反馈发生在按下瞬间而不是松手之后 —— 这是"界面在听你"的感觉来源。
 //
-// 用法：直接替换 TouchableOpacity/Pressable，onPress + style + children。
-// 大卡片用默认 0.97；小图标建议 0.88-0.94（activeScale），反馈更可感知。
+// T05 重写（计划 4.5 / 11.4）
+// - 缩放改由 Reanimated shared value + 弹簧驱动：按下只改 UI thread 的值，**不再 setState**，
+//   列表 / 键盘这种高频点按不再有整块重渲染；
+// - 弹簧参数取令牌 motion.spring.press（180ms 临界阻尼），按下即响应；
+// - 默认 accessibilityRole="button"：读屏能读出「按钮」，不再依赖每个调用点自己传；
+// - 系统「减弱动态效果」时 motion.pressScale = 1 → 无缩放位移（自动降级）。
+//
+// 兼容：props 与旧版完全一致（onPress / onLongPress / style / children / activeScale /
+// disabled / hitSlop / delayLongPress / accessibilityRole / accessibilityLabel /
+// accessibilityState / testID），16 个页面的调用点不用改。
+//
+// ⚠ 底部 Tab 按钮禁止任何按压反馈（用户明令）：Tab 栏若要用本组件，必须传 activeScale={1}。
 
-import React, { useState } from 'react';
+import React, { useEffect } from 'react';
 import { Platform, Pressable, StyleProp, ViewStyle } from 'react-native';
-import Animated from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import { useTheme } from '../theme/useTheme';
 
 // RN 的 ViewStyle 类型还没收录 CSS transition 这几个属性
 // （web 端 react-native-web 和新架构原生都实际支持），抽成宽类型常量绕过检查。
 // 注意：原生端 Reanimated 的 transitionTimingFunction 只认预定义关键字
 // （linear/ease/ease-in/ease-out/ease-in-out...），cubic-bezier 字符串会直接报错；
 // web 端浏览器则完全支持 cubic-bezier。
+//
+// ⚠ 保留导出：AmountCalculatorKeypad 直接用它给键帽做 CSS transition 按下反馈（7 处），
+//   本组件自身已改走 Reanimated 弹簧，不再消费这个常量。
 export const PRESS_TRANSITION = {
   transitionProperty: 'transform',
   transitionDuration: '120ms',
@@ -28,16 +42,17 @@ type Props = {
   onLongPress?: () => void;
   style?: StyleProp<ViewStyle>;
   children?: React.ReactNode;
-  // 默认 0.97：卡片/行这类大目标；小按钮建议 0.88-0.94
+  /** 按下时的缩放（默认取令牌 motion.pressScale 0.97）；传 1 = 完全不缩放（底部 Tab 用） */
   activeScale?: number;
   disabled?: boolean;
   hitSlop?: number | { top?: number; bottom?: number; left?: number; right?: number };
   /** 长按触发延迟（毫秒），透传给 RN Pressable 的 delayLongPress */
   delayLongPress?: number;
-  // 无障碍透传（可选）：TouchableOpacity 迁移时原样带上，不影响既有调用点
   accessibilityRole?: React.ComponentProps<typeof Pressable>['accessibilityRole'];
   accessibilityLabel?: string;
   accessibilityState?: React.ComponentProps<typeof Pressable>['accessibilityState'];
+  /** 测试 / 预览页定位用（透传给 Pressable） */
+  testID?: string;
 };
 
 export default function PressableScale({
@@ -45,34 +60,49 @@ export default function PressableScale({
   onLongPress,
   style,
   children,
-  activeScale = 0.97,
+  activeScale,
   disabled,
   hitSlop = 12,
   delayLongPress,
-  accessibilityRole,
+  accessibilityRole = 'button',
   accessibilityLabel,
   accessibilityState,
+  testID,
 }: Props) {
-  const [pressed, setPressed] = useState(false);
+  const { motion } = useTheme();
+  const scale = useSharedValue(1);
+  const pressedScale = activeScale ?? motion.pressScale;
+
+  const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+
+  const pressIn = () => {
+    scale.value = withSpring(pressedScale, motion.spring.press);
+  };
+  const pressOut = () => {
+    scale.value = withSpring(1, motion.spring.press);
+  };
+
+  // 按下过程中被禁用（比如提交后立刻 disabled）：把缩放松回去，别卡在小尺寸
+  useEffect(() => {
+    if (disabled) scale.value = withSpring(1, motion.spring.press);
+  }, [disabled, scale, motion]);
+
   return (
     <Pressable
       onPress={onPress}
       onLongPress={onLongPress}
       delayLongPress={delayLongPress}
-      onPressIn={() => setPressed(true)}
-      onPressOut={() => setPressed(false)}
+      onPressIn={pressIn}
+      onPressOut={pressOut}
       disabled={disabled}
-      hitSlop={hitSlop as any}
+      hitSlop={hitSlop as never}
       pressRetentionOffset={16}
       accessibilityRole={accessibilityRole}
       accessibilityLabel={accessibilityLabel}
       accessibilityState={accessibilityState}
+      testID={testID}
     >
-      <Animated.View
-        style={[PRESS_TRANSITION, pressed && { transform: [{ scale: activeScale }] }, style]}
-      >
-        {children}
-      </Animated.View>
+      <Animated.View style={[animatedStyle, style]}>{children}</Animated.View>
     </Pressable>
   );
 }

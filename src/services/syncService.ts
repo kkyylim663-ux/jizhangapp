@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabaseClient';
+import { runStorageExclusive } from './storageQueue';
 import {
   Asset,
   Budget,
@@ -60,6 +61,7 @@ export type SyncErrorCode =
   | 'network'
   | 'auth'
   | 'constraint'
+  | 'schema'
   | 'server'
   | 'clock_skew'
   | 'local_data_corrupt'
@@ -90,7 +92,9 @@ function sleep(ms: number): Promise<void> {
  * 把任意同步异常归类成稳定错误码：
  * - network：fetch 失败/超时/DNS（弱网、部分运营商拦 *.supabase.co）
  * - auth：token 失效 / RLS 拒绝（401/403）
- * - constraint：数据库约束拒绝（NOT NULL / 外键 / 唯一冲突，Postgres 23xxx）
+ * - constraint：数据类拒绝（NOT NULL / 外键 / 唯一冲突 / 同语句重复行 / 类型不合法，Postgres 21-23xxx）
+ * - schema：云端库结构落后于 App（未执行最新 schema.sql）——表/列在云端还不存在
+ *   （Postgres 42P01/42703、PostgREST PGRST204/205；2026-10-20 归档功能的 archived_at 列踩过）
  * - server：Supabase 5xx
  */
 function classifySyncError(e: unknown): Exclude<SyncErrorCode, 'local_data_corrupt' | 'not_logged_in' | 'sync_in_progress'> {
@@ -103,7 +107,20 @@ function classifySyncError(e: unknown): Exclude<SyncErrorCode, 'local_data_corru
   if (code === 'PGRST303' || /issued at future/i.test(msg)) return 'clock_skew';
   if (/fetch|network|timeout|timed out|socket|dns|unable to resolve/i.test(msg)) return 'network';
   if (status === 401 || status === 403 || /jwt|row-level security|permission denied/i.test(msg)) return 'auth';
-  if (/^23\d{3}$/.test(code) || /violates|duplicate key|null value in column/i.test(msg)) return 'constraint';
+  // 21xxx/22xxx/23xxx = Postgres 数据类错误（21 cardinality 如 21000 同语句重复行、
+  // 22 data_exception 如数值/文本不合法、23 integrity 如 NOT NULL/唯一冲突）。
+  // 统一按"坏行"处理：逐行隔离 + 上报告知，不会再把整批打成 500、也不会落进 unknown
+  //（2026-10-20 budgets 21000 事故教训：当时只认 23xxx，21000 被归成 unknown 导致弹窗无法定位）
+  if (/^2[123]\d{3}$/.test(code) || /violates|duplicate key|null value in column/i.test(msg)) return 'constraint';
+  if (
+    code === 'PGRST204' ||
+    code === 'PGRST205' ||
+    code === 'PGRST202' ||
+    code === '42703' ||
+    code === '42P01' ||
+    /does not exist|schema cache/i.test(msg)
+  )
+    return 'schema';
   if ((typeof status === 'number' && status >= 500) || /internal error|server error/i.test(msg)) return 'server';
   return 'unknown';
 }
@@ -287,6 +304,9 @@ function assetToRow(a: Asset, userId: string): Row {
     interest_rate: a.interestRate ?? null,
     is_default: a.isDefault ?? null,
     created_at: a.createdAt,
+    // 仅归档时写入 archived_at：未执行 schema.sql 新增列的云端，普通账户同步不受影响。
+    // 取消归档由 pushSnapshot 显式补 null（见那里的注释）
+    ...(a.archivedAt ? { archived_at: a.archivedAt } : {}),
   };
 }
 
@@ -305,6 +325,8 @@ function assetFromRow(r: Row): Asset {
     dueDay: r.due_day != null ? Number(r.due_day) : undefined,
     interestRate: r.interest_rate != null ? Number(r.interest_rate) : undefined,
     isDefault: r.is_default != null ? Boolean(r.is_default) : undefined,
+    // 老云端行没有该列（undefined）或为 null = 活跃账户
+    archivedAt: r.archived_at ? String(r.archived_at) : undefined,
     createdAt: Number(r.created_at),
   };
 }
@@ -354,7 +376,8 @@ function groupFromRow(r: Row): CategoryGroup {
 }
 
 // App 端预算没有 id：用 分类id+币种 生成确定性 id，多端一致
-function budgetId(b: Budget): string {
+// （AppContext.setBudget 也用它去重历史重复条目，故导出）
+export function budgetId(b: Budget): string {
   return `${b.categoryId}|${b.currency ?? ''}`;
 }
 
@@ -561,6 +584,7 @@ function toFiniteNumber(v: unknown, fallback: number): number {
  * - 资产缺 color/currency/icon/ledgerId/createdAt（每资产币种上线前的老设备数据）
  * - 交易缺 ledgerId/createdAt/date、金额非法（NaN 会变成 Postgres 拒绝的 NaN 字面量）
  * - 账本缺 icon/createdAt
+ * - 预算同 (分类+币种) 的重复条目去重（历史版本 setBudget 留下的重复，会让云端 upsert 报 500）
  * 返回 (快照, 是否有修复)：有修复时调用方把结果写回本地自愈，下次不再触发。
  */
 function normalizeSnapshot(s: LocalSnapshot): { snapshot: LocalSnapshot; changed: boolean } {
@@ -600,8 +624,11 @@ function normalizeSnapshot(s: LocalSnapshot): { snapshot: LocalSnapshot; changed
     return { ...l, ...patch } as Ledger;
   });
 
+  const budgets = dedupeBudgets(s.budgets);
+  if (budgets !== s.budgets) changed = true;
+
   return {
-    snapshot: changed ? { ...s, assets, transactions, ledgers } : s,
+    snapshot: changed ? { ...s, assets, transactions, ledgers, budgets } : s,
     changed,
   };
 }
@@ -687,12 +714,55 @@ interface RowFailure {
 
 function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
+  // postgrest-js 默认（非 throwOnError）把服务端错误解析成普通对象返回；此时 String(e)
+  // 只会得到 "[object Object]"，弹窗无法定位问题（2026-10-20 同步失败排查踩过）。
+  // 显式取字段拼成人话，并带上 PostgREST 错误码。
+  if (e && typeof e === 'object') {
+    const anyE = e as { message?: unknown; details?: unknown; hint?: unknown; code?: unknown };
+    const text = [anyE.message, anyE.details, anyE.hint]
+      .filter((v): v is string => typeof v === 'string' && v.length > 0)
+      .join(' | ');
+    if (text) return typeof anyE.code === 'string' && anyE.code ? `[${anyE.code}] ${text}` : text;
+    try {
+      return JSON.stringify(e);
+    } catch {
+      return String(e);
+    }
+  }
   return String(e);
 }
 
+/** 按 id 去重（保留第一条）；无重复时原样返回 */
+function dedupeRowsById(rows: Row[]): Row[] {
+  const seen = new Set<string>();
+  const out = rows.filter((r) => {
+    const id = String(r.id);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  return out.length === rows.length ? rows : out;
+}
+
+/** 预算列表按确定性 id 去重（保留第一条 = 界面 budgets.find 读到的值） */
+function dedupeBudgets(list: Budget[]): Budget[] {
+  const seen = new Set<string>();
+  const out = list.filter((b) => {
+    const id = budgetId(b);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  return out.length === list.length ? list : out;
+}
+
 async function upsertChunked(table: string, rows: Row[], failedRows: RowFailure[]): Promise<void> {
-  for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
-    const chunk = rows.slice(i, i + CHUNK_SIZE);
+  // 同一条 upsert 语句里出现两个相同 id → Postgres 报 21000（ON CONFLICT DO UPDATE cannot
+  // affect row a second time）→ PostgREST 500 → 整次同步失败（2026-10-20 预算重复条目事故）。
+  // 历史遗留重复在这里兜底去重，避免一条脏数据拖垮整张表（与坏行隔离同一理念）。
+  const unique = dedupeRowsById(rows);
+  for (let i = 0; i < unique.length; i += CHUNK_SIZE) {
+    const chunk = unique.slice(i, i + CHUNK_SIZE);
     const { error } = await withRetry(() => supabase.from(table).upsert(chunk));
     if (!error) continue;
     // 数据类失败（NOT NULL/外键等 23xxx）：退到逐行推送隔离坏行，不让一条脏数据卡死全表
@@ -760,10 +830,20 @@ async function pushSnapshot(s: LocalSnapshot, userId: string): Promise<RowFailur
     const prevRows = mirrorMap[table];
     const prev = new Map(prevRows.map((r) => [r.id as string, r]));
     const idsNow = new Set(rows.map((r) => r.id as string));
-    const upserts = rows.filter((r) => {
-      const old = prev.get(r.id as string);
-      return !old || JSON.stringify(old) !== JSON.stringify(r);
-    });
+    const upserts = rows
+      .filter((r) => {
+        const old = prev.get(r.id as string);
+        return !old || JSON.stringify(old) !== JSON.stringify(r);
+      })
+      .map((r) => {
+        // 取消归档：镜像里有 archived_at 说明云端已有该列，此时必须显式写 null，
+        // 否则 upsert 的列集合里没有它，云端仍保留旧的归档时间
+        const old = prev.get(r.id as string);
+        if (table === 'assets' && old && 'archived_at' in old && !('archived_at' in r)) {
+          return { ...r, archived_at: null };
+        }
+        return r;
+      });
     const deletes = prevRows.filter((r) => !idsNow.has(r.id as string)).map((r) => r.id as string);
     if (upserts.length) await upsertChunked(table, upserts, failedRows);
     if (deletes.length) await deleteByIds(table, deletes, failedRows);
@@ -927,14 +1007,30 @@ export async function fullSync(): Promise<SyncResult> {
     // TASK-026：同步主体整体套时钟偏差自愈（pull+push 幂等，重试安全）——
     // PGRST303/401 类错误自动换票+等待重试，手机快/慢/跨时区与 Supabase 内部秒级偏差均无感通过
     const run = async () => {
+      // 先把防抖期间尚未上云的本地修改推上去（否则下面的拉取会用云端旧版本覆盖掉这些编辑，如刚归档的账户被恢复）。
+      // 切换账号（cloudWinsAll）时本地数据本就被云端替换，绝不能把旧账号的数据推给新账号，只丢弃挂起的推送。
+      const preLastUserId = await AsyncStorage.getItem(LAST_USER_KEY);
+      const preCloudWinsAll = preLastUserId != null && preLastUserId !== userId;
+      const hadPending = pushTimer != null || pushDeferred;
+      if (pushTimer) {
+        clearTimeout(pushTimer);
+        pushTimer = null;
+      }
+      pushDeferred = false;
+      if (hadPending && !preCloudWinsAll) await pushLocalSnapshot(userId);
+      // 网络拉取不占锁（可能很慢）；本地「读快照 → 合并 → 写回」在锁内用拉取后的最新本地数据完成，
+      // 与 AppContext 的持久化写入串行，避免读写之间的编辑被合并结果覆盖
       const { cloud, cloudRows } = await fetchAll(userId);
-      const local = await readLocalSnapshot();
-      const lastUserId = await AsyncStorage.getItem(LAST_USER_KEY);
-      const cloudWinsAll = lastUserId != null && lastUserId !== userId;
-      const merged = mergeSnapshots(local, cloud, cloudRows, cloudWinsAll);
-      // 推送前兜底修复老数据（缺币种/颜色/时间戳等），并写回本地自愈
-      const { snapshot: normalized } = normalizeSnapshot(merged);
-      await writeLocalSnapshot(normalized);
+      const normalized = await runStorageExclusive(async () => {
+        const local = await readLocalSnapshot();
+        const lastUserId = await AsyncStorage.getItem(LAST_USER_KEY);
+        const cloudWinsAll = lastUserId != null && lastUserId !== userId;
+        const merged = mergeSnapshots(local, cloud, cloudRows, cloudWinsAll);
+        // 推送前兜底修复老数据（缺币种/颜色/时间戳等），并写回本地自愈
+        const { snapshot: fixed } = normalizeSnapshot(merged);
+        await writeLocalSnapshot(fixed);
+        return fixed;
+      });
       // 必须无条件通知重载：合并可能只追加了云端行（normalize 无改动），
       // 若跳过通知，React 状态停在旧数据，下次本地写回会把合并结果覆盖掉，
       // 再下一次推送就会把"消失"的行当成删除发上云 —— 云端数据被误删
@@ -955,7 +1051,16 @@ export async function fullSync(): Promise<SyncResult> {
     return toSyncResult(e);
   } finally {
     syncing = false;
+    flushDeferredPush();
   }
+}
+
+/** 同步进行中被跳过的推送请求：同步结束后补排一次，避免期间的编辑要等到下一次改动才上云 */
+let pushDeferred = false;
+function flushDeferredPush(): void {
+  if (!pushDeferred) return;
+  pushDeferred = false;
+  schedulePush();
 }
 
 /**
@@ -972,9 +1077,23 @@ export function schedulePush(delayMs = 2000): void {
   }, delayMs);
 }
 
+/** 读取本地快照（先规范化并自愈写回）后推上云。调用方须已持有 syncing 锁 */
+async function pushLocalSnapshot(userId: string): Promise<RowFailure[]> {
+  const { snapshot: fixed, changed } = await runStorageExclusive(async () => {
+    const result = normalizeSnapshot(await readLocalSnapshot());
+    if (result.changed) await writeLocalSnapshot(result.snapshot);
+    return result;
+  });
+  if (changed) notifyDataReplaced();
+  return pushSnapshot(fixed, userId);
+}
+
 /** 立即推送当前本地数据（设置页"立即同步"按钮用：拉+推走 fullSync 更稳妥） */
 export async function pushNow(): Promise<SyncResult> {
-  if (syncing) return { ok: false, error: 'sync_in_progress' };
+  if (syncing) {
+    pushDeferred = true; // 同步结束后补推，见 flushDeferredPush
+    return { ok: false, error: 'sync_in_progress' };
+  }
   const userId = await currentUserId();
   if (!userId) return { ok: false, error: 'not_logged_in' };
 
@@ -982,15 +1101,7 @@ export async function pushNow(): Promise<SyncResult> {
   setStatus('syncing');
   try {
     // TASK-026：与时钟偏差自愈同款包装（push 幂等，重试安全）
-    const failedRows = await withClockSkewRetry(async () => {
-      const snap = await readLocalSnapshot();
-      const { snapshot: normalized, changed } = normalizeSnapshot(snap);
-      if (changed) {
-        await writeLocalSnapshot(normalized);
-        notifyDataReplaced();
-      }
-      return pushSnapshot(normalized, userId);
-    });
+    const failedRows = await withClockSkewRetry(() => pushLocalSnapshot(userId));
     await AsyncStorage.setItem(LAST_USER_KEY, userId);
     setStatus('idle');
     if (failedRows.length) {
@@ -1003,5 +1114,6 @@ export async function pushNow(): Promise<SyncResult> {
     return toSyncResult(e);
   } finally {
     syncing = false;
+    flushDeferredPush();
   }
 }

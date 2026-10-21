@@ -6,12 +6,13 @@ import { useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { nextDueDate } from '../utils/paymentPlans';
 import { scheduleLocalNotification } from '../utils/notifications';
+import { formatMoney } from '../utils/formatMoney';
 
 const REMINDER_HOURS = [13, 18.5]; // 13:00 和 18:30
 const REMINDER_WINDOW_DAYS = 7;
 
 export function usePaymentReminders() {
-  const { paymentPlans, activeLedgerId, loading } = useApp();
+  const { paymentPlans, activeLedgerId, loading, decimalPlaces } = useApp();
   // 每轮检查的指纹:计划数据或检查时间点变化才重新调度,避免重复发通知
   const lastFingerprintRef = useRef('');
 
@@ -41,7 +42,7 @@ export function usePaymentReminders() {
         if (trigger <= now) return;
         void scheduleLocalNotification(
           `${p.name} · ${days === 0 ? '今天' : `还有 ${days} 天`}到期`,
-          `金额 ${p.amount.toFixed(2)},请确认付款计划。`,
+          `金额 ${formatMoney(p.amount, { decimals: decimalPlaces })},请确认付款计划。`,
           trigger
         );
       });
@@ -51,7 +52,7 @@ export function usePaymentReminders() {
     // 每分钟轮询一次时钟,跨越 13:00 / 18:30 时触发检查
     const interval = setInterval(checkAndSchedule, 60000);
     return () => clearInterval(interval);
-  }, [loading, paymentPlans, activeLedgerId]);
+  }, [loading, paymentPlans, activeLedgerId, decimalPlaces]);
 }
 
 function fmtDay(d: Date): string {

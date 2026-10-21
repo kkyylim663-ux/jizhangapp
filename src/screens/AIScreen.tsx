@@ -47,7 +47,7 @@ export default function AIScreen({ navigation }: any) {
 
   const {
     categories,
-    assets,
+    activeAssets,
     addTransaction,
   } = useApp();
 
@@ -72,6 +72,24 @@ export default function AIScreen({ navigation }: any) {
 
   const [modalOpen, setModalOpen] = useState(false);
 
+  // 确认弹层的键盘避让：Modal 是独立窗口，Android edge-to-edge 下不会随 adjustResize 上推，
+  // 所以监听键盘高度，把遮罩底部垫起同样的高度，让输入框始终露在键盘上方
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  useEffect(() => {
+    const showWill = Keyboard.addListener('keyboardWillShow', (e) =>
+      setKeyboardHeight(e.endCoordinates.height)
+    );
+    const showDid = Keyboard.addListener('keyboardDidShow', (e) =>
+      setKeyboardHeight(e.endCoordinates.height)
+    );
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardHeight(0));
+    return () => {
+      showWill.remove();
+      showDid.remove();
+      hide.remove();
+    };
+  }, []);
+
   // ---------------------------------------------------------
   // Editable result
   // ---------------------------------------------------------
@@ -90,9 +108,10 @@ export default function AIScreen({ navigation }: any) {
   // Default asset
   // ---------------------------------------------------------
 
+  // 只从未归档账户里取默认账户（归档账户不能再被记一笔自动带出）
   const defaultAsset =
-    assets.find((a: any) => a.isDefault) ??
-    assets[0];
+    activeAssets.find((a: any) => a.isDefault) ??
+    activeAssets[0];
 
   // ---------------------------------------------------------
   // Request microphone permission
@@ -520,7 +539,14 @@ export default function AIScreen({ navigation }: any) {
     >
       {/* 头部:与其他二级页同款——圆框返回键(40×40、1.5px link 描边) + 标题居中 */}
       <View style={styles.headerRow}>
-        <PressableScale onPress={() => navigation.goBack()} style={styles.backBtn} activeScale={0.92}>
+        <PressableScale
+          onPress={() => navigation.goBack()}
+          style={styles.backBtn}
+          activeScale={0.92}
+          accessibilityRole="button"
+          accessibilityLabel={t('common.back')}
+          hitSlop={{ top: 2, bottom: 2, left: 2, right: 2 }}
+        >
           <Ionicons name="chevron-back" size={22} color={colors.textPrimary} />
         </PressableScale>
         <Text style={styles.headerTitle}>{t('ai.title')}</Text>
@@ -751,14 +777,17 @@ export default function AIScreen({ navigation }: any) {
         }
       >
         <View
-          style={
-            styles.modalOverlay
-          }
+          style={[
+            styles.modalOverlay,
+            { paddingBottom: keyboardHeight },
+          ]}
         >
-          <View
+          <ScrollView
             style={
               styles.modalCard
             }
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
           >
             {/* Header */}
 
@@ -1128,7 +1157,7 @@ export default function AIScreen({ navigation }: any) {
                 </View>
               </>
             )}
-          </View>
+          </ScrollView>
         </View>
       </Modal>
     </SafeAreaView>

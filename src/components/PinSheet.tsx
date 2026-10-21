@@ -35,7 +35,7 @@ interface PinSheetProps {
 const PIN_LENGTH = 6;
 
 export default function PinSheet({ visible, mode, onClose, onSuccess, onVerified }: PinSheetProps) {
-  const { colors } = useTheme();
+  const { colors, semantic } = useTheme();
   const tr = useT();
   const { verifyPin, setPin } = useAppLock();
 
@@ -145,7 +145,7 @@ export default function PinSheet({ visible, mode, onClose, onSuccess, onVerified
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onClose}>
+      <TouchableOpacity style={[styles.overlay, { backgroundColor: semantic.scrim }]} activeOpacity={1} onPress={onClose}>
         <View
           style={[styles.sheet, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
           onStartShouldSetResponder={() => true}
@@ -239,7 +239,6 @@ export default function PinSheet({ visible, mode, onClose, onSuccess, onVerified
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.55)',
     justifyContent: 'flex-end',
   },
   sheet: {

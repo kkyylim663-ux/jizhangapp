@@ -3,7 +3,7 @@
 // ReportScreen 共用这份日历，保证日期选择交互/样式完全一致。
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Animated, PanResponder, Dimensions, Pressable } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Animated, PanResponder, Dimensions, Pressable, BackHandler } from 'react-native';
 import Reanimated, {
   useSharedValue,
   useAnimatedStyle,
@@ -14,6 +14,7 @@ import Reanimated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/useTheme';
+import { useBottomSystemInset } from '../hooks/useBottomSystemInset';
 import PressableScale from './PressableScale';
 import { useT } from '../i18n/LanguageContext';
 import { useTabBarForceHide } from '../context/TabBarAutoHideContext';
@@ -92,7 +93,12 @@ type Props = {
 };
 
 export default function DateRangePickerSheet({ visible, start, end, onClose, onApply, mode = 'range' }: Props) {
-  const { colors } = useTheme() as { colors: ThemeColors };
+  const theme = useTheme();
+  const { colors } = theme as { colors: ThemeColors };
+  // 遮罩 = 全 App 唯一遮罩色 semantic.scrim；下面 scrimOpacity 是 0..1 的比例（实际透明度 = scrim 的 alpha × 比例）
+  const scrimColor = theme.semantic.scrim;
+  // 底部弹层贴屏幕底：底部补白要让出系统导航栏（原来写死 38，不认真机导航条）
+  const bottomInset = useBottomSystemInset();
   const t = useT();
   const now = new Date();
   const [viewMonth, setViewMonth] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1));
@@ -227,13 +233,25 @@ export default function DateRangePickerSheet({ visible, start, end, onClose, onA
       sheetPanY.value = 900;
       scrimOpacity.value = 0;
       sheetPanY.value = withTiming(0, { duration: 260 });
-      scrimOpacity.value = withTiming(0.4, { duration: 260 });
+      scrimOpacity.value = withTiming(1, { duration: 260 });
     }
   }, [visible, sheetPanY, scrimOpacity]);
 
   const finishClose = () => {
     onCloseRef.current();
   };
+
+  // 安卓硬件返回键：面板开着时先收起面板（播出场动画），不让返回键退出整页
+  const dismissRef = useRef<() => void>(() => undefined);
+  dismissRef.current = () => dismissSheet();
+  useEffect(() => {
+    if (!visible) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      dismissRef.current();
+      return true;
+    });
+    return () => sub.remove();
+  }, [visible]);
 
   const dismissSheet = () => {
     if (closingRef.current) return;
@@ -264,14 +282,14 @@ export default function DateRangePickerSheet({ visible, start, end, onClose, onA
         })
         .onUpdate((e) => {
           sheetPanY.value = Math.max(0, e.translationY);
-          scrimOpacity.value = Math.min(0.4, Math.max(0, e.translationY) / 500 + 0.15);
+          scrimOpacity.value = Math.min(1, (Math.max(0, e.translationY) / 500 + 0.15) / 0.4);
         })
         .onEnd((e) => {
           if (e.translationY > 0 || e.velocityY > 200) {
             runOnJS(dismissSheet)();
           } else {
             sheetPanY.value = withSpring(0, { damping: 22, stiffness: 320 });
-            scrimOpacity.value = withTiming(0.4, { duration: 150 });
+            scrimOpacity.value = withTiming(1, { duration: 150 });
           }
         })
         .onFinalize(() => {
@@ -290,12 +308,12 @@ export default function DateRangePickerSheet({ visible, start, end, onClose, onA
     <View style={[StyleSheet.absoluteFill, { zIndex: 90, elevation: 90 }]}>
       {/* 遮罩:点空白处收起;透明度随拖动变深 */}
       <Pressable style={StyleSheet.absoluteFill} onPress={onClose}>
-        <Reanimated.View style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }, scrimAnimStyle]} />
+        <Reanimated.View style={[StyleSheet.absoluteFill, { backgroundColor: scrimColor }, scrimAnimStyle]} />
       </Pressable>
 
       {/* 底部卡片:底部锚定、圆角 24、最高 85% 屏高;整体跟手下拉 */}
       <GestureDetector gesture={sheetPanGesture}>
-        <Reanimated.View style={[s.sheet, sheetAnimStyle]}>
+        <Reanimated.View style={[s.sheet, { paddingBottom: Math.max(20, bottomInset + 16) }, sheetAnimStyle]}>
           <View style={s.grabber} />
           {/* 标题栏:✕ 关闭移到右侧 + 标题居中(与选择账本头部同款) */}
           <View style={s.sheetHeader}>

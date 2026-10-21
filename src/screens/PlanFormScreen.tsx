@@ -27,32 +27,38 @@ import { useDialog } from '../components/AppDialog';
 import PressableScale from '../components/PressableScale';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../theme/useTheme';
-import { ThemeColors } from '../theme/theme';
+import type { SemanticColors, ThemeColors } from '../theme/theme';
 import { useT } from '../i18n/LanguageContext';
 import DateRangePickerSheet from '../components/DateRangePickerSheet';
 import { AmountCalculatorKeypad } from '../components/AmountCalculatorKeypad';
 import { CursorAmountText } from '../components/CursorAmountText';
 import { useAmountExpression } from '../hooks/useAmountExpression';
 import { useTabBarForceHide } from '../context/TabBarAutoHideContext';
-import { CURRENCY_FLAG, getCurrencyFlag, getCurrencySymbol } from '../utils/currencies';
 import { getAssetDisplayBalance } from '../utils/creditCard';
+import { formatMoney } from '../utils/formatMoney';
 import { getCategoryLabel } from '../i18n/categories';
 import { hapticSuccess, hapticWarning } from '../utils/haptics';
 import { ROUTES } from '../navigation/routes';
+import { GlassView, HeroGradient } from '../components/ui';
+
+/** 页面顶部品牌渐变高度（本页没有定稿图，按 V2 同一套元素取 360，矮屏 ×0.9） */
+const HERO_HEIGHT = 360;
 
 function fmt(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 export default function PlanFormScreen({ route, navigation }: any) {
-  const { addPaymentPlan, updatePaymentPlan, deletePaymentPlan, assets, paymentPlans, activeLedgerId, categories, currency, getAssetBalance } = useApp();
-  const { colors } = useTheme();
+  const { addPaymentPlan, updatePaymentPlan, deletePaymentPlan, assets, activeAssets, paymentPlans, activeLedgerId, categories, currency, getAssetBalance, decimalPlaces } = useApp();
+  const { colors, semantic } = useTheme();
   const tr = useT();
   const dialog = useDialog(); // 主题化弹窗（替代系统 Alert）
   const insets = useSafeAreaInsets();
+  // 渐变高度：844 高屏 360，矮屏 ×0.9（UI V2 第 1 节）
+  const heroHeight = Math.round(HERO_HEIGHT * (Dimensions.get('window').height - insets.top < 700 ? 0.9 : 1));
   const isFocused = useIsFocused();
   const setTabBarForceHidden = useTabBarForceHide();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const styles = useMemo(() => makeStyles(colors, semantic), [colors, semantic]);
 
   const editPlan = route?.params?.planId ? paymentPlans.find((p) => p.id === route.params.planId) : undefined;
   const isEdit = !!editPlan;
@@ -96,11 +102,11 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
   // 自己已有的币种集合（账户里出现过的币种，去重、ABC 字母序——2026-09-24 用户定版），供 ALL 下拉面板列出
   const ownCurrencies = useMemo(() => {
     const codes: string[] = [];
-    assets.forEach((a) => {
+    activeAssets.forEach((a) => {
       if (a.currency && !codes.includes(a.currency)) codes.push(a.currency);
     });
     return codes.sort((c1, c2) => c1.localeCompare(c2));
-  }, [assets]);
+  }, [activeAssets]);
 
   // —— 账户弹层下滑收起手势：与记一笔账户弹层完全同款（manualActivation Pan + sharedValue 动画）——
   // - 列表滚到顶部时往下拖 → 接管手势，整块面板跟手下移，松手超过 120px / 快速甩动就收起
@@ -201,16 +207,12 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Android 返回键分层退出：账户弹层开着 → 先关弹层；自绘键盘开着 → 先收键盘；
-  // 都没开才交还给导航器退出页面——避免弹层/键盘开着时一按返回整页退出、表单半填全丢
+  // Android 返回键：先关真正的弹层（账户弹层、日期选择）；自绘键盘不被返回键收起（键盘上有保存键），
+  // 其余情况不拦截，导航器直接退出本页
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (assetSheetOpen) {
         closeAssetSheet();
-        return true;
-      }
-      if (keypadOpen) {
-        setKeypadOpen(false);
         return true;
       }
       if (datePickerOpen) {
@@ -220,7 +222,7 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
       return false;
     });
     return () => sub.remove();
-  }, [assetSheetOpen, keypadOpen, datePickerOpen]);
+  }, [assetSheetOpen, datePickerOpen]);
 
   // 计算器面板收起时（无论路径：按"完成"、点系统键盘、点其他输入框）把面板当前值求值落回
   // amountValue——之前只有按"完成"才落回，切输入框触发 keyboardDidShow 直接关面板，
@@ -250,7 +252,7 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
     // （校验在 handleSave 内部：名称/金额缺失会弹提示，不会误存）
     handleSave(v);
   };
-  const amountDisplay = keypadOpen ? amountExpr.displayValue : amountValue > 0 ? amountValue.toFixed(2) : '0';
+  const amountDisplay = keypadOpen ? amountExpr.displayValue : amountValue > 0 ? formatMoney(amountValue, { decimals: decimalPlaces }) : '0';
   // 规划金额字号：按位数渐缩（与记一笔 Hero 同思路）——34 起、每超 6 位 -0.5px、下限 28
   const planAmountFontSize = Math.max(28, 34 - Math.max(0, amountDisplay.replace('.', '').length - 6) * 0.5);
 
@@ -331,19 +333,25 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
   const amountCurrency = selectedAsset?.currency ?? currency;
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      {/* 头部:圆框返回键 + 标题居中 + (编辑模式)删除 */}
-      <View style={styles.header}>
-        <PressableScale onPress={() => navigation.goBack()} style={styles.backBtn} activeScale={0.92}>
-          <Ionicons name="chevron-back" size={22} color={colors.textPrimary} />
+    // UI V2：整页通顶 —— 顶部品牌渐变（360 / 矮屏 ×0.9）压在内容下面，页头落在渐变上
+    <SafeAreaView style={styles.container} edges={[]}>
+      <HeroGradient height={heroHeight} />
+      {/* 头部（V2）：玻璃圆返回键 + 白色标题 + (编辑模式)玻璃圆删除；入口与行为一字未动 */}
+      <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
+        <PressableScale onPress={() => navigation.goBack()} activeScale={0.94} hitSlop={0}>
+          <GlassView radius={999} style={styles.glassHeaderBtn}>
+            <Ionicons name="chevron-back" size={18} color={semantic.onAccent} />
+          </GlassView>
         </PressableScale>
         <Text style={styles.headerTitle}>{isEdit ? tr('finance.editPlan') : tr('finance.addPlan')}</Text>
         {isEdit ? (
-          <PressableScale onPress={handleDelete} style={styles.headerDeleteBtn} activeScale={0.92}>
-            <Ionicons name="trash-outline" size={19} color={colors.expense} />
+          <PressableScale onPress={handleDelete} activeScale={0.94} hitSlop={0}>
+            <GlassView radius={999} style={styles.glassHeaderBtn}>
+              <Ionicons name="trash-outline" size={18} color={semantic.onAccent} />
+            </GlassView>
           </PressableScale>
         ) : (
-          <View style={{ width: 40 }} />
+          <View style={{ width: 36 }} />
         )}
       </View>
 
@@ -452,11 +460,14 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
               activeScale={0.98}
               onPress={() => setAssetSheetOpen(true)}
             >
-              {selectedAsset && !!CURRENCY_FLAG[selectedAsset.currency] && (
-                <Text style={{ fontSize: 14 }}>{CURRENCY_FLAG[selectedAsset.currency]}</Text>
+              {/* 币种用代码小芯片（不用国旗 emoji：部分安卓机型只渲染成两个字母） */}
+              {selectedAsset && (
+                <View style={styles.currencyChip}>
+                  <Text style={styles.currencyChipText}>{selectedAsset.currency}</Text>
+                </View>
               )}
               <Text
-                style={{ flex: 1, color: selectedAsset ? colors.textPrimary : colors.textTertiary, fontSize: 14, marginLeft: selectedAsset && CURRENCY_FLAG[selectedAsset.currency] ? 6 : 0 }}
+                style={{ flex: 1, color: selectedAsset ? colors.textPrimary : colors.textTertiary, fontSize: 14, marginLeft: selectedAsset ? 6 : 0 }}
                 numberOfLines={1}
               >
                 {selectedAsset?.name ?? tr('addTx.notSelectedShort')}
@@ -533,7 +544,7 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
       {assetSheetOpen && (
         <View style={[StyleSheet.absoluteFill, { zIndex: 90, elevation: 90 }]}>
           <Pressable style={StyleSheet.absoluteFill} onPress={closeAssetSheet}>
-            <Reanimated.View style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }, sheetScrimStyle]} />
+            <Reanimated.View style={[StyleSheet.absoluteFill, { backgroundColor: semantic.scrim }, sheetScrimStyle]} />
           </Pressable>
           <GestureDetector gesture={sheetGesture}>
             <Reanimated.View style={[styles.sheetCard, sheetAnimStyle]}>
@@ -640,7 +651,7 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
                 // 资产页同款「一币一大卡」（与记一笔两处弹层同款）：任何时候都是大卡——
                 // 选了某币种=只显示那一张卡；账户行保留 meta 行与币种前缀余额（规划页特有）
                 const kw = assetSearch.trim().toLowerCase();
-                const visible = assets.filter((a) => {
+                const visible = activeAssets.filter((a) => {
                   const matchSearch = !kw || `${a.name} ${a.currency} ${a.type}`.toLowerCase().includes(kw);
                   // 币种筛选：ALL 下拉里点了 USD 之类后，列表只显示该币种的账户
                   const matchCurrency = assetCurrencyFilter === 'all' || a.currency === assetCurrencyFilter;
@@ -660,7 +671,6 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
                   .map(([code, items]) => {
                     const expanded = !pickerCollapsedGroups.has(code);
                     const groupTotal = items.reduce((sum, a) => sum + getAssetBalance(a.id), 0);
-                    const flag = getCurrencyFlag(code);
                     return (
                       <View key={`grp-${code}`} style={styles.sheetGroupShadow}>
                         {/* 与资产页 currencyGroupCard 同款渐变/描边/圆角 */}
@@ -676,12 +686,10 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
                             onPress={() => togglePickerGroup(code)}
                           >
                             <View style={styles.sheetGroupFlag}>
-                              <Text style={flag ? styles.sheetGroupFlagEmoji : styles.sheetGroupFlagText}>
-                                {flag ?? getCurrencySymbol(code)}
-                              </Text>
+                              <Text style={styles.sheetGroupFlagText}>{code}</Text>
                             </View>
-                            <Text style={styles.sheetGroupCode}>{code}</Text>
-                            <Text style={styles.sheetGroupTotal}>{groupTotal.toFixed(2)}</Text>
+                            <View style={{ flex: 1 }} />
+                            <Text style={styles.sheetGroupTotal}>{formatMoney(groupTotal, { decimals: decimalPlaces })}</Text>
                             <Ionicons
                               name={expanded ? 'chevron-up' : 'chevron-down'}
                               size={16}
@@ -716,7 +724,7 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
                                       </Text>
                                     </View>
                                     <Text style={styles.sheetGroupRowAmount}>
-                                      {getAssetDisplayBalance(a, getAssetBalance(a.id)).toFixed(2)}
+                                      {formatMoney(getAssetDisplayBalance(a, getAssetBalance(a.id)), { decimals: decimalPlaces })}
                                     </Text>
                                     {sel && (
                                       <Ionicons name="checkmark-circle" size={18} color={colors.income} style={{ marginLeft: 6 }} />
@@ -767,16 +775,18 @@ const [type, setType] = useState<'expense' | 'income'>(editPlan?.type ?? 'expens
   );
 }
 
-function makeStyles(colors: ThemeColors) {
+function makeStyles(colors: ThemeColors, semantic: SemanticColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.bg },
     header: {
-      height: 56,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
       paddingHorizontal: 20,
+      paddingBottom: 6,
     },
+    // 页头上的玻璃圆钮（V2）：36 圆，与资产 / 统计页的玻璃圆钮同一规格
+    glassHeaderBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
     backBtn: {
       width: 40,
       height: 40,
@@ -787,7 +797,7 @@ function makeStyles(colors: ThemeColors) {
       alignItems: 'center',
       justifyContent: 'center',
     },
-    headerTitle: { fontSize: 18, fontWeight: '700', color: colors.textPrimary },
+    headerTitle: { fontSize: 18, fontWeight: '700', color: semantic.onAccent },
     headerDeleteBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
     // 框到框之间的上下纯留白统一 4px（标签的上下外边距）；表单标签统一 12px/500
     formLabel: { fontSize: 12, fontWeight: '500', color: colors.textSecondary, marginBottom: 4, marginTop: 4 },
@@ -929,7 +939,7 @@ function makeStyles(colors: ThemeColors) {
     sheetGroupCard: {
       borderRadius: 20,
       borderWidth: 1,
-      borderColor: 'rgba(255,255,255,0.12)',
+      borderColor: colors.cardBorder,
       overflow: 'hidden',
     },
     sheetGroupHeader: {
@@ -938,41 +948,51 @@ function makeStyles(colors: ThemeColors) {
       paddingHorizontal: 16,
       paddingVertical: 12,
     },
+    // 币种代码芯片（分组头 / 已选账户）：替代国旗 emoji
     sheetGroupFlag: {
-      width: 34,
-      height: 34,
-      borderRadius: 17,
-      backgroundColor: 'rgba(255,255,255,0.14)',
+      minWidth: 48,
+      height: 26,
+      paddingHorizontal: 8,
+      borderRadius: 8,
+      backgroundColor: colors.cardBorder,
       alignItems: 'center',
       justifyContent: 'center',
     },
-    sheetGroupFlagText: { fontSize: 13, fontWeight: '700', color: colors.netWorthValue },
-    sheetGroupFlagEmoji: { fontSize: 22, marginTop: -2 },
-    sheetGroupCode: { flex: 1, fontSize: 16, fontWeight: '700', color: colors.netWorthLabel, marginLeft: 10 },
+    sheetGroupFlagText: { fontSize: 12, fontWeight: '700', color: colors.netWorthValue, letterSpacing: 0.5 },
+    currencyChip: {
+      minWidth: 40,
+      height: 20,
+      paddingHorizontal: 6,
+      borderRadius: 6,
+      backgroundColor: colors.link + '1F',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    currencyChipText: { fontSize: 11, fontWeight: '700', color: colors.link, letterSpacing: 0.3 },
     sheetGroupTotal: { fontSize: 20, fontWeight: '800', color: colors.netWorthValue, marginLeft: 6, fontVariant: ['tabular-nums'] },
     sheetGroupBody: {
       paddingHorizontal: 10,
       paddingBottom: 10,
       paddingTop: 10,
       borderTopWidth: StyleSheet.hairlineWidth,
-      borderTopColor: 'rgba(255,255,255,0.18)',
+      borderTopColor: colors.dividerHair,
     },
     // 卡内账户小框（资产页 assetRowOnGradient 同款）：半透明白底无边框；保留 meta 行（规划页特有）
     sheetGroupRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: 'rgba(255,255,255,0.10)',
+      backgroundColor: colors.tabBlobBg,
       borderRadius: 12,
       paddingVertical: 5,
       paddingHorizontal: 9,
       marginBottom: 3,
     },
-    sheetGroupRowActive: { backgroundColor: 'rgba(255,255,255,0.22)' },
+    sheetGroupRowActive: { backgroundColor: colors.tabEdge },
     sheetGroupRowIcon: {
       width: 30,
       height: 30,
       borderRadius: 15,
-      backgroundColor: '#FFFFFF',
+      backgroundColor: semantic.onAccent,
       alignItems: 'center',
       justifyContent: 'center',
     },
@@ -1036,7 +1056,7 @@ function makeStyles(colors: ThemeColors) {
       padding: 12,
       marginTop: 14,
     },
-    autoKnob: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#FFFFFF', margin: 2 },
+    autoKnob: { width: 22, height: 22, borderRadius: 11, backgroundColor: semantic.onAccent, margin: 2 },
     autoKnobOn: { alignSelf: 'flex-end' },
     switchTrack: { width: 46, height: 26, borderRadius: 13, backgroundColor: colors.dividerHair },
     saveFooter: {
